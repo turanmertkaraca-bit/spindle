@@ -18,9 +18,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -91,22 +94,21 @@ fun TimelineScreen(
     // The row at the bottom edge of the viewport is the open one.
     //
     // Rule (matches dev.spindle.core.ui.TimelineLayout): among the rows currently
-    // laid out, take the last one whose top starts above the viewport bottom —
-    // that is the row the eye is resting on. Everything else collapses.
-    //
-    // Before the first layout pass `visibleItemsInfo` is empty; default to the
-    // newest row so a freshly-opened short chat still shows its latest step.
-    val openIndex by remember(steps.size) {
-        derivedStateOf {
+    // on screen, the one whose top starts above the viewport bottom — the last
+    // one — is opened. Before the first layout pass there is no info, so we open
+    // the newest row (correct for a freshly-appended step, and for short chats).
+    var openIndex by remember(steps.size) { mutableIntStateOf(steps.lastIndex) }
+
+    LaunchedEffect(listState, steps.size) {
+        snapshotFlow {
             val info = listState.layoutInfo
             val visible = info.visibleItemsInfo
-            if (visible.isEmpty()) {
-                steps.lastIndex
-            } else {
+            if (visible.isEmpty()) steps.lastIndex
+            else {
                 val end = info.viewportEndOffset
                 visible.lastOrNull { it.offset < end }?.index ?: visible.last().index
             }
-        }
+        }.collect { openIndex = it }
     }
 
     Box(modifier.fillMaxWidth().background(colors.bg)) {

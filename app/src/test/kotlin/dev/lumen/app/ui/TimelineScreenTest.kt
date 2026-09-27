@@ -7,8 +7,6 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.onRoot
-import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.unit.dp
 import dev.lumen.app.ui.model.StepKind
@@ -109,7 +107,6 @@ class TimelineScreenTest {
             ),
         )
         compose.setContent { TimelineScreen(s, modifier = viewport) }
-        println("TREE:\n" + compose.onRoot().printToString())
         // The single row is the bottom-most, so it is open -> its sub-rows exist.
         check(compose.onAllNodesWithText("compile").fetchSemanticsNodes().isNotEmpty()) {
             "open tool row should expose its 'compile' sub-row"
