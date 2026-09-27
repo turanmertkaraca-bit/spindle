@@ -11,3 +11,8 @@ fun interface PermissionGate {
 object AllowAll : PermissionGate {
     override suspend fun request(tool: String, detail: String, pattern: String?) = true
 }
+
+/** Lets the `question` tool ask the user and resume with their answer. */
+fun interface QuestionGate {
+    suspend fun ask(sessionId: String, question: String, options: List<String>, multiple: Boolean): List<String>
+}

@@ -10,6 +10,8 @@ interface ToolContext {
     val cwd: java.nio.file.Path
     /** Returns true if the user approved this invocation. */
     suspend fun requestPermission(tool: String, detail: String, pattern: String? = null): Boolean
+    /** Ask the user a question and suspend until they answer. */
+    suspend fun ask(question: String, options: List<String>, multiple: Boolean = false): List<String>
     /** Emit out-of-band events (progress, diff, etc.) to the session stream. */
     fun emit(event: ToolProgress)
     fun checkAborted()

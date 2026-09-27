@@ -39,6 +39,7 @@ class AgentLoop(
     private val store: SessionStore,
     private val bus: EventBus,
     private val permissions: PermissionGate = AllowAll,
+    private val questions: QuestionGate = QuestionGate { _, _, _, _ -> emptyList() },
     private val clock: () -> Long = { System.currentTimeMillis() },
     private val maxToolOutputChars: Int = 60_000,
 ) {
@@ -203,7 +204,7 @@ class AgentLoop(
         }
 
         val outcome: ToolOutcome = try {
-            val ctx = LoopToolContext(sessionId, Path.of(cwd), gate, bus) { message ->
+            val ctx = LoopToolContext(sessionId, Path.of(cwd), gate, questions, bus) { message ->
                 bus.emit(AgentEvent.StateChanged(sessionId, SessionState.RUNNING))
             }
             val input: JsonObject = runCatching { json.parseToJsonElement(part.call.argumentsJson) as JsonObject }
@@ -250,6 +251,7 @@ class AgentLoop(
         override val sessionId: SessionId,
         override val cwd: Path,
         private val gate: PermissionGate,
+        private val questionGate: QuestionGate,
         private val bus: EventBus,
         private val onProgress: (String) -> Unit,
     ) : ToolContext {
@@ -257,6 +259,11 @@ class AgentLoop(
             val approved = gate.request(tool, detail, pattern)
             if (!approved) bus.emit(AgentEvent.Error(sessionId, "denied: $tool"))
             return approved
+        }
+
+        override suspend fun ask(question: String, options: List<String>, multiple: Boolean): List<String> {
+            bus.emit(AgentEvent.QuestionAsked(sessionId, Ids.new("q"), question, options, multiple))
+            return questionGate.ask(sessionId.value, question, options, multiple)
         }
 
         override fun emit(event: ToolProgress) = onProgress(event.message)
