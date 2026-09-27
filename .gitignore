@@ -1,0 +1,29 @@
+# gradle
+.gradle/
+build/
+*/build/
+**/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# ide
+.idea/
+*.iml
+.vscode/
+
+# os
+.DS_Store
+
+# local only (proxy/truststore is machine-specific)
+gradle.local.properties
+local.properties
+
+# secrets
+*.keystore
+*.jks
+.env
+secrets.properties
+
+# test output
+**/test-results/
+**/reports/
+fixtures/live/
