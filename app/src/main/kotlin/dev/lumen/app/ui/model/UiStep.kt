@@ -10,6 +10,8 @@ enum class StepKind { YOU, THINKING, TOOL, SUBAGENT, QUESTION, ASSISTANT }
  * @param summary the one-line form shown while collapsed
  * @param body the full text shown while open
  * @param rows sub-steps (tool sub-calls or subagent children) — only shown when open
+ * @param running a tool/subagent currently executing (spinner node)
+ * @param failed the step ended in an error (red node)
  */
 data class UiStep(
     val id: String,
@@ -19,4 +21,6 @@ data class UiStep(
     val summary: String,
     val body: String,
     val rows: List<Pair<String, String>> = emptyList(),
+    val running: Boolean = false,
+    val failed: Boolean = false,
 )

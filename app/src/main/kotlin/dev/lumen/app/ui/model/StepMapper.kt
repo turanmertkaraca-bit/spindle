@@ -1,0 +1,126 @@
+package dev.lumen.app.ui.model
+
+import dev.spindle.core.event.AgentEvent
+import dev.spindle.core.model.Message
+import dev.spindle.core.model.Part
+import dev.spindle.core.model.Role
+import dev.spindle.core.model.ToolState
+
+/**
+ * Turns the backend's stored messages + live events into the flat row list the
+ * timeline draws. Pure and side-effect free, so it is unit-testable without any
+ * Android or network — the same discipline as [dev.spindle.core.ui.TimelineLayout].
+ */
+object StepMapper {
+
+    /** The stable row identity for a part. */
+    private fun tag(seed: Int) = Integer.toHexString(0x100000 + (seed * 2654435761L and 0xFFFFF).toInt()).takeLast(6)
+
+    fun fromMessages(messages: List<Message>): List<UiStep> {
+        val out = ArrayList<UiStep>()
+        var seed = 0
+        for (m in messages) {
+            when (m.role) {
+                Role.USER -> {
+                    val text = m.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
+                    out += UiStep(
+                        id = m.id.value, kind = StepKind.YOU, label = "YOU", tag = tag(seed++),
+                        summary = oneLine(text), body = text,
+                    )
+                }
+                Role.ASSISTANT -> {
+                    for (p in m.parts) {
+                        when (p) {
+                            is Part.Reasoning -> {
+                                if (p.text.isBlank()) continue
+                                out += UiStep(
+                                    id = p.id.value, kind = StepKind.THINKING, label = "THINKING", tag = tag(seed++),
+                                    summary = oneLine(p.text), body = p.text.trim(),
+                                )
+                            }
+                            is Part.Text -> {
+                                if (p.text.isBlank()) continue
+                                out += UiStep(
+                                    id = p.id.value, kind = StepKind.ASSISTANT, label = "ASSISTANT", tag = tag(seed++),
+                                    summary = oneLine(p.text), body = p.text.trim(),
+                                )
+                            }
+                            is Part.Tool -> {
+                                val call = p.call
+                                val rows = parseToolRows(p)
+                                val isSub = call.name == "task"
+                                out += UiStep(
+                                    id = p.id.value,
+                                    kind = if (isSub) StepKind.SUBAGENT else StepKind.TOOL,
+                                    label = call.name.uppercase(),
+                                    tag = tag(seed++),
+                                    summary = oneLine(p.result?.output ?: call.argumentsJson),
+                                    body = toolBody(p),
+                                    rows = rows,
+                                    running = p.state == ToolState.RUNNING || p.state == ToolState.PENDING,
+                                    failed = p.state == ToolState.ERROR,
+                                )
+                            }
+                            else -> Unit
+                        }
+                    }
+                }
+                else -> Unit
+            }
+        }
+        return out
+    }
+
+    private fun toolBody(p: Part.Tool): String {
+        val result = p.result
+        return when {
+            result == null -> p.call.argumentsJson
+            result.isError -> "failed: ${result.output}"
+            else -> result.output
+        }
+    }
+
+    /** Pull a short (label, value) list out of a tool result for the sub-rows. */
+    private fun parseToolRows(p: Part.Tool): List<Pair<String, String>> {
+        val out = p.result?.output ?: return emptyList()
+        val lines = out.lines().filter { it.isNotBlank() }
+        if (lines.size <= 1) return emptyList()
+        return lines.take(6).map { l ->
+            val t = l.trim()
+            val words = t.split(Regex("\\s+"), limit = 2)
+            if (words.size == 2) words[0] to words[1] else t to ""
+        }
+    }
+
+    private fun oneLine(s: String): String =
+        s.replace(Regex("\\s+"), " ").trim().let { if (it.length > 140) it.take(140) + "…" else it }
+
+    /**
+     * Apply a live event to the row list. Returns the new list. Kept here (not in
+     * the composable) so the streaming behaviour is testable.
+     */
+    fun applyEvent(current: List<UiStep>, event: AgentEvent): List<UiStep> = when (event) {
+        is AgentEvent.PartDelta -> current // deltas are cheap; see applyDelta
+        is AgentEvent.Progress -> current.map {
+            if (it.running) it.copy(summary = oneLine(event.message)) else it
+        }
+        else -> current
+    }
+
+    /** Append-or-grow a streaming text row by partId. */
+    fun applyDelta(current: List<UiStep>, partId: String, delta: String, kind: StepKind, label: String): List<UiStep> {
+        val i = current.indexOfFirst { it.id == partId }
+        return if (i >= 0) {
+            val old = current[i]
+            val body = old.body + delta
+            current.toMutableList().also {
+                it[i] = old.copy(body = body, summary = oneLine(body))
+            }
+        } else {
+            current + UiStep(
+                id = partId, kind = kind, label = label, tag = Integer.toHexString(0x100000 + (partId.hashCode() and 0xFFFFF)).takeLast(6),
+                summary = oneLine(delta), body = delta,
+            )
+        }
+    }
+}
