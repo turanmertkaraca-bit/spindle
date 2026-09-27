@@ -4,6 +4,7 @@ plugins {
     id("com.android.application")
     kotlin("android")
     kotlin("plugin.serialization")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
