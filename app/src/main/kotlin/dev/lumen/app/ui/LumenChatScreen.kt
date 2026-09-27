@@ -222,7 +222,7 @@ private fun Beam(step: UiStep, open: Boolean, colors: LumenColors) {
                 .size(if (open) 11.dp else 9.dp)
                 .clip(shape)
                 .background(fill)
-                .then(if (ring) Modifier.border(colors.fg, shape) else Modifier),
+                .then(if (ring) Modifier.border(2.dp, colors.fg, shape) else Modifier),
         )
     }
 }
