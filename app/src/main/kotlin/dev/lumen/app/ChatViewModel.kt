@@ -36,6 +36,8 @@ data class ChatState(
     val input: String = "",
     val error: String? = null,
     val model: String = "",
+    /** True until an API key is saved — the screen shows the key form instead. */
+    val needsKey: Boolean = true,
 )
 
 /**
@@ -45,17 +47,20 @@ data class ChatState(
  */
 class ChatViewModel(
     private val workspace: Path,
-    private val apiKey: String?,
-    private val modelRef: String = "opencode-go/deepseek-v4.1-flash",
+    private val keys: KeyStore,
     private val store: SessionStore,
     private val ownedStore: AutoCloseable? = null,
 ) : ViewModel() {
 
     private val bus = EventBus()
-    private val providers = SimpleProviderRegistry(buildProviders())
     private val sessionId = SessionId(Ids.new("ses"))
 
-    private val _state = MutableStateFlow(ChatState(model = modelRef))
+    private val _state = MutableStateFlow(
+        ChatState(
+            model = keys.model,
+            needsKey = !keys.hasKey,
+        ),
+    )
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
     private var runJob: Job? = null
@@ -70,13 +75,59 @@ class ChatViewModel(
                     cwd = workspace.toString(),
                     createdAt = now,
                     updatedAt = now,
-                    model = modelRef.substringAfter('/', modelRef),
-                    providerId = modelRef.substringBefore('/', "opencode-go"),
+                    model = keys.model.substringAfter('/', keys.model),
+                    providerId = keys.model.substringBefore('/', "opencode-go"),
                 ),
             )
             _state.value = _state.value.copy(steps = StepMapper.fromMessages(store.messages(sessionId)))
             collectEvents()
         }
+    }
+
+    /** Called by the key screen. Persists and re-enables sending. */
+    fun saveKey(provider: String, key: String) {
+        keys.provider = provider
+        keys.apiKey = key
+        keys.model = KeyStore.defaultModel(provider)
+        _state.value = _state.value.copy(needsKey = !keys.hasKey, model = keys.model, error = null)
+    }
+
+    fun clearKey() {
+        keys.apiKey = null
+        _state.value = _state.value.copy(needsKey = true, error = null)
+    }
+
+    private fun providersFor(provider: String, key: String): SimpleProviderRegistry {
+        val ua = "lumen/0.1"
+        val list = buildList {
+            add(
+                dev.spindle.provider.openai.OpenAiProvider(
+                    baseUrl = "https://opencode.ai/zen/go/v1",
+                    apiKey = key, id = "opencode-go", userAgent = ua,
+                    defaultModels = listOf(
+                        ModelInfo("opencode-go", "deepseek-v4.1-flash", contextWindow = 1_000_000, supportsReasoning = true),
+                        ModelInfo("opencode-go", "glm-5.3-flash", contextWindow = 200_000),
+                        ModelInfo("opencode-go", "kimi-k2.7-code", contextWindow = 200_000),
+                    ),
+                ),
+            )
+            add(
+                dev.spindle.provider.openai.OpenAiProvider(
+                    baseUrl = "https://api.deepseek.com",
+                    apiKey = key, id = "deepseek", userAgent = ua,
+                    defaultModels = listOf(
+                        ModelInfo("deepseek", "deepseek-flash", contextWindow = 1_000_000, supportsReasoning = true),
+                    ),
+                ),
+            )
+            add(
+                dev.spindle.provider.openai.OpenAiProvider(
+                    baseUrl = "https://openrouter.ai/api/v1",
+                    apiKey = key, id = "openrouter", userAgent = ua,
+                ),
+            )
+        }
+        return SimpleProviderRegistry(list)
     }
 
     private suspend fun collectEvents() {
@@ -113,22 +164,27 @@ class ChatViewModel(
     fun send() {
         val text = _state.value.input.trim()
         if (text.isEmpty() || _state.value.busy) return
+        val key = keys.apiKey
+        if (key.isNullOrBlank()) {
+            _state.value = _state.value.copy(needsKey = true, input = "")
+            return
+        }
         _state.value = _state.value.copy(input = "", error = null)
 
         runJob = viewModelScope.launch {
             val loop = AgentLoop(
-                providers = providers,
+                providers = providersFor(keys.provider, key),
                 tools = DefaultTools.registry(),
                 store = store,
                 bus = bus,
                 permissions = PermissionGate { _, _, _ -> true },
-                questions = QuestionGate { _, question, options, _ ->
+                questions = QuestionGate { _, _, options, _ ->
                     // no UI gate yet: take the first option, or acknowledge
                     listOf(options.firstOrNull() ?: "ok")
                 },
             )
             try {
-                loop.prompt(sessionId, text, modelRef, AgentConfig(maxSteps = 12))
+                loop.prompt(sessionId, text, keys.model, AgentConfig(maxSteps = 12))
             } catch (t: Throwable) {
                 _state.value = _state.value.copy(error = t.message ?: t.toString(), busy = false)
             }
@@ -145,37 +201,6 @@ class ChatViewModel(
         runCatching { ownedStore?.close() }
     }
 
-    private fun buildProviders(): List<Provider> {
-        val key = apiKey ?: ""
-        val ua = "lumen/0.1"
-        return buildList {
-            add(
-                dev.spindle.provider.openai.OpenAiProvider(
-                    baseUrl = "https://opencode.ai/zen/go/v1",
-                    apiKey = key,
-                    id = "opencode-go",
-                    userAgent = ua,
-                    defaultModels = listOf(
-                        ModelInfo("opencode-go", "deepseek-v4.1-flash", contextWindow = 1_000_000, supportsReasoning = true),
-                        ModelInfo("opencode-go", "glm-5.3-flash", contextWindow = 200_000),
-                        ModelInfo("opencode-go", "kimi-k2.7-code", contextWindow = 200_000),
-                    ),
-                ),
-            )
-            add(
-                dev.spindle.provider.openai.OpenAiProvider(
-                    baseUrl = "https://api.deepseek.com",
-                    apiKey = key,
-                    id = "deepseek",
-                    userAgent = ua,
-                    defaultModels = listOf(
-                        ModelInfo("deepseek", "deepseek-flash", contextWindow = 1_000_000, supportsReasoning = true),
-                    ),
-                ),
-            )
-        }
-    }
-
     companion object {
         fun Factory(context: Context, workspace: java.io.File): androidx.lifecycle.ViewModelProvider.Factory =
             object : androidx.lifecycle.ViewModelProvider.Factory {
@@ -184,7 +209,7 @@ class ChatViewModel(
                     val store = AndroidSessionStore(context)
                     return ChatViewModel(
                         workspace = workspace.toPath(),
-                        apiKey = System.getenv("LUMEN_API_KEY"),
+                        keys = KeyStore(context),
                         store = store,
                         ownedStore = store,
                     ) as T

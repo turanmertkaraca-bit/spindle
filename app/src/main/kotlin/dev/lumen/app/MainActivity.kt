@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import dev.lumen.app.ui.KeyScreen
 import dev.lumen.app.ui.LumenChatScreen
 import java.io.File
 
@@ -22,16 +23,24 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             val state by viewModel.state.collectAsState()
-            LumenChatScreen(
-                steps = state.steps,
-                input = state.input,
-                busy = state.busy,
-                error = state.error,
-                modifier = Modifier.fillMaxSize().systemBarsPadding(),
-                onInput = viewModel::onInput,
-                onSend = viewModel::send,
-                onStop = viewModel::stop,
-            )
+            if (state.needsKey) {
+                KeyScreen(
+                    colors = dev.lumen.app.ui.LumenColors.Light,
+                    onSubmit = viewModel::saveKey,
+                    modifier = Modifier.fillMaxSize().systemBarsPadding(),
+                )
+            } else {
+                LumenChatScreen(
+                    steps = state.steps,
+                    input = state.input,
+                    busy = state.busy,
+                    error = state.error,
+                    modifier = Modifier.fillMaxSize().systemBarsPadding(),
+                    onInput = viewModel::onInput,
+                    onSend = viewModel::send,
+                    onStop = viewModel::stop,
+                )
+            }
         }
     }
 }
