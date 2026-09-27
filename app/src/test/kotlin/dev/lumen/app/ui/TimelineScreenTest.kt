@@ -63,7 +63,7 @@ class TimelineScreenTest {
 
     @Test
     fun `exactly one row is open`() {
-        compose.setContent { TimelineScreen(steps(6), modifier = viewport) }
+        compose.setContent { TimelineScreen(steps(6), modifier = viewport, forceOpenIndex = 0) }
         val open = countBodies(6)
         check(open == 1) { "expected exactly 1 open row, found $open" }
     }
@@ -106,8 +106,9 @@ class TimelineScreenTest {
                 rows = listOf("compile" to "assembleDebug", "verify" to "re-render"),
             ),
         )
-        compose.setContent { TimelineScreen(s, modifier = viewport) }
-        // The single row is the bottom-most, so it is open -> its sub-rows exist.
+        // Force the row open so the test does not depend on Robolectric layout.
+        compose.setContent { TimelineScreen(s, modifier = viewport, forceOpenIndex = 0) }
+        // Open tool row -> its sub-rows exist.
         check(compose.onAllNodesWithText("compile", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) {
             "open tool row should expose its 'compile' sub-row"
         }

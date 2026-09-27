@@ -88,16 +88,18 @@ fun TimelineScreen(
     steps: List<UiStep>,
     colors: LumenColors = LumenColors.Light,
     modifier: Modifier = Modifier,
+    /** Force a row open. Tests use this; production leaves it null (scroll decides). */
+    forceOpenIndex: Int? = null,
 ) {
     val listState = rememberLazyListState()
 
     // The row at the bottom edge of the viewport is the open one.
     //
     // Rule (matches dev.spindle.core.ui.TimelineLayout): among the rows currently
-    // on screen, the one whose top starts above the viewport bottom — the last
-    // one — is opened. Before the first layout pass there is no info, so we open
-    // the newest row (correct for a freshly-appended step, and for short chats).
-    var openIndex by remember(steps.size) { mutableIntStateOf(steps.lastIndex) }
+    // on screen, the last one whose top starts above the viewport bottom. Before
+    // the first layout pass there is no info, so we open the newest row (correct
+    // for a freshly-appended step, and for short chats).
+    var scrollOpen by remember(steps.size) { mutableIntStateOf(steps.lastIndex) }
 
     LaunchedEffect(listState, steps.size) {
         snapshotFlow {
@@ -108,8 +110,10 @@ fun TimelineScreen(
                 val end = info.viewportEndOffset
                 visible.lastOrNull { it.offset < end }?.index ?: visible.last().index
             }
-        }.collect { openIndex = it }
+        }.collect { scrollOpen = it }
     }
+
+    val openIndex = forceOpenIndex ?: scrollOpen
 
     Box(modifier.fillMaxWidth().background(colors.bg)) {
         LazyColumn(
