@@ -103,7 +103,7 @@ class TimelineScreenTest {
                 "t", StepKind.TOOL, "1 RUN TESTS", "x",
                 summary = "571 tests - 0 failed",
                 body = "gradle testDebugUnitTest",
-                rows = listOf("compile" to "assembleDebug", "test" to "571 passed"),
+                rows = listOf("compile" to "assembleDebug", "verify" to "re-render"),
             ),
         )
         compose.setContent { TimelineScreen(s, modifier = viewport) }
@@ -111,8 +111,8 @@ class TimelineScreenTest {
         check(compose.onAllNodesWithText("compile").fetchSemanticsNodes().isNotEmpty()) {
             "open tool row should expose its 'compile' sub-row"
         }
-        check(compose.onAllNodesWithText("test").fetchSemanticsNodes().isNotEmpty()) {
-            "open tool row should expose its 'test' sub-row"
+        check(compose.onAllNodesWithText("verify").fetchSemanticsNodes().isNotEmpty()) {
+            "open tool row should expose its 'verify' sub-row"
         }
     }
 }
