@@ -15,7 +15,7 @@ import java.io.File
 class MainActivity : ComponentActivity() {
 
     private val viewModel: ChatViewModel by viewModels {
-        ChatViewModel.Factory(File(filesDir, "workspace").apply { mkdirs() })
+        ChatViewModel.Factory(applicationContext, File(filesDir, "workspace").apply { mkdirs() })
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

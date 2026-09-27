@@ -57,7 +57,6 @@ dependencies {
     implementation(project(":tools"))
     implementation(project(":provider-openai"))
     implementation(project(":provider-anthropic"))
-    implementation(project(":store-sqlite"))
 
     val composeBom = platform("androidx.compose:compose-bom:2024.09.03")
     implementation(composeBom)

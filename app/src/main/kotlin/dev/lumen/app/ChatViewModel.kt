@@ -2,6 +2,8 @@ package dev.lumen.app
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import android.content.Context
+import dev.lumen.app.data.AndroidSessionStore
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
@@ -18,7 +20,7 @@ import dev.spindle.core.model.SessionId
 import dev.spindle.core.provider.ModelInfo
 import dev.spindle.core.provider.Provider
 import dev.spindle.core.provider.SimpleProviderRegistry
-import dev.spindle.store.sqlite.SqliteSessionStore
+import dev.spindle.core.store.SessionStore
 import dev.spindle.tool.DefaultTools
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -45,10 +47,11 @@ class ChatViewModel(
     private val workspace: Path,
     private val apiKey: String?,
     private val modelRef: String = "opencode-go/deepseek-v4.1-flash",
+    private val store: SessionStore,
+    private val ownedStore: AutoCloseable? = null,
 ) : ViewModel() {
 
     private val bus = EventBus()
-    private val store = SqliteSessionStore.open(workspace.resolve(".lumen/sessions.db"))
     private val providers = SimpleProviderRegistry(buildProviders())
     private val sessionId = SessionId(Ids.new("ses"))
 
@@ -139,7 +142,7 @@ class ChatViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        runCatching { store.close() }
+        runCatching { ownedStore?.close() }
     }
 
     private fun buildProviders(): List<Provider> {
@@ -174,14 +177,18 @@ class ChatViewModel(
     }
 
     companion object {
-        fun Factory(workspace: java.io.File): androidx.lifecycle.ViewModelProvider.Factory =
+        fun Factory(context: Context, workspace: java.io.File): androidx.lifecycle.ViewModelProvider.Factory =
             object : androidx.lifecycle.ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
-                override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    ChatViewModel(
+                override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                    val store = AndroidSessionStore(context)
+                    return ChatViewModel(
                         workspace = workspace.toPath(),
                         apiKey = System.getenv("LUMEN_API_KEY"),
+                        store = store,
+                        ownedStore = store,
                     ) as T
+                }
             }
     }
 }
