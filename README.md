@@ -22,6 +22,7 @@ reconcile. The Android/Compose UI is a thin consumer of the event stream.
 | `:provider-openai` | OpenAI-compatible streaming (`chat/completions`) |
 | `:provider-anthropic` | Anthropic-style streaming (`messages`) |
 | `:store-sqlite` | durable `SessionStore` on SQLite (JDBC; Room later on Android) |
+| `:tools` | read, write, edit, bash, apply_patch, glob, grep, webfetch, todowrite, question, task |
 | `:cli` | headless harness + live smoke tests |
 
 `:core` has **no Android dependencies**, so the whole backend is testable on a plain
@@ -29,7 +30,10 @@ JVM (including GitHub Actions).
 
 ## Status
 
-Early. See `docs/PLAN.md` and `docs/SPEC.md`.
+Backend is feature-complete for a first UI: streaming providers, durable sessions,
+11 tools, subagent delegation, retries, cancellation and context compaction.
+See `docs/PLAN.md`, `docs/SPEC.md` and `docs/PARITY.md` (what we ported from
+opencode and what we deliberately did not).
 
 ## Build
 

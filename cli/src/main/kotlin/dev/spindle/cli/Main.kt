@@ -130,6 +130,9 @@ private suspend fun render(bus: EventBus) {
             }
             is AgentEvent.Error -> println("[error] ${e.message}")
             is AgentEvent.QuestionAsked -> println("\n[question] ${e.question}")
+            is AgentEvent.Progress -> println("[..] ${e.message}")
+            is AgentEvent.MessageCreated -> if (e.role == "assistant") println("[assistant ${e.messageId.takeLast(6)}]")
+            is AgentEvent.PermissionRequested -> println("\n[permission] ${e.tool}: ${e.detail}")
             else -> Unit
         }
     }

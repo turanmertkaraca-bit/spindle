@@ -9,10 +9,14 @@ object DefaultTools {
             ReadTool(),
             WriteTool(),
             EditTool(),
+            BashTool(),
+            ApplyPatchTool(),
             GlobTool(),
             GrepTool(),
             TodoWriteTool(),
+            WebFetchTool(),
             QuestionTool(),
+            TaskTool(),
         ),
     )
 }

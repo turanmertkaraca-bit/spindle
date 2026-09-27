@@ -1,16 +1,18 @@
 package dev.spindle.tool
 
+import dev.spindle.core.model.Ids
+import dev.spindle.core.model.TodoItem
+import dev.spindle.core.model.TodoStatus
 import dev.spindle.core.provider.ToolSpec
 import dev.spindle.core.tool.Tool
 import dev.spindle.core.tool.ToolContext
 import dev.spindle.core.tool.ToolOutcome
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 
 /**
- * Accept a todo list and render it as a checklist. Persistence is the session
- * store's job for now, so this tool only echoes the rendered list back.
+ * Accept a todo list, persist it to the session via [ToolContext.setTodos], and
+ * render it as a checklist.
  */
 class TodoWriteTool : Tool {
     override val spec = ToolSpec(
@@ -48,8 +50,8 @@ class TodoWriteTool : Tool {
     override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
         val array = input["todos"] as? JsonArray
             ?: return ToolOutcome("Missing required array field 'todos'", isError = true)
-        if (array.isEmpty()) return ToolOutcome("(no todos)")
 
+        val parsed = ArrayList<TodoItem>(array.size)
         val rendered = StringBuilder()
         var index = 0
         for (element in array) {
@@ -59,30 +61,32 @@ class TodoWriteTool : Tool {
             val content = todo.stringOrNull("content")
                 ?: return ToolOutcome("todos[$index].content is required", isError = true)
             val status = parseStatus(todo.stringOrNull("status"))
+            parsed.add(TodoItem(id = Ids.new("todo"), content = content, status = status))
             rendered.append("- ").append(marker(status)).append(' ').append(content).append('\n')
         }
 
+        ctx.setTodos(parsed)
+
+        if (parsed.isEmpty()) return ToolOutcome("(no todos)")
         val output = rendered.toString().trimEnd('\n')
         return ToolOutcome(
             output = output,
-            metadata = mapOf("count" to array.size.toString()),
+            metadata = mapOf("count" to parsed.size.toString()),
         )
     }
 
-    private fun parseStatus(raw: String?): Status = when (raw?.lowercase()?.replace('-', '_')) {
-        null, "", "pending" -> Status.PENDING
-        "in_progress", "inprogress", "active" -> Status.IN_PROGRESS
-        "done", "completed", "complete" -> Status.DONE
-        "cancelled", "canceled" -> Status.CANCELLED
-        else -> Status.PENDING
+    private fun parseStatus(raw: String?): TodoStatus = when (raw?.lowercase()?.replace('-', '_')) {
+        null, "", "pending" -> TodoStatus.PENDING
+        "in_progress", "inprogress", "active" -> TodoStatus.IN_PROGRESS
+        "done", "completed", "complete" -> TodoStatus.DONE
+        "cancelled", "canceled" -> TodoStatus.CANCELLED
+        else -> TodoStatus.PENDING
     }
 
-    private fun marker(status: Status): String = when (status) {
-        Status.PENDING -> "[ ]"
-        Status.IN_PROGRESS -> "[~]"
-        Status.DONE -> "[x]"
-        Status.CANCELLED -> "[-]"
+    private fun marker(status: TodoStatus): String = when (status) {
+        TodoStatus.PENDING -> "[ ]"
+        TodoStatus.IN_PROGRESS -> "[~]"
+        TodoStatus.DONE -> "[x]"
+        TodoStatus.CANCELLED -> "[-]"
     }
-
-    private enum class Status { PENDING, IN_PROGRESS, DONE, CANCELLED }
 }

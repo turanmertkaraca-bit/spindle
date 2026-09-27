@@ -16,6 +16,8 @@ internal object Limits {
     const val GLOB_MAX_RESULTS = 1000
     const val GREP_MAX_RESULTS = 1000
     const val BINARY_SNIFF_BYTES = 8000
+    const val BASH_MAX_OUTPUT_CHARS = 50_000
+    const val WEB_MAX_CHARS = 20_000
 }
 
 /**

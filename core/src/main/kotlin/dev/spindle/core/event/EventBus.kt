@@ -52,6 +52,13 @@ sealed interface AgentEvent {
     ) : AgentEvent
 
     data class Error(override val sessionId: SessionId, val message: String) : AgentEvent
+
+    /** Out-of-band tool progress (long-running bash, fetch, subagent, …). */
+    data class Progress(
+        override val sessionId: SessionId,
+        val message: String,
+        val fraction: Double? = null,
+    ) : AgentEvent
 }
 
 /** Fan-out bus. Slow subscribers drop oldest rather than blocking the loop. */

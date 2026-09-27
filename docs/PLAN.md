@@ -50,26 +50,37 @@ Legend: `[x]` done · `[~]` partial · `[ ]` todo · `[—]` deliberately deferr
 - [x] Permission (`PermissionGate`) + question (`QuestionGate`) wired through `ToolContext`.
 - [x] Unified-diff-ish output for `edit`.
 
-## M5 — Loop hardening (retries / abort) — `[~]` PARTIAL
+## M5 — Loop hardening (retries / abort) — `[x]` DONE
 
-- [x] Step budget (`AgentConfig.maxSteps`) with a loop test.
-- [ ] Bounded retry with backoff for transient provider/network failures.
-- [ ] Real cancellation: `ToolContext.checkAborted()` and cooperative tool abort.
-- [ ] Distinguish terminal vs retryable `Failure`.
+- [x] Bounded retry with exponential backoff + jitter for transient failures (`Retry`).
+- [x] Terminal vs retryable classification (429/5xx/timeout retry; 4xx/auth/context do not).
+- [x] Cooperative cancellation: `ToolContext.checkAborted()` is suspend and calls `ensureActive()`.
+- [x] Step budget (`AgentConfig.maxSteps`) and output clipping.
+- [x] Tests: `RetryTest`, `SubagentTest`, `AgentLoopTest`.
 
 ## M6 — Cost / context accounting — `[~]` PARTIAL
 
 - [x] `ModelInfo` pricing feeds `Wire.cost`; per-message `Usage.costUsd`.
-- [ ] Context-window estimation from wire messages + tool specs.
-- [ ] Session-level totals + budget warnings before send.
+- [x] `TokenEstimator` + `ContextBudget` (max tokens / max cost) wired into the loop.
+- [ ] Session-level totals + budget warnings surfaced through `AgentEvent`.
 
-## M7 — Compaction (trim + summarize) — `[ ]` TODO
+## M7 — Compaction (trim + summarize) — `[x]` DONE
 
-- [ ] Trim old tool output / parts when over budget.
-- [ ] Single summarization pass for evicted history.
-- [ ] Never compact the most recent turn or an open tool call.
+- [x] `Compaction.trim` clips old tool output/reasoning without changing message shape.
+- [x] `Compaction.compact` replaces the head with one summary via the cheapest model,
+      with a deterministic offline fallback if the provider call fails.
+- [x] Never compacts an open tool call; skips re-compacting an already-compacted head.
+- [x] Tests: `OverflowTest`, plus trim/compact coverage in `AgentLoopTest`.
 
-## M8 — CLI + live smoke — `[~]` PARTIAL
+## M8 — Tools: bash / patch / fetch / subagents — `[x]` DONE
+
+- [x] `bash` (sandboxed `/bin/sh`, timeout, merged stderr, output cap, permission gate).
+- [x] `apply_patch` (opencode patch format, atomic, escape-checked, unified diff).
+- [x] `webfetch` (JDK HttpClient, proxy-aware, html→markdown).
+- [x] `todowrite` persists through `ToolContext.setTodos`.
+- [x] `task` subagents: `SubagentSpawner`, child sessions, `explore`/`general` configs.
+
+## M9 — CLI + live smoke — `[~]` PARTIAL
 
 - [x] `dev.spindle.cli.MainKt` with `--provider/--model/--prompt` (+ interactive mode,
       `--yes`, `--list-models`, `--max-steps`, `--cwd`, `--db`).
@@ -80,11 +91,12 @@ Legend: `[x]` done · `[~]` partial · `[ ]` todo · `[—]` deliberately deferr
       (`FreeTierError: can only be used from within OpenCode`), so keyless live runs
       are not possible — see Risks.
 
-## M9 — Android UI — `[—]` LATER / OUT OF SCOPE NOW
+## M10 — Android UI — `[—]` LATER / OUT OF SCOPE NOW
 
 - [ ] Compose consumer of `EventBus`, rendering `SessionStore`.
 - [ ] Interactive `PermissionGate` / `QuestionGate` surfaces.
 - [ ] Room-backed `SessionStore` (parity with `:store-sqlite`).
+- [ ] Swap `bash` to the Debian sandbox instead of host `/bin/sh`.
 
 The UI is intentionally last. `:core` stays Android-free so the backend can be
 completed and verified on the JVM first.
