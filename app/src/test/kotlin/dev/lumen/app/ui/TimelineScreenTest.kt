@@ -108,10 +108,10 @@ class TimelineScreenTest {
         )
         compose.setContent { TimelineScreen(s, modifier = viewport) }
         // The single row is the bottom-most, so it is open -> its sub-rows exist.
-        check(compose.onAllNodesWithText("compile").fetchSemanticsNodes().isNotEmpty()) {
+        check(compose.onAllNodesWithText("compile", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) {
             "open tool row should expose its 'compile' sub-row"
         }
-        check(compose.onAllNodesWithText("verify").fetchSemanticsNodes().isNotEmpty()) {
+        check(compose.onAllNodesWithText("verify", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) {
             "open tool row should expose its 'verify' sub-row"
         }
     }
