@@ -14,7 +14,7 @@ import dev.spindle.core.provider.SimpleProviderRegistry
 import dev.spindle.core.store.InMemorySessionStore
 import dev.spindle.provider.openai.OpenAiProvider
 import dev.spindle.tool.DefaultTools
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Test
@@ -47,7 +47,7 @@ class SendPathTest {
     """.trimIndent()
 
     @Test
-    fun `a prompt streams tokens, persists a message, and becomes UI rows`() = runTest {
+    fun `a prompt streams tokens, persists a message, and becomes UI rows`() = runBlocking {
         val server = MockWebServer()
         server.enqueue(
             MockResponse()
@@ -100,7 +100,7 @@ class SendPathTest {
     }
 
     @Test
-    fun `a provider error becomes an error state, not a crash`() = runTest {
+    fun `a provider error becomes an error state, not a crash`() = runBlocking {
         val server = MockWebServer()
         server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":{"message":"Missing API key."}}"""))
         server.start()
