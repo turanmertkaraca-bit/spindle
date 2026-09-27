@@ -90,6 +90,8 @@ fun LumenChatScreen(
     error: String?,
     colors: LumenColors = LumenColors.Light,
     modifier: Modifier = Modifier,
+    /** Force a row open. Tests use this; production leaves it null (scroll decides). */
+    forceOpenIndex: Int? = null,
     onInput: (String) -> Unit = {},
     onSend: () -> Unit = {},
     onStop: () -> Unit = {},
@@ -120,7 +122,7 @@ fun LumenChatScreen(
         }
     }
 
-    val openIndex = if (pinned >= 0) pinned else scrollOpen
+    val openIndex = forceOpenIndex ?: if (pinned >= 0) pinned else scrollOpen
 
     Column(modifier.fillMaxSize().background(colors.bg).imePadding()) {
         Box(Modifier.weight(1f).fillMaxWidth()) {

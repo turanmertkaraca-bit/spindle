@@ -89,11 +89,14 @@ class LumenChatScreenTest {
                 rows = listOf("compile" to "assembleDebug", "verify" to "re-render"),
             ),
         )
-        compose.setContent { LumenChatScreen(s, input = "", busy = false, error = null, modifier = viewport) }
-        check(compose.onAllNodesWithText("compile").fetchSemanticsNodes().isNotEmpty()) {
+        // Force the row open so the assertion does not depend on Robolectric layout.
+        compose.setContent {
+            LumenChatScreen(s, input = "", busy = false, error = null, modifier = viewport, forceOpenIndex = 0)
+        }
+        check(compose.onAllNodesWithText("compile", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) {
             "open tool row should expose its 'compile' sub-row"
         }
-        check(compose.onAllNodesWithText("verify").fetchSemanticsNodes().isNotEmpty()) {
+        check(compose.onAllNodesWithText("verify", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) {
             "open tool row should expose its 'verify' sub-row"
         }
     }
