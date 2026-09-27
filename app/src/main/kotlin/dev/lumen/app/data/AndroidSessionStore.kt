@@ -52,8 +52,10 @@ class AndroidSessionStore(context: Context) : SessionStore, AutoCloseable {
     }
 
     init {
-        db.execSQL("PRAGMA foreign_keys=ON")
-        db.execSQL("PRAGMA journal_mode=WAL")
+        // PRAGMA statements return rows, so they must go through rawQuery —
+        // execSQL only accepts statements that produce no result set.
+        db.rawQuery("PRAGMA foreign_keys=ON", null).use { it.moveToFirst() }
+        db.rawQuery("PRAGMA journal_mode=WAL", null).use { it.moveToFirst() }
         db.execSQL(
             """CREATE TABLE IF NOT EXISTS sessions(
                  id TEXT PRIMARY KEY, title TEXT, cwd TEXT, created_at INTEGER,
