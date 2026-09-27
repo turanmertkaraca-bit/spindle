@@ -88,15 +88,22 @@ fun TimelineScreen(
 ) {
     val listState = rememberLazyListState()
 
-    // The row at the bottom edge of the viewport. Recomputed on every scroll.
+    // The row at the bottom edge of the viewport is the open one.
+    //
+    // Rule (matches dev.spindle.core.ui.TimelineLayout): among the rows currently
+    // laid out, take the last one whose bottom edge reaches the viewport bottom —
+    // that is the row the eye is resting on. Everything else collapses.
     val openIndex by remember(steps.size) {
         derivedStateOf {
-            val layout = listState.layoutInfo
-            val visible = layout.visibleItemsInfo
-            if (visible.isEmpty()) -1
-            else {
-                val bottom = layout.viewportEndOffset
-                visible.lastOrNull { it.offset <= bottom }?.index ?: visible.first().index
+            val info = listState.layoutInfo
+            val visible = info.visibleItemsInfo
+            if (visible.isEmpty()) {
+                -1
+            } else {
+                val end = info.viewportEndOffset
+                // last item that has started at or above the viewport bottom
+                visible.lastOrNull { it.offset < end }?.index
+                    ?: visible.last().index
             }
         }
     }
