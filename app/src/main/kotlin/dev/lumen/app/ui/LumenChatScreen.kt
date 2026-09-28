@@ -62,6 +62,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -439,8 +440,8 @@ fun LumenChatScreen(
                             val fill = when {
                                 step0.failed -> colors.danger()
                                 step0.running -> colors.bg
-                                focused || p.bloom > 0.5f -> colors.fg
-                                else -> colors.faint
+                                focused -> colors.fg
+                                else -> lerp(colors.faint, colors.fg, p.bloom)
                             }
                             val pts = DropletShape.outline(
                                 x, contentY,
