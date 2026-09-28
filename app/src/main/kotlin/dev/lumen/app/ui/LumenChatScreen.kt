@@ -35,6 +35,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -369,7 +370,7 @@ fun LumenChatScreen(
                         val reachBelow = pull.reachBelow * reveal
                         val waveAmp = 6.dp.toPx()
                         val waveLen = 110.dp.toPx()
-                        val waveSpeed = 900.dp.toPx()
+                        val waveSpeed = 170.dp.toPx()
                         val waveFade = 240.dp.toPx()
                         val waveEnv = RopeWave.envelope(twistElapsed)
 
@@ -466,7 +467,7 @@ fun LumenChatScreen(
                                     drawCircle(
                                         color = colors.spectrumAt(k).copy(alpha = bloom),
                                         radius = (3.4f - 0.4f * k).dp.toPx(),
-                                        center = Offset(x - 1.dp.toPx(), contentY - (11.dp.toPx() + k * 9.dp.toPx())),
+                                        center = Offset(x - 1.dp.toPx(), contentY - (15.dp.toPx() + k * 10.dp.toPx())),
                                     )
                                 }
                             } else if (step0.merged > 1) {
@@ -588,7 +589,7 @@ private fun FocusPanel(
 ) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(step.id) { mutableStateOf(false) }
-    val textScroll = rememberScrollState()
+    val textScroll = remember(step.id) { ScrollState(0) }
     LaunchedEffect(copied) {
         if (copied) {
             kotlinx.coroutines.delay(1200)
@@ -661,8 +662,14 @@ private fun FocusPanel(
         if (textScroll.maxValue > 0 && textScroll.value < textScroll.maxValue) {
             // a quiet cue that the text continues below the fold
             Box(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(30.dp)
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, colors.bg))),
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(64.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            0.55f to colors.bg.copy(alpha = 0.72f),
+                            1f to colors.bg,
+                        ),
+                    ),
             )
         }
     }

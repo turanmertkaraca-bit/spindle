@@ -176,7 +176,7 @@ class ScreenshotTest {
 
     @Test fun light_focus_top_tugs_down() = chat(LumenColors.Light, "light_focus_top.png", 0)
 
-    @Test fun dark_focus_bottom_tugs_up() = chat(LumenColors.Dark, "dark_focus_bottom.png", 5)
+    @Test fun dark_focus_top_tugs_down() = chat(LumenColors.Dark, "dark_focus_top.png", 0)
 
     @Test fun single_droplet() = shoot("single_droplet.png") {
         LumenChatScreen(

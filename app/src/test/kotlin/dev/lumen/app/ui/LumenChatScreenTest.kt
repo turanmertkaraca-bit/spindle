@@ -2,9 +2,8 @@ package dev.lumen.app.ui
 
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.test.assert
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -132,8 +131,8 @@ class LumenChatScreenTest {
     }
 
     @Test
-    fun `a long focused body is scrollable inside the panel`() {
-        val long = (1..60).joinToString(" ") { "word$it" }
+    fun `a long focused body overflows and scrolls inside the panel`() {
+        val long = (1..200).joinToString("\n") { "line $it of a very long focused answer" }
         compose.setContent {
             LumenChatScreen(
                 listOf(UiStep("a", StepKind.ASSISTANT, "ASSISTANT", "x", "long", long)),
@@ -141,7 +140,10 @@ class LumenChatScreenTest {
                 forceOpenIndex = 0,
             )
         }
-        compose.onNodeWithTag("panel").assert(hasScrollAction())
+        val cfg = compose.onNodeWithTag("panel").fetchSemanticsNode().config
+        check(cfg.contains(SemanticsProperties.VerticalScrollAxisRange)) { "panel should be scrollable" }
+        val range = cfg[SemanticsProperties.VerticalScrollAxisRange]
+        check(range.maxValue > 0f) { "a long body must overflow the capped panel (maxValue=${range.maxValue})" }
     }
 
     @Test

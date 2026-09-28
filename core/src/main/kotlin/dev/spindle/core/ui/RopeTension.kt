@@ -20,7 +20,7 @@ object RopeTension {
         val reachAbove: Float,
         /** how far the rope is drawn below the focus (px). */
         val reachBelow: Float,
-        /** signed lateral bias (px) that tugs the rope toward the emptier side. */
+        /** signed lateral bias (px) that tugs the rope toward the fuller side. */
         val leanBias: Float,
     )
 

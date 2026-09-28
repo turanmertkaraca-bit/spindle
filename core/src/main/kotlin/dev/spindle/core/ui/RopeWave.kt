@@ -14,8 +14,9 @@ import kotlin.math.sin
  * clock.
  *
  * `envelope = if (elapsed <= 0) 1 else exp(-decay * elapsed)` and
- * `displacement = amplitude * envelope * sin((2π / wavelength) * dy - speed *
- * elapsed) * exp(-abs(dy) / fadeLength)`.
+ * `displacement = amplitude * envelope * sin((2π / wavelength) * (dy - speed *
+ * elapsed)) * exp(-abs(dy) / fadeLength)`, so [speed] is the wave's travel in
+ * pixels per second.
  */
 object RopeWave {
 
@@ -39,7 +40,7 @@ object RopeWave {
         if (amplitude == 0f || wavelength <= 0f || fadeLength <= 0f) return 0f
         val env = envelope(elapsed, decay)
         if (env == 0f) return 0f
-        val phase = (2f * PI.toFloat() / wavelength) * dy - speed * elapsed
+        val phase = (2f * PI.toFloat() / wavelength) * (dy - speed * elapsed)
         return amplitude * env * sin(phase) * exp(-abs(dy) / fadeLength)
     }
 }
