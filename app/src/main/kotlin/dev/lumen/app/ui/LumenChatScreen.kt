@@ -20,11 +20,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LocalTextStyle
@@ -39,6 +42,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -136,6 +140,7 @@ fun LumenChatScreen(
     onSend: () -> Unit = {},
     onStop: () -> Unit = {},
     onToggleTheme: (() -> Unit)? = null,
+    onEditKey: (() -> Unit)? = null,
 ) {
     val density = LocalDensity.current
     val nodeSizePx = with(density) { 10.dp.toPx() }
@@ -279,13 +284,7 @@ fun LumenChatScreen(
                         drawRope(visibleTop.coerceAtLeast(ropeFocus - reach), ropeFocus - gapHalf)
                         drawRope(ropeFocus + gapHalf, visibleBottom.coerceAtMost(ropeFocus + reach))
 
-                        if (count == 0) {
-                            drawCircle(
-                                color = colors.faint.copy(alpha = 0.5f),
-                                radius = 3.dp.toPx(),
-                                center = Offset(ropeX, focusY),
-                            )
-                        }
+
 
                         for (p in result.placements) {
                             val step0 = steps.getOrNull(p.index) ?: continue
@@ -395,18 +394,70 @@ fun LumenChatScreen(
                         modifier = Modifier.align(Alignment.CenterStart),
                     )
                 }
+
+                if (count == 0) {
+                    EmptyRope(colors, Modifier.align(Alignment.Center))
+                }
             }
         }
 
         if (error != null) {
-            Text(
-                error, color = colors.danger(), fontFamily = Mono, fontSize = 12.sp,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-            )
+            ErrorNotice(error, colors, onEditKey)
         }
-        Composer(input, busy, colors, onInput, onSend, onStop, onToggleTheme)
+        Composer(input, busy, colors, onInput, onSend, onStop, onToggleTheme, onEditKey)
     }
 }
+
+/** Shown before the first message: an intentional start, not an empty screen. */
+@Composable
+private fun EmptyRope(colors: LumenColors, modifier: Modifier = Modifier) {
+    Column(
+        modifier.padding(horizontal = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("lumen", color = colors.faint, fontFamily = Mono, fontSize = 15.sp, letterSpacing = 7.sp)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "ask the agent to begin",
+            color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
+        )
+    }
+}
+
+/** A single, non-scary error line; offers the key screen when it is auth. */
+@Composable
+private fun ErrorNotice(message: String, colors: LumenColors, onEditKey: (() -> Unit)?) {
+    val lower = message.lowercase()
+    val auth = lower.contains("401") || lower.contains("auth") ||
+        lower.contains("api key") || lower.contains("unauthorized")
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(colors.rule)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(6.dp).clip(CircleShape).background(colors.danger()))
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = if (auth) "Authentication failed — check your API key." else oneLine(message),
+            color = colors.fg, fontFamily = Mono, fontSize = 11.sp,
+            maxLines = 2, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (auth && onEditKey != null) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "update key",
+                color = colors.accent, fontFamily = Mono, fontSize = 11.sp,
+                modifier = Modifier.clickable { onEditKey() }.testTag("update-key"),
+            )
+        }
+    }
+}
+
+private fun oneLine(s: String): String =
+    s.replace(Regex("\\s+"), " ").trim().let { if (it.length > 160) it.take(160) + "…" else it }
 
 /** The bloomed droplet's text, to the right of the rope at the focus line. */
 @Composable
@@ -502,6 +553,7 @@ private fun Composer(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onToggleTheme: (() -> Unit)?,
+    onEditKey: (() -> Unit)?,
 ) {
     Row(
         Modifier.fillMaxWidth().background(colors.bg)
@@ -526,6 +578,18 @@ private fun Composer(
             )
         }
         Spacer(Modifier.width(8.dp))
+        if (onEditKey != null) {
+            Text(
+                "key",
+                color = colors.faint,
+                fontFamily = Mono,
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .clickable { onEditKey() }
+                    .padding(horizontal = 6.dp)
+                    .testTag("key"),
+            )
+        }
         if (onToggleTheme != null) {
             Text(
                 "◐",

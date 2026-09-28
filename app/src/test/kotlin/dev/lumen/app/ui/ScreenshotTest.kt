@@ -93,6 +93,7 @@ class ScreenshotTest {
             colors = colors,
             forceOpenIndex = force,
             onToggleTheme = {},
+            onEditKey = {},
         )
     }
 
@@ -114,6 +115,31 @@ class ScreenshotTest {
             error = null,
             colors = LumenColors.Dark,
             onToggleTheme = {},
+            onEditKey = {},
+        )
+    }
+
+    @Test fun empty_session_light() = shoot("empty_light.png") {
+        LumenChatScreen(
+            steps = emptyList(),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Light,
+            onToggleTheme = {},
+            onEditKey = {},
+        )
+    }
+
+    @Test fun auth_error_dark() = shoot("error_dark.png") {
+        LumenChatScreen(
+            steps = emptyList(),
+            input = "",
+            busy = false,
+            error = "OpenAI HTTP 401: {\"error\":{\"message\":\"Missing Authentication header\",\"code\":401}}",
+            colors = LumenColors.Dark,
+            onToggleTheme = {},
+            onEditKey = {},
         )
     }
 

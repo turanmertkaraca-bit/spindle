@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
                     onSend = viewModel::send,
                     onStop = viewModel::stop,
                     onToggleTheme = { darkOverride = !dark },
+                    onEditKey = viewModel::clearKey,
                 )
             }
         }

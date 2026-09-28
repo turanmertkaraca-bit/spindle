@@ -7,6 +7,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.UiStep
@@ -15,6 +16,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import kotlin.test.assertTrue
 
 /**
  * Behavioral tests for the rope screen, run on a plain JVM by Robolectric.
@@ -101,6 +103,30 @@ class LumenChatScreenTest {
             LumenChatScreen(steps(2), input = "", busy = true, error = null, modifier = viewport, forceOpenIndex = 1)
         }
         compose.onNodeWithTag("stop").assertIsDisplayed()
+    }
+
+    @Test
+    fun `an empty session shows an intentional start, not a blank`() {
+        compose.setContent {
+            LumenChatScreen(emptyList(), input = "", busy = false, error = null, modifier = viewport)
+        }
+        compose.onNodeWithText("lumen").assertIsDisplayed()
+        compose.onNodeWithText("ask the agent to begin").assertIsDisplayed()
+    }
+
+    @Test
+    fun `an auth error offers a way to fix the key`() {
+        var edited = false
+        compose.setContent {
+            LumenChatScreen(
+                emptyList(), input = "", busy = false,
+                error = "OpenAI HTTP 401: Missing Authentication header",
+                modifier = viewport,
+                onEditKey = { edited = true },
+            )
+        }
+        compose.onNodeWithText("update key").assertIsDisplayed().performClick()
+        assertTrue(edited, "update key should route to the key screen")
     }
 
     @Test
