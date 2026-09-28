@@ -595,62 +595,74 @@ private fun FocusPanel(
         }
     }
 
-    Column(
+    Box(
         modifier
             .fillMaxWidth()
             .padding(start = startPadding, end = 16.dp)
             .background(colors.bg)
             .alpha(bloom)
             .heightIn(max = maxHeight)
-            .animateContentSize()
-            .verticalScroll(textScroll)
-            .testTag("panel")
-            .pointerInput(step.id) {
-                detectTapGestures(
-                    onTap = { /* single tap does nothing */ },
-                    onDoubleTap = {
-                        clipboard.setText(AnnotatedString(step.body))
-                        copied = true
-                    },
-                )
-            },
+            .animateContentSize(),
     ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(
-                step.label,
-                color = colors.fg,
-                fontFamily = Mono, fontSize = 11.sp, letterSpacing = 1.5.sp,
-            )
-            Text(
-                if (copied) "copied" else step.tag,
-                color = if (copied) colors.accent else colors.dim,
-                fontFamily = Mono, fontSize = 11.sp,
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        SelectionContainer {
-            Text(
-                text = step.body,
-                color = colors.fg,
-                fontFamily = Mono, fontSize = 14.sp, lineHeight = 20.sp,
-            )
-        }
-        if (step.rows.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
-            for ((k, r) in step.rows.withIndex()) {
-                Row(
-                    Modifier.padding(start = 4.dp, top = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("·", color = colors.spectrumAt(k), fontFamily = Mono, fontSize = 13.sp)
-                    Spacer(Modifier.width(8.dp))
-                    Text(r.first, color = colors.spectrumAt(k), fontFamily = Mono, fontSize = 13.sp)
-                    if (r.second.isNotEmpty()) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(textScroll)
+                .testTag("panel")
+                .pointerInput(step.id) {
+                    detectTapGestures(
+                        onTap = { /* single tap does nothing */ },
+                        onDoubleTap = {
+                            clipboard.setText(AnnotatedString(step.body))
+                            copied = true
+                        },
+                    )
+                },
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(
+                    step.label,
+                    color = colors.fg,
+                    fontFamily = Mono, fontSize = 11.sp, letterSpacing = 1.5.sp,
+                )
+                Text(
+                    if (copied) "copied" else step.tag,
+                    color = if (copied) colors.accent else colors.dim,
+                    fontFamily = Mono, fontSize = 11.sp,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            SelectionContainer {
+                Text(
+                    text = step.body,
+                    color = colors.fg,
+                    fontFamily = Mono, fontSize = 14.sp, lineHeight = 20.sp,
+                )
+            }
+            if (step.rows.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                for ((k, r) in step.rows.withIndex()) {
+                    Row(
+                        Modifier.padding(start = 4.dp, top = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("·", color = colors.spectrumAt(k), fontFamily = Mono, fontSize = 13.sp)
                         Spacer(Modifier.width(8.dp))
-                        Text(r.second, color = colors.dim, fontFamily = Mono, fontSize = 13.sp)
+                        Text(r.first, color = colors.spectrumAt(k), fontFamily = Mono, fontSize = 13.sp)
+                        if (r.second.isNotEmpty()) {
+                            Spacer(Modifier.width(8.dp))
+                            Text(r.second, color = colors.dim, fontFamily = Mono, fontSize = 13.sp)
+                        }
                     }
                 }
             }
+        }
+        if (textScroll.maxValue > 0 && textScroll.value < textScroll.maxValue) {
+            // a quiet cue that the text continues below the fold
+            Box(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(30.dp)
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, colors.bg))),
+            )
         }
     }
 }
