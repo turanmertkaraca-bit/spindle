@@ -5,9 +5,12 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -15,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import dev.lumen.app.ui.KeyScreen
@@ -35,7 +39,7 @@ class MainActivity : ComponentActivity() {
             val systemDark = isSystemInDarkTheme()
             var darkOverride by remember { mutableStateOf<Boolean?>(null) }
             val dark = darkOverride ?: systemDark
-            val colors = if (dark) LumenColors.Dark else LumenColors.Light
+            val colors = animatedColors(dark)
 
             // Keep the system bar icons legible against our own background.
             val view = LocalView.current
@@ -69,4 +73,22 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+}
+
+/** The palette, eased between light and dark so the theme swap is not a hard cut. */
+@Composable
+private fun animatedColors(dark: Boolean): LumenColors {
+    val target = if (dark) LumenColors.Dark else LumenColors.Light
+    val spec = tween<Color>(durationMillis = 420)
+    return LumenColors(
+        bg = animateColorAsState(target.bg, spec, label = "bg").value,
+        fg = animateColorAsState(target.fg, spec, label = "fg").value,
+        dim = animateColorAsState(target.dim, spec, label = "dim").value,
+        faint = animateColorAsState(target.faint, spec, label = "faint").value,
+        rule = animateColorAsState(target.rule, spec, label = "rule").value,
+        accent = animateColorAsState(target.accent, spec, label = "accent").value,
+        spectrum = target.spectrum.mapIndexed { i, c ->
+            animateColorAsState(c, spec, label = "spectrum$i").value
+        },
+    )
 }

@@ -1,12 +1,25 @@
 package dev.lumen.app.ui
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDecay
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.exponentialDecay
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.FlingBehavior
+import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,10 +48,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -67,6 +82,8 @@ import dev.spindle.core.ui.DropletShape
 import dev.spindle.core.ui.FocusPolicy
 import dev.spindle.core.ui.RopeCurve
 import dev.spindle.core.ui.RopeLayout
+import dev.spindle.core.ui.RopeTension
+import dev.spindle.core.ui.RopeWave
 import kotlinx.coroutines.flow.filter
 import kotlin.math.abs
 import kotlin.math.max
@@ -75,8 +92,25 @@ import kotlin.math.roundToInt
 
 private val Mono = FontFamily.Monospace
 
-/** How many lines a focused droplet shows while there is still rope below it. */
-private const val LIMITED_LINES = 3
+/** Fling friction: higher bleeds energy faster, so a flick never races away. */
+private const val FLING_FRICTION = 2.6f
+
+/** A calmer fling for the rope: it stops in a short, predictable glide. */
+private fun calmFling(friction: Float = FLING_FRICTION): FlingBehavior = object : FlingBehavior {
+    override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
+        if (abs(initialVelocity) < 1f) return initialVelocity
+        var last = 0f
+        AnimationState(initialValue = 0f, initialVelocity = initialVelocity).animateDecay(
+            exponentialDecay(frictionMultiplier = friction),
+        ) {
+            val delta = value - last
+            val consumed = scrollBy(delta)
+            last = value
+            if (abs(delta - consumed) > 0.5f) cancelAnimation()
+        }
+        return 0f
+    }
+}
 
 /** Safe spectral colour: never throws, whatever palette is supplied. */
 private fun LumenColors.spectrumAt(index: Int): Color {
@@ -141,6 +175,7 @@ fun LumenChatScreen(
     onStop: () -> Unit = {},
     onToggleTheme: (() -> Unit)? = null,
     onEditKey: (() -> Unit)? = null,
+    ambient: Boolean = true,
 ) {
     val density = LocalDensity.current
     val nodeSizePx = with(density) { 10.dp.toPx() }
@@ -149,6 +184,9 @@ fun LumenChatScreen(
     val gutterPx = with(density) { 24.dp.toPx() }
     val bowPx = with(density) { 9.dp.toPx() }
     val bowHalfPx = with(density) { 150.dp.toPx() }
+    // Calmer scrolling: one droplet per roughly the rendered near-focus spacing,
+    // so a swipe moves the rope about as far as it looks like it should.
+    val scrollStridePx = nodeSizePx + baseGapPx + focusExtraPx * 0.72f
     val metrics = remember(nodeSizePx, baseGapPx, focusExtraPx) {
         RopeLayout.Metrics(
             nodeSize = nodeSizePx,
@@ -156,11 +194,13 @@ fun LumenChatScreen(
             focusGapExtra = focusExtraPx,
             focusHalfWidth = 1.6f,
             focusY = 0f,
+            scrollStride = scrollStridePx,
         )
     }
-    val stride = metrics.stride
+    val stride = metrics.scrollStride
 
     val scrollState = rememberScrollState()
+    val flingBehavior = remember { calmFling() }
     val scrollValue = scrollState.value.toFloat()
 
     val count = steps.size
@@ -182,12 +222,47 @@ fun LumenChatScreen(
         animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessLow),
         label = "reveal",
     )
-    // Moving rope stretches the droplets along it, then they settle.
-    val stretch by animateFloatAsState(
-        targetValue = if (scrolling) 1.35f else 1f,
-        animationSpec = spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessLow),
-        label = "stretch",
-    )
+
+    // Velocity of the rope (px/s), sampled only while the finger or fling moves
+    // it, so squash-stretch follows the real speed instead of a boolean.
+    var velocity by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(Unit) {
+        snapshotFlow { scrollState.isScrollInProgress }.collect { moving ->
+            if (!moving) {
+                velocity = 0f
+                return@collect
+            }
+            var prev = scrollState.value
+            var prevT = withFrameNanos { it }
+            var v = 0f
+            while (scrollState.isScrollInProgress) {
+                val t = withFrameNanos { it }
+                val cur = scrollState.value
+                val dt = ((t - prevT) / 1_000_000_000f).coerceAtLeast(1e-3f)
+                v += ((cur - prev) / dt - v) * 0.35f
+                velocity = v
+                prev = cur
+                prevT = t
+            }
+            velocity = 0f
+        }
+    }
+    val stretch = if (mode == FocusPolicy.Mode.FOCUSED) 1f
+        else DropletShape.stretchFor(abs(velocity), gain = 0.00022f)
+
+    // A slow breath on the focused droplet keeps the surface feeling alive.
+    // Ambient motion is switched off in tests so the frame clock can settle.
+    val breath = if (ambient) {
+        val transition = rememberInfiniteTransition(label = "breath")
+        transition.animateFloat(
+            initialValue = 0.97f,
+            targetValue = 1.04f,
+            animationSpec = infiniteRepeatable(tween(2400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            label = "breath",
+        ).value
+    } else {
+        1f
+    }
 
     val nodes = remember(steps) {
         steps.map { RopeLayout.Node(key = it.id, bodyHeight = 0f, merged = it.merged) }
@@ -220,6 +295,20 @@ fun LumenChatScreen(
         lastCount = count
     }
 
+    // Appended droplets "turn and twist into place": a damped wave races along
+    // the rope for ~1.5s, then dies out.
+    val twist = remember { Animatable(1f) }
+    var waveCount by remember { mutableStateOf(0) }
+    LaunchedEffect(count) {
+        val appended = waveCount > 0 && count > waveCount && count - waveCount <= 2
+        waveCount = count
+        if (appended) {
+            twist.snapTo(0f)
+            twist.animateTo(1f, animationSpec = tween(1500, easing = LinearEasing))
+        }
+    }
+    val twistElapsed = twist.value * 1.5f
+
     // click into place: on every settle, ease the nearest droplet onto the line.
     // A long-lived flow (not keyed on the in-progress flag) is what stops the
     // animation from cancelling itself and ping-ponging.
@@ -239,7 +328,6 @@ fun LumenChatScreen(
     }
 
     val focusedStep = steps.getOrNull(focusedIndex)
-    val fullText = focusedIndex >= count - 1
     val showPanel = focusedStep != null && (forceOpenIndex != null || bloom > 0.05f)
 
     Column(modifier.fillMaxSize().background(colors.bg).imePadding()) {
@@ -253,7 +341,9 @@ fun LumenChatScreen(
 
             Box(Modifier.fillMaxSize()) {
                 Box(
-                    Modifier.fillMaxSize().verticalScroll(scrollState).testTag("timeline"),
+                    Modifier.fillMaxSize()
+                        .verticalScroll(scrollState, flingBehavior = flingBehavior)
+                        .testTag("timeline"),
                 ) {
                     Canvas(
                         Modifier.fillMaxWidth().height(with(density) { canvasHeightPx.toDp() }),
@@ -263,12 +353,35 @@ fun LumenChatScreen(
                         val gapHalf = 20.dp.toPx() * bloom
                         val step = 6.dp.toPx()
 
-                        fun ropeXAt(contentY: Float): Float =
-                            ropeX + RopeCurve.offset(contentY - ropeFocus, bowPx, bowHalfPx) * reveal
+                        // The rope reaches toward whichever side holds more
+                        // droplets, so an unbalanced list visibly tugs that way.
+                        val pull = RopeTension.pull(
+                            aboveCount = focusedIndex,
+                            belowCount = max(0, count - 1 - focusedIndex),
+                            viewport = viewportHeightPx,
+                            minReach = 46.dp.toPx(),
+                            halfFactor = 0.5f,
+                            saturation = 2.0f,
+                            lean = bowPx * 1.1f,
+                        )
+                        val reachAbove = pull.reachAbove * reveal
+                        val reachBelow = pull.reachBelow * reveal
+                        val waveAmp = 6.dp.toPx()
+                        val waveLen = 110.dp.toPx()
+                        val waveSpeed = 900.dp.toPx()
+                        val waveFade = 240.dp.toPx()
+                        val waveEnv = RopeWave.envelope(twistElapsed)
+
+                        fun ropeXAt(contentY: Float): Float {
+                            val dy = contentY - ropeFocus
+                            val bow = RopeCurve.offset(dy, bowPx, bowHalfPx)
+                            val tug = pull.leanBias * RopeCurve.offset(dy, 1f, bowHalfPx)
+                            val wave = RopeWave.displacement(dy, twistElapsed, waveAmp, waveLen, waveSpeed, waveFade)
+                            return ropeX + (bow + tug + wave) * reveal
+                        }
 
                         val visibleTop = scrollValue - 60f
                         val visibleBottom = scrollValue + viewportHeightPx + 60f
-                        val reach = viewportHeightPx * reveal
 
                         fun drawRope(from: Float, to: Float) {
                             if (to <= from) return
@@ -276,14 +389,17 @@ fun LumenChatScreen(
                             var y = from + step
                             while (y < to) { p.lineTo(ropeXAt(y), y); y += step }
                             p.lineTo(ropeXAt(to), to)
-                            drawPath(p, color = colors.faint.copy(alpha = 0.55f), style = Stroke(width = 1.dp.toPx()))
+                            drawPath(
+                                p,
+                                color = colors.faint.copy(alpha = 0.55f + 0.25f * waveEnv),
+                                style = Stroke(width = 1.dp.toPx()),
+                            )
                         }
 
                         // the rope grows out of the focus; the notch is where the
                         // focused droplet detaches from it
-                        drawRope(visibleTop.coerceAtLeast(ropeFocus - reach), ropeFocus - gapHalf)
-                        drawRope(ropeFocus + gapHalf, visibleBottom.coerceAtMost(ropeFocus + reach))
-
+                        drawRope(visibleTop.coerceAtLeast(ropeFocus - reachAbove), ropeFocus - gapHalf)
+                        drawRope(ropeFocus + gapHalf, visibleBottom.coerceAtMost(ropeFocus + reachBelow))
 
 
                         for (p in result.placements) {
@@ -297,7 +413,8 @@ fun LumenChatScreen(
                             val lean = -RopeCurve.lean(dy, bowPx, bowHalfPx)
                             val jiggle = if (focused) 8.dp.toPx() * bloom else 0f
                             val x = ropeXAt(contentY) + 0.4f * p.size + jiggle
-                            val radius = p.size * (0.5f + 0.3f * p.bloom) + 1.6.dp.toPx() * bloom
+                            val breathe = if (focused) breath else 1f
+                            val radius = (p.size * (0.5f + 0.3f * p.bloom) + 1.6.dp.toPx() * bloom) * breathe
                             val tail = if (p.bloom > 0f) 8.dp.toPx() * p.bloom else 0f
                             val spout = if (focused) 10.dp.toPx() * bloom else 0f
 
@@ -387,7 +504,6 @@ fun LumenChatScreen(
                     FocusPanel(
                         step = focusedStep,
                         bloom = if (forceOpenIndex != null) 1f else bloom,
-                        full = fullText || forceOpenIndex != null,
                         colors = colors,
                         startPadding = with(density) { panelLeftPx.toDp() },
                         maxHeight = panelMaxHeight,
@@ -464,7 +580,6 @@ private fun oneLine(s: String): String =
 private fun FocusPanel(
     step: UiStep,
     bloom: Float,
-    full: Boolean,
     colors: LumenColors,
     startPadding: Dp,
     maxHeight: Dp,
@@ -472,6 +587,7 @@ private fun FocusPanel(
 ) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(step.id) { mutableStateOf(false) }
+    val textScroll = rememberScrollState()
     LaunchedEffect(copied) {
         if (copied) {
             kotlinx.coroutines.delay(1200)
@@ -487,6 +603,8 @@ private fun FocusPanel(
             .alpha(bloom)
             .heightIn(max = maxHeight)
             .animateContentSize()
+            .verticalScroll(textScroll)
+            .testTag("panel")
             .pointerInput(step.id) {
                 detectTapGestures(
                     onTap = { /* single tap does nothing */ },
@@ -515,14 +633,7 @@ private fun FocusPanel(
                 text = step.body,
                 color = colors.fg,
                 fontFamily = Mono, fontSize = 14.sp, lineHeight = 20.sp,
-                maxLines = if (full) Int.MAX_VALUE else LIMITED_LINES,
-                overflow = TextOverflow.Ellipsis,
             )
-        }
-        if (!full && step.body.length > 140) {
-            // the tail is where the droplet opens all the way
-            Spacer(Modifier.height(5.dp))
-            Text("scroll on for the rest", color = colors.faint, fontFamily = Mono, fontSize = 11.sp)
         }
         if (step.rows.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))

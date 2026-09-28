@@ -2,7 +2,9 @@ package dev.lumen.app.ui
 
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -51,7 +53,7 @@ class LumenChatScreenTest {
     @Test
     fun `renders the focused step and the composer`() {
         compose.setContent {
-            LumenChatScreen(steps(4), input = "", busy = false, error = null, modifier = viewport, forceOpenIndex = 0)
+            LumenChatScreen(steps(4), input = "", busy = false, error = null, modifier = viewport, ambient = false, forceOpenIndex = 0)
         }
         compose.onNodeWithText("STEP 0").assertIsDisplayed()
         compose.onNodeWithText("BODY 0 full text").assertIsDisplayed()
@@ -61,7 +63,7 @@ class LumenChatScreenTest {
     @Test
     fun `only the focused step is bloomed`() {
         compose.setContent {
-            LumenChatScreen(steps(6), input = "", busy = false, error = null, modifier = viewport, forceOpenIndex = 0)
+            LumenChatScreen(steps(6), input = "", busy = false, error = null, modifier = viewport, ambient = false, forceOpenIndex = 0)
         }
         compose.onNodeWithText("BODY 0 full text").assertIsDisplayed()
         noNode("BODY 1 full text")
@@ -79,7 +81,7 @@ class LumenChatScreenTest {
             ),
         )
         compose.setContent {
-            LumenChatScreen(s, input = "", busy = false, error = null, modifier = viewport, forceOpenIndex = 0)
+            LumenChatScreen(s, input = "", busy = false, error = null, modifier = viewport, ambient = false, forceOpenIndex = 0)
         }
         check(compose.onAllNodesWithText("compile", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) {
             "bloomed tool row should expose its 'compile' sub-row"
@@ -92,7 +94,7 @@ class LumenChatScreenTest {
     @Test
     fun `send button is present and reflects busy state`() {
         compose.setContent {
-            LumenChatScreen(steps(2), input = "hi", busy = false, error = null, modifier = viewport, forceOpenIndex = 1)
+            LumenChatScreen(steps(2), input = "hi", busy = false, error = null, modifier = viewport, ambient = false, forceOpenIndex = 1)
         }
         compose.onNodeWithTag("send").assertIsDisplayed()
     }
@@ -100,7 +102,7 @@ class LumenChatScreenTest {
     @Test
     fun `stop replaces send while busy`() {
         compose.setContent {
-            LumenChatScreen(steps(2), input = "", busy = true, error = null, modifier = viewport, forceOpenIndex = 1)
+            LumenChatScreen(steps(2), input = "", busy = true, error = null, modifier = viewport, ambient = false, forceOpenIndex = 1)
         }
         compose.onNodeWithTag("stop").assertIsDisplayed()
     }
@@ -108,7 +110,7 @@ class LumenChatScreenTest {
     @Test
     fun `an empty session shows an intentional start, not a blank`() {
         compose.setContent {
-            LumenChatScreen(emptyList(), input = "", busy = false, error = null, modifier = viewport)
+            LumenChatScreen(emptyList(), input = "", busy = false, error = null, modifier = viewport, ambient = false)
         }
         compose.onNodeWithText("lumen").assertIsDisplayed()
         compose.onNodeWithText("ask the agent to begin").assertIsDisplayed()
@@ -121,7 +123,7 @@ class LumenChatScreenTest {
             LumenChatScreen(
                 emptyList(), input = "", busy = false,
                 error = "OpenAI HTTP 401: Missing Authentication header",
-                modifier = viewport,
+                modifier = viewport, ambient = false,
                 onEditKey = { edited = true },
             )
         }
@@ -130,9 +132,22 @@ class LumenChatScreenTest {
     }
 
     @Test
+    fun `a long focused body is scrollable inside the panel`() {
+        val long = (1..60).joinToString(" ") { "word$it" }
+        compose.setContent {
+            LumenChatScreen(
+                listOf(UiStep("a", StepKind.ASSISTANT, "ASSISTANT", "x", "long", long)),
+                input = "", busy = false, error = null, modifier = viewport, ambient = false,
+                forceOpenIndex = 0,
+            )
+        }
+        compose.onNodeWithTag("panel").assert(hasScrollAction())
+    }
+
+    @Test
     fun `theme toggle is available`() {
         compose.setContent {
-            LumenChatScreen(steps(2), input = "", busy = false, error = null, modifier = viewport, forceOpenIndex = 0, onToggleTheme = {})
+            LumenChatScreen(steps(2), input = "", busy = false, error = null, modifier = viewport, ambient = false, forceOpenIndex = 0, onToggleTheme = {})
         }
         compose.onNodeWithTag("theme").assertIsDisplayed()
     }

@@ -33,6 +33,8 @@ object RopeLayout {
         val focusHalfWidth: Float = 1.5f,
         /** where in the viewport the focus line sits (px from the top). */
         val focusY: Float,
+        /** px of scroll travel per index; larger = calmer. Defaults to the visual [stride]. */
+        val scrollStride: Float = nodeSize + baseGap,
     ) {
         val stride get() = nodeSize + baseGap
     }
@@ -71,7 +73,7 @@ object RopeLayout {
     }
 
     fun maxScroll(nodeCount: Int, metrics: Metrics): Float =
-        (nodeCount - 1).coerceAtLeast(0) * metrics.stride
+        (nodeCount - 1).coerceAtLeast(0) * metrics.scrollStride
 
     /**
      * @param scroll arc position currently under the focus line (px).
@@ -85,9 +87,9 @@ object RopeLayout {
         val n = nodes.size
         if (n == 0) return Result(emptyList(), 0f, 0, null, false, 0f)
 
-        val stride = metrics.stride
-        if (stride <= 0f) return Result(emptyList(), 0f, 0, null, false, 0f)
-        val focusPos = (scroll / stride).coerceIn(0f, (n - 1).toFloat())
+        val scrollStride = metrics.scrollStride
+        if (scrollStride <= 0f) return Result(emptyList(), 0f, 0, null, false, 0f)
+        val focusPos = (scroll / metrics.scrollStride).coerceIn(0f, (n - 1).toFloat())
 
         // dynamic gaps: distance from the focus measured in index space
         val gaps = FloatArray((n - 1).coerceAtLeast(0))
@@ -104,14 +106,14 @@ object RopeLayout {
         }
 
         // Express positions relative to the focus, then re-base onto the scroll
-        // axis so that `scroll == index * stride` puts droplet `index` exactly on
-        // the focus line for ANY focus position. This removes the circular
-        // dependency between spacing and scroll.
+        // axis so that `scroll == index * scrollStride` puts droplet `index`
+        // exactly on the focus line for ANY focus position. This removes the
+        // circular dependency between spacing and scroll.
         val lo = floor(focusPos).toInt().coerceIn(0, n - 1)
         val hi = (lo + 1).coerceAtMost(n - 1)
         val frac = focusPos - lo
         val rawFocus = raw[lo] + frac * (raw[hi] - raw[lo])
-        val arcs = FloatArray(n) { i -> raw[i] - rawFocus + focusPos * stride }
+        val arcs = FloatArray(n) { i -> raw[i] - rawFocus + focusPos * metrics.scrollStride }
 
         val focusIndex = focusPos.roundToInt().coerceIn(0, n - 1)
         val placements = ArrayList<Placement>(n)
@@ -139,7 +141,7 @@ object RopeLayout {
 
     /** Scroll offset that puts droplet [index] exactly on the focus line. */
     fun scrollForIndex(index: Int, metrics: Metrics): Float =
-        index.coerceAtLeast(0) * metrics.stride
+        index.coerceAtLeast(0) * metrics.scrollStride
 
     /**
      * Where the scroll should go so the focused droplet is revealed, without

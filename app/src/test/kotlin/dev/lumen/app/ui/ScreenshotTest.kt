@@ -92,6 +92,7 @@ class ScreenshotTest {
             error = null,
             colors = colors,
             forceOpenIndex = force,
+            ambient = false,
             onToggleTheme = {},
             onEditKey = {},
         )
@@ -114,6 +115,7 @@ class ScreenshotTest {
             busy = false,
             error = null,
             colors = LumenColors.Dark,
+            ambient = false,
             onToggleTheme = {},
             onEditKey = {},
         )
@@ -126,6 +128,7 @@ class ScreenshotTest {
             busy = false,
             error = null,
             colors = LumenColors.Light,
+            ambient = false,
             onToggleTheme = {},
             onEditKey = {},
         )
@@ -138,6 +141,7 @@ class ScreenshotTest {
             busy = false,
             error = "OpenAI HTTP 401: {\"error\":{\"message\":\"Missing Authentication header\",\"code\":401}}",
             colors = LumenColors.Dark,
+            ambient = false,
             onToggleTheme = {},
             onEditKey = {},
         )
@@ -157,6 +161,7 @@ class ScreenshotTest {
             error = null,
             colors = LumenColors.Light,
             forceOpenIndex = 1,
+            ambient = false,
             onToggleTheme = {},
         )
     }
@@ -167,5 +172,54 @@ class ScreenshotTest {
 
     @Test fun key_screen_dark() = shoot("key_dark.png") {
         KeyScreen(colors = LumenColors.Dark, onSubmit = { _, _ -> }, onToggleTheme = {})
+    }
+
+    @Test fun light_focus_top_tugs_down() = chat(LumenColors.Light, "light_focus_top.png", 0)
+
+    @Test fun dark_focus_bottom_tugs_up() = chat(LumenColors.Dark, "dark_focus_bottom.png", 5)
+
+    @Test fun single_droplet() = shoot("single_droplet.png") {
+        LumenChatScreen(
+            steps = listOf(UiStep("only", StepKind.YOU, "YOU", "11aa22", "hello", "hello")),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Light,
+            forceOpenIndex = 0,
+            ambient = false,
+            onToggleTheme = {},
+        )
+    }
+
+    @Test fun dark_long_text() = shoot("dark_long_text.png") {
+        LumenChatScreen(
+            steps = sample() + UiStep(
+                "long", StepKind.ASSISTANT, "ASSISTANT", "f00d12", "a long answer",
+                (1..40).joinToString("\n") { "line $it — a long assistant answer that has to scroll inside the panel." },
+            ),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Dark,
+            forceOpenIndex = 6,
+            ambient = false,
+            onToggleTheme = {},
+        )
+    }
+
+    @Test fun light_long_text() = shoot("light_long_text.png") {
+        LumenChatScreen(
+            steps = sample() + UiStep(
+                "long", StepKind.ASSISTANT, "ASSISTANT", "f00d12", "a long answer",
+                (1..40).joinToString("\n") { "line $it — a long assistant answer that has to scroll inside the panel." },
+            ),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Light,
+            forceOpenIndex = 6,
+            ambient = false,
+            onToggleTheme = {},
+        )
     }
 }

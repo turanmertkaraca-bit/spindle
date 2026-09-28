@@ -129,4 +129,45 @@ class RopeLayoutTest {
         assertEquals(0f, RopeLayout.kernel(1.5f, 1.5f))
         assertTrue(RopeLayout.kernel(0.75f, 1.5f) > 0f)
     }
+
+    @Test
+    fun `scrollStride defaults to the visual stride`() {
+        val metrics = RopeLayout.Metrics(
+            nodeSize = 10f,
+            baseGap = 24f,
+            focusGapExtra = 80f,
+            focusHalfWidth = 1.5f,
+            focusY = 300f,
+        )
+        assertEquals(metrics.stride, metrics.scrollStride)
+        val r = RopeLayout.compute(nodes, 4f * metrics.stride, metrics)
+        assertEquals(4, r.focusIndex)
+        assertEquals(4f * metrics.stride, r.placement("n4")!!.arc, 0.001f)
+    }
+
+    @Test
+    fun `a bigger scrollStride needs more travel per droplet`() {
+        val calm = m.copy(scrollStride = 3f * m.stride)
+        for (k in 1 until nodes.size) {
+            val onIndex = RopeLayout.compute(nodes, k * calm.scrollStride, calm)
+            assertEquals(k, onIndex.focusIndex)
+            assertEquals(k * calm.scrollStride, onIndex.placement("n$k")!!.arc, 0.001f)
+            val halfway = (k - 1) * calm.scrollStride + calm.scrollStride / 2f
+            assertEquals(k - 1, RopeLayout.compute(nodes, halfway - 1f, calm).focusIndex)
+        }
+        val atVisualStride = RopeLayout.compute(nodes, 1f * calm.stride, calm)
+        assertTrue(atVisualStride.focusIndex != 1)
+        assertTrue(abs(atVisualStride.placement("n1")!!.arc - calm.stride) > 0.001f)
+    }
+
+    @Test
+    fun `scrollForIndex and maxScroll follow scrollStride`() {
+        val calm = m.copy(scrollStride = 3f * m.stride)
+        assertEquals(3f * calm.scrollStride, RopeLayout.scrollForIndex(3, calm), 0.001f)
+        assertEquals(
+            (nodes.size - 1) * calm.scrollStride,
+            RopeLayout.maxScroll(nodes.size, calm),
+            0.001f,
+        )
+    }
 }
