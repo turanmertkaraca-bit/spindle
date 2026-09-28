@@ -61,7 +61,7 @@ fun KeyScreen(
         Text("provider", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (p in listOf("opencode-go" to "OpenCode Go", "deepseek" to "DeepSeek", "openrouter" to "OpenRouter")) {
+            for (p in dev.lumen.app.data.ProviderCatalogue.choices) {
                 val selected = provider == p.first
                 Text(
                     p.second,

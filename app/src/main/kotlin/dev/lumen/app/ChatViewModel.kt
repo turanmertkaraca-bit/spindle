@@ -98,38 +98,8 @@ class ChatViewModel(
         _state.value = _state.value.copy(needsKey = true, error = null)
     }
 
-    private fun providersFor(provider: String, key: String): SimpleProviderRegistry {
-        val ua = "lumen/0.1"
-        val list = buildList {
-            add(
-                dev.spindle.provider.openai.OpenAiProvider(
-                    baseUrl = "https://opencode.ai/zen/go/v1",
-                    apiKey = key, id = "opencode-go", userAgent = ua,
-                    defaultModels = listOf(
-                        ModelInfo("opencode-go", "deepseek-v4.1-flash", contextWindow = 1_000_000, supportsReasoning = true),
-                        ModelInfo("opencode-go", "glm-5.3-flash", contextWindow = 200_000),
-                        ModelInfo("opencode-go", "kimi-k2.7-code", contextWindow = 200_000),
-                    ),
-                ),
-            )
-            add(
-                dev.spindle.provider.openai.OpenAiProvider(
-                    baseUrl = "https://api.deepseek.com",
-                    apiKey = key, id = "deepseek", userAgent = ua,
-                    defaultModels = listOf(
-                        ModelInfo("deepseek", "deepseek-flash", contextWindow = 1_000_000, supportsReasoning = true),
-                    ),
-                ),
-            )
-            add(
-                dev.spindle.provider.openai.OpenAiProvider(
-                    baseUrl = "https://openrouter.ai/api/v1",
-                    apiKey = key, id = "openrouter", userAgent = ua,
-                ),
-            )
-        }
-        return SimpleProviderRegistry(list)
-    }
+    private fun providersFor(provider: String, key: String): SimpleProviderRegistry =
+        dev.lumen.app.data.ProviderCatalogue.registry(provider, key)
 
     private suspend fun collectEvents() {
         bus.events.collect { e ->

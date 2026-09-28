@@ -26,9 +26,15 @@ class KeyStore(context: Context) {
     val hasKey: Boolean get() = !apiKey.isNullOrBlank()
 
     companion object {
+        /**
+         * The model id is `<provider>/<model id>`. OpenRouter model ids may
+         * themselves contain slashes, and its router ids are the safest default
+         * because they always resolve to something the account can call:
+         *   openrouter/free         -> picks a free model automatically
+         */
         fun defaultModel(provider: String): String = when (provider) {
             "deepseek" -> "deepseek/deepseek-flash"
-            "openrouter" -> "openrouter/anthropic/claude-3.5-sonnet"
+            "openrouter" -> "openrouter/openrouter/free"
             else -> "opencode-go/deepseek-v4.1-flash"
         }
     }
