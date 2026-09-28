@@ -13,20 +13,25 @@ import dev.spindle.core.model.ToolState
  */
 object StepMapper {
 
-    /** The stable row identity for a part. */
-    private fun tag(seed: Int) = Integer.toHexString(0x100000 + (seed * 2654435761L and 0xFFFFF).toInt()).takeLast(6)
+    /**
+     * The stable row identity for a part, derived from the id alone, so the same
+     * row shows the same tag whether it was streamed live or rebuilt from the store.
+     */
+    private fun tag(id: String) =
+        Integer.toHexString(0x100000 + (id.hashCode() and 0xFFFFF)).takeLast(6)
 
     fun fromMessages(messages: List<Message>): List<UiStep> {
         val out = ArrayList<UiStep>()
-        var seed = 0
         for (m in messages) {
             when (m.role) {
                 Role.USER -> {
-                    val text = m.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
-                    out += UiStep(
-                        id = m.id.value, kind = StepKind.YOU, label = "YOU", tag = tag(seed++),
-                        summary = oneLine(text), body = text,
-                    )
+                    val text = m.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }.trim()
+                    if (text.isNotBlank()) {
+                        out += UiStep(
+                            id = m.id.value, kind = StepKind.YOU, label = "YOU", tag = tag(m.id.value),
+                            summary = oneLine(text), body = text,
+                        )
+                    }
                 }
                 Role.ASSISTANT -> {
                     for (p in m.parts) {
@@ -34,14 +39,14 @@ object StepMapper {
                             is Part.Reasoning -> {
                                 if (p.text.isBlank()) continue
                                 out += UiStep(
-                                    id = p.id.value, kind = StepKind.THINKING, label = "THINKING", tag = tag(seed++),
+                                    id = p.id.value, kind = StepKind.THINKING, label = "THINKING", tag = tag(p.id.value),
                                     summary = oneLine(p.text), body = p.text.trim(),
                                 )
                             }
                             is Part.Text -> {
                                 if (p.text.isBlank()) continue
                                 out += UiStep(
-                                    id = p.id.value, kind = StepKind.ASSISTANT, label = "ASSISTANT", tag = tag(seed++),
+                                    id = p.id.value, kind = StepKind.ASSISTANT, label = "ASSISTANT", tag = tag(p.id.value),
                                     summary = oneLine(p.text), body = p.text.trim(),
                                 )
                             }
@@ -53,7 +58,7 @@ object StepMapper {
                                     id = p.id.value,
                                     kind = if (isSub) StepKind.SUBAGENT else StepKind.TOOL,
                                     label = call.name.uppercase(),
-                                    tag = tag(seed++),
+                                    tag = tag(p.id.value),
                                     summary = oneLine(p.result?.output ?: call.argumentsJson),
                                     body = toolBody(p),
                                     rows = rows,
@@ -94,8 +99,10 @@ object StepMapper {
 
     private fun merge(a: UiStep, b: UiStep): UiStep {
         val merged = a.merged + b.merged
+        val promoted = a.kind == StepKind.SUBAGENT || b.kind == StepKind.SUBAGENT
         return a.copy(
-            kind = if (a.kind == StepKind.SUBAGENT || b.kind == StepKind.SUBAGENT) StepKind.SUBAGENT else StepKind.TOOL,
+            kind = if (promoted) StepKind.SUBAGENT else StepKind.TOOL,
+            label = if (promoted) "SUBAGENT" else a.label,
             merged = merged,
             summary = "$merged calls · ${b.summary}",
             body = a.body + "\n\n" + b.body,

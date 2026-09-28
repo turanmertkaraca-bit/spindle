@@ -1,10 +1,9 @@
 package dev.lumen.app.ui
 
 import android.graphics.Bitmap
-import androidx.compose.ui.graphics.asAndroidBitmap
-import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onRoot
+import android.graphics.Canvas
+import androidx.activity.ComponentActivity
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.UiStep
 import org.junit.Rule
@@ -18,8 +17,9 @@ import java.io.FileOutputStream
 
 /**
  * Renders the real screen to PNGs so the UI can be inspected without a device.
- * Runs on a plain JVM via Robolectric's native graphics. If the capture backend
- * is unavailable it records the error instead of failing the build.
+ * Runs on a plain JVM via Robolectric's native graphics; it draws the decor view
+ * directly because Compose's own capture path never sees a draw callback here.
+ * Any failure is recorded to a .error.txt instead of failing the build.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w390dp-h844dp-xhdpi")
@@ -27,7 +27,7 @@ import java.io.FileOutputStream
 class ScreenshotTest {
 
     @get:Rule
-    val compose = createComposeRule()
+    val compose = createAndroidComposeRule<ComponentActivity>()
 
     private fun sample(): List<UiStep> = listOf(
         UiStep(
@@ -66,10 +66,10 @@ class ScreenshotTest {
         ),
     )
 
-    private fun render(colors: LumenColors, name: String, force: Int) {
+    private fun render(steps: List<UiStep>, colors: LumenColors, name: String, force: Int?) {
         compose.setContent {
             LumenChatScreen(
-                steps = sample(),
+                steps = steps,
                 input = "",
                 busy = false,
                 error = null,
@@ -78,10 +78,15 @@ class ScreenshotTest {
                 onToggleTheme = {},
             )
         }
-        compose.waitForIdle()
         val dir = File("build/screenshots").apply { mkdirs() }
         runCatching {
-            val bmp = compose.onRoot().captureToImage().asAndroidBitmap()
+            compose.waitForIdle()
+            val view = compose.activity.window.decorView
+            val w = view.width
+            val h = view.height
+            check(w > 0 && h > 0) { "decor view not laid out: ${w}x$h" }
+            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            view.draw(Canvas(bmp))
             FileOutputStream(File(dir, name)).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }.onFailure {
             File(dir, "$name.error.txt").writeText(it.stackTraceToString())
@@ -89,17 +94,20 @@ class ScreenshotTest {
     }
 
     @Test
-    fun light_assistant() = render(LumenColors.Light, "light_assistant.png", 5)
+    fun light_assistant() = render(sample(), LumenColors.Light, "light_assistant.png", 5)
 
     @Test
-    fun dark_assistant() = render(LumenColors.Dark, "dark_assistant.png", 5)
+    fun dark_assistant() = render(sample(), LumenColors.Dark, "dark_assistant.png", 5)
 
     @Test
-    fun light_merged_tools() = render(LumenColors.Light, "light_merged_tools.png", 3)
+    fun light_merged_tools() = render(sample(), LumenColors.Light, "light_merged_tools.png", 3)
 
     @Test
-    fun dark_subagent() = render(LumenColors.Dark, "dark_subagent.png", 4)
+    fun dark_subagent() = render(sample(), LumenColors.Dark, "dark_subagent.png", 4)
 
     @Test
-    fun light_early_rope() = render(LumenColors.Light, "light_early.png", 1)
+    fun light_early_rope() = render(sample(), LumenColors.Light, "light_early.png", 1)
+
+    @Test
+    fun empty_session() = render(emptyList(), LumenColors.Dark, "empty_dark.png", null)
 }

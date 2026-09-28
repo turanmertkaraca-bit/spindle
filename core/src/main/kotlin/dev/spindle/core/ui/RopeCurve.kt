@@ -1,6 +1,7 @@
 package dev.spindle.core.ui
 
 import kotlin.math.abs
+import kotlin.math.atan
 
 /**
  * The rope's gentle bow around the focus, as pure math.
@@ -31,7 +32,7 @@ object RopeCurve {
         return bow * (-4f * x * k) / halfWidth
     }
 
-    /** Lean angle in radians, clamped so a near-vertical rope stays sane. */
+    /** Lean angle in radians (the actual tangent angle), clamped so it stays sane. */
     fun lean(dy: Float, bow: Float, halfWidth: Float, maxRadians: Float = 0.45f): Float =
-        slope(dy, bow, halfWidth).coerceIn(-maxRadians, maxRadians)
+        atan(slope(dy, bow, halfWidth)).coerceIn(-maxRadians, maxRadians)
 }

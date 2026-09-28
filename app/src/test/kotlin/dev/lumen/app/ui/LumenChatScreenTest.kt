@@ -90,7 +90,7 @@ class LumenChatScreenTest {
     @Test
     fun `send button is present and reflects busy state`() {
         compose.setContent {
-            LumenChatScreen(steps(2), input = "hi", busy = false, error = null, modifier = viewport)
+            LumenChatScreen(steps(2), input = "hi", busy = false, error = null, modifier = viewport, forceOpenIndex = 1)
         }
         compose.onNodeWithTag("send").assertIsDisplayed()
     }
@@ -98,7 +98,7 @@ class LumenChatScreenTest {
     @Test
     fun `stop replaces send while busy`() {
         compose.setContent {
-            LumenChatScreen(steps(2), input = "", busy = true, error = null, modifier = viewport)
+            LumenChatScreen(steps(2), input = "", busy = true, error = null, modifier = viewport, forceOpenIndex = 1)
         }
         compose.onNodeWithTag("stop").assertIsDisplayed()
     }
@@ -106,7 +106,7 @@ class LumenChatScreenTest {
     @Test
     fun `theme toggle is available`() {
         compose.setContent {
-            LumenChatScreen(steps(2), input = "", busy = false, error = null, modifier = viewport, onToggleTheme = {})
+            LumenChatScreen(steps(2), input = "", busy = false, error = null, modifier = viewport, forceOpenIndex = 0, onToggleTheme = {})
         }
         compose.onNodeWithTag("theme").assertIsDisplayed()
     }

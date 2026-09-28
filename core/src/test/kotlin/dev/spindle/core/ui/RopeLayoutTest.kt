@@ -76,7 +76,6 @@ class RopeLayoutTest {
     @Test
     fun `bloom is continuous in scroll - no snapping`() {
         // The core promise: a 1px scroll step can never jump a droplet open.
-        val maxStep = m.stride
         val maxDelta = 0.12f
         var prev = RopeLayout.compute(nodes, 0f, m)
         var s = 1f

@@ -35,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -62,6 +63,7 @@ import dev.spindle.core.ui.DropletShape
 import dev.spindle.core.ui.FocusPolicy
 import dev.spindle.core.ui.RopeCurve
 import dev.spindle.core.ui.RopeLayout
+import kotlinx.coroutines.flow.filter
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -180,22 +182,30 @@ fun LumenChatScreen(
 
     // start at the newest droplet without a visible jitter
     var didInit by remember { mutableStateOf(false) }
-    LaunchedEffect(count) {
-        if (!didInit && count > 0) {
+    LaunchedEffect(count, forceOpenIndex, scrollState.maxValue) {
+        if (!didInit && count > 0 && scrollState.maxValue > 0) {
             didInit = true
-            scrollState.scrollTo(((count - 1) * stride).roundToInt())
+            val index = (forceOpenIndex ?: (count - 1)).coerceIn(0, count - 1)
+            scrollState.scrollTo((index * stride).roundToInt())
         }
     }
 
-    // click into place: when we settle, pull the target droplet onto the line.
-    // The tolerance guard stops a zero-distance animation from looping forever.
-    LaunchedEffect(scrolling, focusedIndex, count) {
-        if (forceOpenIndex == null && !scrolling && count > 1) {
-            val target = focusedIndex * stride
-            if (abs(scrollState.value - target) > 2f) {
-                scrollState.animateScrollTo(target.roundToInt())
+    // click into place: on every settle, ease the nearest droplet onto the line.
+    // A long-lived flow (not keyed on the in-progress flag) is what stops the
+    // animation from cancelling itself and ping-ponging.
+    LaunchedEffect(count, forceOpenIndex) {
+        if (forceOpenIndex != null) return@LaunchedEffect
+        snapshotFlow { scrollState.isScrollInProgress }
+            .filter { !it }
+            .collect {
+                if (count > 1) {
+                    val idx = (scrollState.value.toFloat() / stride).roundToInt().coerceIn(0, count - 1)
+                    val target = idx * stride
+                    if (abs(scrollState.value - target) > 2f) {
+                        scrollState.animateScrollTo(target.roundToInt())
+                    }
+                }
             }
-        }
     }
 
     val focusedStep = steps.getOrNull(focusedIndex)
@@ -427,7 +437,7 @@ private fun FocusPanel(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        if (!full && step.rows.isNotEmpty()) {
+        if (!full && step.body.length > 140) {
             // the tail is where the droplet opens all the way
             Spacer(Modifier.height(5.dp))
             Text("scroll on for the rest", color = colors.faint, fontFamily = Mono, fontSize = 11.sp)

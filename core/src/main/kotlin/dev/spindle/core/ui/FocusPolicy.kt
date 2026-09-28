@@ -60,7 +60,7 @@ object FocusPolicy {
         count: Int,
         config: Config = Config(),
     ): Result {
-        if (count <= 0) return Result(Mode.FOCUSED, 0, bloom = false)
+        if (count <= 0) return Result(Mode.FREE, 0, bloom = false)
 
         val target = focusPos.roundToInt().coerceIn(0, count - 1)
         val speed = abs(velocity)

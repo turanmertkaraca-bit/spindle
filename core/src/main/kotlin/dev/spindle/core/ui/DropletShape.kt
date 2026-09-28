@@ -31,8 +31,9 @@ object DropletShape {
     )
 
     /**
-     * Closed outline, sampled counter-clockwise in screen coordinates (y down).
-     * The first point is at angle 0 (+x), the last is just before a full turn.
+     * Closed outline, sampled clockwise in screen coordinates (y down): from
+     * +x it turns down (-y up is a later angle). The first point is at angle 0
+     * (+x), the last is just before a full turn.
      */
     fun outline(cx: Float, cy: Float, p: Params): List<Vec2> {
         val n = p.segments.coerceAtLeast(8)

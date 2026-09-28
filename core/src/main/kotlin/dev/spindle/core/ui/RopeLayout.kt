@@ -1,7 +1,6 @@
 package dev.spindle.core.ui
 
 import kotlin.math.abs
-import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.roundToInt
 
@@ -57,7 +56,7 @@ object RopeLayout {
         val focusIndex: Int,
         val focusedKey: String?,
         val hasBelow: Boolean,
-        /** arc of the last droplet's center; the scroll that focuses it. */
+        /** arc of the last droplet's center at the current scroll (for culling). */
         val contentArc: Float,
     ) {
         fun placement(key: String) = placements.firstOrNull { it.key == key }
@@ -65,8 +64,8 @@ object RopeLayout {
 
     /** Smooth (C1) falloff, 1 at the center and 0 at [halfWidth]. */
     fun kernel(distance: Float, halfWidth: Float): Float {
-        if (halfWidth <= 0f) return if (distance <= 0f) 1f else 0f
-        val x = (distance / halfWidth).coerceIn(0f, 1f)
+        if (halfWidth <= 0f) return if (distance == 0f) 1f else 0f
+        val x = (abs(distance) / halfWidth).coerceIn(0f, 1f)
         val t = 1f - x
         return t * t * (3f - 2f * t)
     }
@@ -87,6 +86,7 @@ object RopeLayout {
         if (n == 0) return Result(emptyList(), 0f, 0, null, false, 0f)
 
         val stride = metrics.stride
+        if (stride <= 0f) return Result(emptyList(), 0f, 0, null, false, 0f)
         val focusPos = (scroll / stride).coerceIn(0f, (n - 1).toFloat())
 
         // dynamic gaps: distance from the focus measured in index space
