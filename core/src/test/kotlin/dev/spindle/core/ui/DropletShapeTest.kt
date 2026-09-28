@@ -51,6 +51,14 @@ class DropletShapeTest {
     }
 
     @Test
+    fun `leaning turns the tail sideways - the bead curls with the rope`() {
+        val up = DropletShape.bounds(DropletShape.outline(0f, 0f, round.copy(tail = 20f))).second.y
+        val leaned = DropletShape.bounds(DropletShape.outline(0f, 0f, round.copy(tail = 20f, lean = 1.2f)))
+        assertTrue(leaned.second.y < up, "leaning should lift the tail off the vertical")
+        assertTrue(leaned.first.x < -6f, "leaning should push the tail sideways")
+    }
+
+    @Test
     fun `stretch never explodes`() {
         assertTrue(DropletShape.stretchFor(1_000_000f) <= 2.2f)
         assertTrue(abs(DropletShape.stretchFor(-50f) - 1f) < 0.1f)

@@ -1,11 +1,13 @@
 package dev.lumen.app.ui
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -50,18 +52,25 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.foundation.gestures.detectTapGestures
+import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.UiStep
 import dev.spindle.core.ui.DropletShape
 import dev.spindle.core.ui.FocusPolicy
+import dev.spindle.core.ui.RopeCurve
 import dev.spindle.core.ui.RopeLayout
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 private val Mono = FontFamily.Monospace
+
+/** How many lines a focused droplet shows while there is still rope below it. */
+private const val LIMITED_LINES = 3
 
 /** Light / dark palettes. Dark is deliberately not pure black (see bg). */
 data class LumenColors(
@@ -93,12 +102,13 @@ data class LumenColors(
 }
 
 /**
- * The timeline is a rope of droplets. Each step is a droplet that grows with
- * the rope; the droplet at the focus line (center) blooms into its text. Only
- * scrolling navigates; double-tapping the bloomed text selects/copies it.
+ * The timeline is a rope of droplets. Each step is a droplet on a static
+ * vertical channel; the droplet at the focus line (center) blooms into its
+ * text. Scrolling is the only navigation; double-tapping the bloomed text
+ * copies it, long-press selects it.
  *
- * All placement math lives in [RopeLayout] / [FocusPolicy] / [DropletShape] in
- * :core, so it is unit-tested on a plain JVM.
+ * All placement math lives in [RopeLayout] / [FocusPolicy] / [DropletShape] /
+ * [RopeCurve] in :core, so it is unit-tested on a plain JVM.
  */
 @Composable
 fun LumenChatScreen(
@@ -119,6 +129,8 @@ fun LumenChatScreen(
     val baseGapPx = with(density) { 26.dp.toPx() }
     val focusExtraPx = with(density) { 96.dp.toPx() }
     val gutterPx = with(density) { 24.dp.toPx() }
+    val bowPx = with(density) { 9.dp.toPx() }
+    val bowHalfPx = with(density) { 150.dp.toPx() }
     val metrics = remember(nodeSizePx, baseGapPx, focusExtraPx) {
         RopeLayout.Metrics(
             nodeSize = nodeSizePx,
@@ -144,6 +156,19 @@ fun LumenChatScreen(
         targetValue = if (mode == FocusPolicy.Mode.FOCUSED) 1f else 0f,
         animationSpec = spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMediumLow),
         label = "bloom",
+    )
+
+    // The rope sprouts into place the first time it has something to hold.
+    val reveal by animateFloatAsState(
+        targetValue = if (count > 0) 1f else 0f,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessLow),
+        label = "reveal",
+    )
+    // Moving rope stretches the droplets along it, then they settle.
+    val stretch by animateFloatAsState(
+        targetValue = if (scrolling) 1.35f else 1f,
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessLow),
+        label = "stretch",
     )
 
     val nodes = remember(steps) {
@@ -173,7 +198,9 @@ fun LumenChatScreen(
         }
     }
 
-    val showPanel = count > 0 && (forceOpenIndex != null || bloom > 0.05f)
+    val focusedStep = steps.getOrNull(focusedIndex)
+    val fullText = focusedIndex >= count - 1
+    val showPanel = focusedStep != null && (forceOpenIndex != null || bloom > 0.05f)
 
     Column(modifier.fillMaxSize().background(colors.bg).imePadding()) {
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
@@ -181,6 +208,8 @@ fun LumenChatScreen(
             val focusY = viewportHeightPx / 2f
             val maxScrollPx = (count - 1).coerceAtLeast(0) * stride
             val canvasHeightPx = viewportHeightPx + maxScrollPx
+            val panelLeftPx = gutterPx + with(density) { 20.dp.toPx() }
+            val panelMaxHeight = with(density) { (viewportHeightPx * 0.82f).toDp() }
 
             Box(Modifier.fillMaxSize()) {
                 Box(
@@ -190,44 +219,61 @@ fun LumenChatScreen(
                         Modifier.fillMaxWidth().height(with(density) { canvasHeightPx.toDp() }),
                     ) {
                         val ropeX = gutterPx
-                        val gapHalf = 16.dp.toPx()
-                        val gapCenter = scrollValue + focusY
+                        val ropeFocus = scrollValue + focusY
+                        val gapHalf = 20.dp.toPx() * bloom
+                        val step = 6.dp.toPx()
 
-                        // rope, with a notch where the focused droplet detaches
-                        val ropeColor = colors.rule
-                        drawLine(
-                            color = ropeColor,
-                            start = Offset(ropeX, -40f),
-                            end = Offset(ropeX, (gapCenter - gapHalf).coerceAtLeast(-40f)),
-                            strokeWidth = 1.dp.toPx(),
-                        )
-                        drawLine(
-                            color = ropeColor,
-                            start = Offset(ropeX, (gapCenter + gapHalf).coerceAtMost(canvasHeightPx + 40f)),
-                            end = Offset(ropeX, canvasHeightPx + 40f),
-                            strokeWidth = 1.dp.toPx(),
-                        )
+                        fun ropeXAt(contentY: Float): Float =
+                            ropeX + RopeCurve.offset(contentY - ropeFocus, bowPx, bowHalfPx) * reveal
 
-                        val stretch = 1f
+                        // rope above the notch where the focused droplet detaches
+                        run {
+                            var y = scrollValue - 60f
+                            val end = ropeFocus - gapHalf
+                            if (y < end) {
+                                val p = Path().apply { moveTo(ropeXAt(y), y) }
+                                y += step
+                                while (y < end) { p.lineTo(ropeXAt(y), y); y += step }
+                                p.lineTo(ropeXAt(end), end)
+                                drawPath(p, color = colors.rule, style = Stroke(width = 1.dp.toPx()))
+                            }
+                        }
+                        run {
+                            var y = ropeFocus + gapHalf
+                            val end = scrollValue + viewportHeightPx + 60f
+                            if (y < end) {
+                                val p = Path().apply { moveTo(ropeXAt(y), y) }
+                                y += step
+                                while (y < end) { p.lineTo(ropeXAt(y), y); y += step }
+                                drawPath(p, color = colors.rule, style = Stroke(width = 1.dp.toPx()))
+                            }
+                        }
 
                         for (p in result.placements) {
-                            val step = steps.getOrNull(p.index) ?: continue
+                            val step0 = steps.getOrNull(p.index) ?: continue
                             val contentY = focusY + p.arc
                             val screenY = contentY - scrollValue
-                            if (screenY < -80f || screenY > viewportHeightPx + 80f) continue
+                            if (screenY < -120f || screenY > viewportHeightPx + 120f) continue
 
                             val focused = p.index == focusedIndex && bloom > 0.3f
-                            val jiggle = if (focused) 10.dp.toPx() * bloom else 0f
-                            val x = ropeX + 0.4f * p.size + jiggle
+                            val dy = contentY - ropeFocus
+                            val lean = -RopeCurve.lean(dy, bowPx, bowHalfPx)
+                            val jiggle = if (focused) 12.dp.toPx() * bloom else 0f
+                            val x = ropeXAt(contentY) + 0.4f * p.size + jiggle
                             val radius = p.size * (0.5f + 0.35f * p.bloom) + 2.dp.toPx() * bloom
-                            val tail = if (p.bloom > 0f) 10.dp.toPx() * p.bloom else 0f
+                            val tail = if (p.bloom > 0f) 9.dp.toPx() * p.bloom else 0f
                             val spout = if (focused) 14.dp.toPx() * bloom else 0f
 
                             if (focused) {
-                                val glowR = 26.dp.toPx()
+                                val glowR = 30.dp.toPx()
+                                val glow = if (step0.kind == StepKind.TOOL || step0.kind == StepKind.SUBAGENT) {
+                                    colors.spectrum[4].copy(alpha = 0.20f * bloom)
+                                } else {
+                                    colors.accent.copy(alpha = 0.22f * bloom)
+                                }
                                 drawCircle(
                                     brush = Brush.radialGradient(
-                                        colors = listOf(colors.accent.copy(alpha = 0.22f * bloom), Color.Transparent),
+                                        colors = listOf(glow, Color.Transparent),
                                         center = Offset(x, contentY),
                                         radius = glowR,
                                     ),
@@ -237,27 +283,39 @@ fun LumenChatScreen(
                             }
 
                             val fill = when {
-                                step.failed -> colors.spectrum.first()
-                                step.running -> colors.bg
+                                step0.failed -> colors.spectrum.first()
+                                step0.running -> colors.bg
                                 focused || p.bloom > 0.5f -> colors.fg
                                 else -> colors.faint
                             }
                             val pts = DropletShape.outline(
                                 x, contentY,
-                                DropletShape.Params(radius = radius, tail = tail, spout = spout, stretch = stretch),
+                                DropletShape.Params(
+                                    radius = radius, tail = tail, spout = spout,
+                                    stretch = stretch, lean = lean,
+                                ),
                             )
                             val path = Path()
                             path.moveTo(pts[0].x, pts[0].y)
                             for (i in 1 until pts.size) path.lineTo(pts[i].x, pts[i].y)
                             path.close()
                             drawPath(path, color = fill)
-                            if (step.running) {
+                            if (step0.running) {
                                 drawPath(path, color = colors.fg, style = Stroke(width = 2.dp.toPx()))
                             }
 
-                            // merged tool runs show as a small stack of extra dots
-                            if (step.merged > 1) {
-                                val extra = (step.merged - 1).coerceAtMost(2)
+                            if (focused && step0.merged > 1) {
+                                // a merged run blooms into its dots in the middle
+                                val dots = min(step0.merged, 3)
+                                for (k in 0 until dots) {
+                                    drawCircle(
+                                        color = colors.spectrum[k % colors.spectrum.size].copy(alpha = bloom),
+                                        radius = 3.dp.toPx(),
+                                        center = Offset(x + 12.dp.toPx() + k * 9.dp.toPx(), contentY),
+                                    )
+                                }
+                            } else if (step0.merged > 1) {
+                                val extra = (step0.merged - 1).coerceAtMost(2)
                                 for (k in 1..extra) {
                                     drawCircle(
                                         color = colors.faint,
@@ -266,28 +324,43 @@ fun LumenChatScreen(
                                     )
                                 }
                             }
+
+                            // prism: a focused tool/subagent fans into the spectrum
+                            if (focused && step0.rows.isNotEmpty()) {
+                                val n = min(step0.rows.size, 6)
+                                val spread = 56.dp.toPx()
+                                for (k in 0 until n) {
+                                    val t = if (n == 1) 0.5f else k / (n - 1).toFloat()
+                                    val endY = contentY + (t - 0.5f) * spread
+                                    drawLine(
+                                        color = colors.spectrum[k % colors.spectrum.size].copy(alpha = 0.5f * bloom),
+                                        start = Offset(x + spout, contentY),
+                                        end = Offset(panelLeftPx + 8.dp.toPx(), endY),
+                                        strokeWidth = 1.2.dp.toPx(),
+                                    )
+                                }
+                            }
                         }
                     }
                 }
 
-                if (showPanel) {
-                    val step = steps.getOrNull(focusedIndex)
-                    if (step != null) {
-                        FocusPanel(
-                            step = step,
-                            bloom = if (forceOpenIndex != null) 1f else bloom,
-                            colors = colors,
-                            startPadding = with(density) { gutterPx.toDp() } + 20.dp,
-                            modifier = Modifier.align(Alignment.CenterStart),
-                        )
-                    }
+                if (showPanel && focusedStep != null) {
+                    FocusPanel(
+                        step = focusedStep,
+                        bloom = if (forceOpenIndex != null) 1f else bloom,
+                        full = fullText || forceOpenIndex != null,
+                        colors = colors,
+                        startPadding = with(density) { panelLeftPx.toDp() },
+                        maxHeight = panelMaxHeight,
+                        modifier = Modifier.align(Alignment.CenterStart),
+                    )
                 }
             }
         }
 
         if (error != null) {
             Text(
-                error, color = colors.fg, fontFamily = Mono, fontSize = 12.sp,
+                error, color = colors.spectrum.first(), fontFamily = Mono, fontSize = 12.sp,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
             )
         }
@@ -300,8 +373,10 @@ fun LumenChatScreen(
 private fun FocusPanel(
     step: UiStep,
     bloom: Float,
+    full: Boolean,
     colors: LumenColors,
-    startPadding: androidx.compose.ui.unit.Dp,
+    startPadding: Dp,
+    maxHeight: Dp,
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
@@ -318,7 +393,8 @@ private fun FocusPanel(
             .fillMaxWidth()
             .padding(start = startPadding, end = 16.dp)
             .alpha(bloom)
-            .heightIn(max = 460.dp)
+            .heightIn(max = maxHeight)
+            .animateContentSize()
             .pointerInput(step.id) {
                 detectTapGestures(
                     onTap = { /* single tap does nothing */ },
@@ -347,7 +423,14 @@ private fun FocusPanel(
                 text = step.body,
                 color = colors.fg,
                 fontFamily = Mono, fontSize = 14.sp, lineHeight = 20.sp,
+                maxLines = if (full) Int.MAX_VALUE else LIMITED_LINES,
+                overflow = TextOverflow.Ellipsis,
             )
+        }
+        if (!full && step.rows.isNotEmpty()) {
+            // the tail is where the droplet opens all the way
+            Spacer(Modifier.height(5.dp))
+            Text("scroll on for the rest", color = colors.faint, fontFamily = Mono, fontSize = 11.sp)
         }
         if (step.rows.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))

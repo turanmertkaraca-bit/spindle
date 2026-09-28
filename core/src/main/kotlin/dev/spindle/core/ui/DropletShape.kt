@@ -25,6 +25,8 @@ object DropletShape {
         val spout: Float = 0f,
         /** >1 elongates vertically, <1 flattens: velocity squash & stretch. */
         val stretch: Float = 1f,
+        /** radians: leans the droplet with the rope tangent instead of rotating rigidly. */
+        val lean: Float = 0f,
         val segments: Int = 40,
     )
 
@@ -36,6 +38,8 @@ object DropletShape {
         val n = p.segments.coerceAtLeast(8)
         val out = ArrayList<Vec2>(n)
         val s = p.stretch.coerceAtLeast(0.2f)
+        val lc = cos(p.lean)
+        val ls = sin(p.lean)
         for (i in 0 until n) {
             val t = (i.toFloat() / n) * (2.0 * PI)
             val ux = cos(t).toFloat()
@@ -43,9 +47,12 @@ object DropletShape {
             var r = p.radius
             if (uy > 0f) r += p.tail * uy * uy
             if (ux > 0f) r += p.spout * ux * ux
-            val x0 = r * ux
-            val y0 = r * uy
-            out += Vec2(cx + x0 / s, cy + y0 * s)
+            val x0 = r * ux / s
+            val y0 = r * uy * s
+            // lean: the bead stretches along the rope instead of spinning
+            val rx = x0 * lc - y0 * ls
+            val ry = x0 * ls + y0 * lc
+            out += Vec2(cx + rx, cy + ry)
         }
         return out
     }

@@ -42,6 +42,7 @@ fun KeyScreen(
     colors: LumenColors,
     onSubmit: (provider: String, key: String) -> Unit,
     modifier: Modifier = Modifier,
+    onToggleTheme: (() -> Unit)? = null,
 ) {
     var provider by remember { mutableStateOf("opencode-go") }
     var key by remember { mutableStateOf("") }
@@ -50,7 +51,20 @@ fun KeyScreen(
         modifier.fillMaxSize().background(colors.bg)
             .padding(start = 20.dp, end = 20.dp, top = 64.dp, bottom = 24.dp),
     ) {
-        Text("lumen", color = colors.fg, fontFamily = Mono, fontSize = 26.sp, fontWeight = FontWeight.Medium)
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("lumen", color = colors.fg, fontFamily = Mono, fontSize = 26.sp, fontWeight = FontWeight.Medium)
+            if (onToggleTheme != null) {
+                Text(
+                    "◐",
+                    color = colors.faint, fontFamily = Mono, fontSize = 16.sp,
+                    modifier = Modifier.clickable { onToggleTheme() }.padding(4.dp).testTag("theme"),
+                )
+            }
+        }
         Spacer(Modifier.height(6.dp))
         Text(
             "connect a provider to start",
