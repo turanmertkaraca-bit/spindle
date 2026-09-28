@@ -143,7 +143,7 @@ class LumenChatScreenTest {
         val cfg = compose.onNodeWithTag("panel").fetchSemanticsNode().config
         check(cfg.contains(SemanticsProperties.VerticalScrollAxisRange)) { "panel should be scrollable" }
         val range = cfg[SemanticsProperties.VerticalScrollAxisRange]
-        check(range.maxValue > 0f) { "a long body must overflow the capped panel (maxValue=${range.maxValue})" }
+        check(range.maxValue() > 0f) { "a long body must overflow the capped panel (maxValue=${range.maxValue()})" }
     }
 
     @Test
