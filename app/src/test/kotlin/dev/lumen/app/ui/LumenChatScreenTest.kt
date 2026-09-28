@@ -7,7 +7,6 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.UiStep
@@ -18,12 +17,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * Behavioral tests for the interactive chat screen, run on a plain JVM by
- * Robolectric — this is what CI verifies. The contract:
- *   - exactly one row is open at a time
- *   - tapping a row makes it the open one
- *   - the composer is present and send is callable
- *   - tool rows expose their sub-rows while open
+ * Behavioral tests for the rope screen, run on a plain JVM by Robolectric.
+ * The canvas itself has no semantics, so we assert the parts that do: the
+ * bloomed panel, the composer, and that only one step is bloomed at a time.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -45,42 +41,33 @@ class LumenChatScreenTest {
         )
     }
 
-    private fun countBodies(n: Int): Int =
-        (0 until n).count { i ->
-            compose.onAllNodesWithText("BODY $i full text").fetchSemanticsNodes().isNotEmpty()
-        }
-
     private fun noNode(text: String) {
         val c = compose.onAllNodesWithText(text).fetchSemanticsNodes().size
         check(c == 0) { "expected no node with text '$text', found $c" }
     }
 
     @Test
-    fun `renders steps and the composer`() {
-        compose.setContent { LumenChatScreen(steps(4), input = "", busy = false, error = null, modifier = viewport) }
+    fun `renders the focused step and the composer`() {
+        compose.setContent {
+            LumenChatScreen(steps(4), input = "", busy = false, error = null, modifier = viewport, forceOpenIndex = 0)
+        }
         compose.onNodeWithText("STEP 0").assertIsDisplayed()
+        compose.onNodeWithText("BODY 0 full text").assertIsDisplayed()
         compose.onNodeWithTag("composer").assertIsDisplayed()
     }
 
     @Test
-    fun `exactly one row is open`() {
-        compose.setContent { LumenChatScreen(steps(6), input = "", busy = false, error = null, modifier = viewport) }
-        val open = countBodies(6)
-        check(open == 1) { "expected exactly 1 open row, found $open" }
-    }
-
-    @Test
-    fun `tapping a row opens it`() {
-        compose.setContent { LumenChatScreen(steps(6), input = "", busy = false, error = null, modifier = viewport) }
-        // row 0's body is not shown at rest (a later row is open)
-        noNode("BODY 0 full text")
-        // tap the label of row 0
-        compose.onNodeWithText("STEP 0").performClick()
+    fun `only the focused step is bloomed`() {
+        compose.setContent {
+            LumenChatScreen(steps(6), input = "", busy = false, error = null, modifier = viewport, forceOpenIndex = 0)
+        }
         compose.onNodeWithText("BODY 0 full text").assertIsDisplayed()
+        noNode("BODY 1 full text")
+        noNode("BODY 5 full text")
     }
 
     @Test
-    fun `tool rows expose their sub-rows while open`() {
+    fun `tool rows expose their sub-rows while bloomed`() {
         val s = listOf(
             UiStep(
                 "t", StepKind.TOOL, "1 RUN TESTS", "x",
@@ -89,27 +76,38 @@ class LumenChatScreenTest {
                 rows = listOf("compile" to "assembleDebug", "verify" to "re-render"),
             ),
         )
-        // Force the row open so the assertion does not depend on Robolectric layout.
         compose.setContent {
             LumenChatScreen(s, input = "", busy = false, error = null, modifier = viewport, forceOpenIndex = 0)
         }
         check(compose.onAllNodesWithText("compile", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) {
-            "open tool row should expose its 'compile' sub-row"
+            "bloomed tool row should expose its 'compile' sub-row"
         }
         check(compose.onAllNodesWithText("verify", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) {
-            "open tool row should expose its 'verify' sub-row"
+            "bloomed tool row should expose its 'verify' sub-row"
         }
     }
 
     @Test
     fun `send button is present and reflects busy state`() {
-        compose.setContent { LumenChatScreen(steps(2), input = "hi", busy = false, error = null, modifier = viewport) }
+        compose.setContent {
+            LumenChatScreen(steps(2), input = "hi", busy = false, error = null, modifier = viewport)
+        }
         compose.onNodeWithTag("send").assertIsDisplayed()
     }
 
     @Test
     fun `stop replaces send while busy`() {
-        compose.setContent { LumenChatScreen(steps(2), input = "", busy = true, error = null, modifier = viewport) }
+        compose.setContent {
+            LumenChatScreen(steps(2), input = "", busy = true, error = null, modifier = viewport)
+        }
         compose.onNodeWithTag("stop").assertIsDisplayed()
+    }
+
+    @Test
+    fun `theme toggle is available`() {
+        compose.setContent {
+            LumenChatScreen(steps(2), input = "", busy = false, error = null, modifier = viewport, onToggleTheme = {})
+        }
+        compose.onNodeWithTag("theme").assertIsDisplayed()
     }
 }

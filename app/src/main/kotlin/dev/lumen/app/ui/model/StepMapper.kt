@@ -68,7 +68,41 @@ object StepMapper {
                 else -> Unit
             }
         }
-        return out
+        return mergeAdjacent(out)
+    }
+
+    /**
+     * Consecutive tool / subagent calls collapse into one droplet (the rope gets
+     * fewer, fatter beads instead of a long chain of identical tool dots). Any
+     * other step kind breaks the run. Pure, so the merge is unit-tested.
+     */
+    fun mergeAdjacent(steps: List<UiStep>): List<UiStep> {
+        val res = ArrayList<UiStep>(steps.size)
+        for (s in steps) {
+            val last = res.lastOrNull()
+            if (last != null && isMergeable(last.kind) && isMergeable(s.kind)) {
+                res[res.size - 1] = merge(last, s)
+            } else {
+                res += s
+            }
+        }
+        return res
+    }
+
+    private fun isMergeable(kind: StepKind): Boolean =
+        kind == StepKind.TOOL || kind == StepKind.SUBAGENT
+
+    private fun merge(a: UiStep, b: UiStep): UiStep {
+        val merged = a.merged + b.merged
+        return a.copy(
+            kind = if (a.kind == StepKind.SUBAGENT || b.kind == StepKind.SUBAGENT) StepKind.SUBAGENT else StepKind.TOOL,
+            merged = merged,
+            summary = "$merged calls · ${b.summary}",
+            body = a.body + "\n\n" + b.body,
+            rows = a.rows + b.rows,
+            running = a.running || b.running,
+            failed = a.failed || b.failed,
+        )
     }
 
     private fun toolBody(p: Part.Tool): String {
