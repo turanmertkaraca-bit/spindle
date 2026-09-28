@@ -74,6 +74,17 @@ private val Mono = FontFamily.Monospace
 /** How many lines a focused droplet shows while there is still rope below it. */
 private const val LIMITED_LINES = 3
 
+/** Safe spectral colour: never throws, whatever palette is supplied. */
+private fun LumenColors.spectrumAt(index: Int): Color {
+    val s = spectrum
+    if (s.isEmpty()) return accent
+    val i = ((index % s.size) + s.size) % s.size
+    return s[i]
+}
+
+/** The "failed" colour. */
+private fun LumenColors.danger(): Color = spectrumAt(0)
+
 /** Light / dark palettes. Dark is deliberately not pure black (see bg). */
 data class LumenColors(
     val bg: Color,
@@ -180,14 +191,28 @@ fun LumenChatScreen(
         RopeLayout.compute(nodes, scrollValue, metrics)
     }
 
-    // start at the newest droplet without a visible jitter
-    var didInit by remember { mutableStateOf(false) }
+    // Cold start lands on the newest droplet. Afterwards a freshly appended
+    // droplet is followed only when the reader was already at the tail — so a
+    // reader further up is never yanked away mid-read.
+    var lastCount by remember { mutableStateOf(0) }
     LaunchedEffect(count, forceOpenIndex, scrollState.maxValue) {
-        if (!didInit && count > 0 && scrollState.maxValue > 0) {
-            didInit = true
-            val index = (forceOpenIndex ?: (count - 1)).coerceIn(0, count - 1)
-            scrollState.scrollTo((index * stride).roundToInt())
+        if (count == 0) {
+            lastCount = 0
+            return@LaunchedEffect
         }
+        if (scrollState.maxValue <= 0) return@LaunchedEffect // wait for layout
+        if (forceOpenIndex != null) {
+            scrollState.scrollTo((forceOpenIndex.coerceIn(0, count - 1) * stride).roundToInt())
+            lastCount = count
+            return@LaunchedEffect
+        }
+        val prev = lastCount
+        val atTail = prev == 0 ||
+            (scrollState.value.toFloat() / stride).roundToInt() >= prev - 1
+        if (count > prev && atTail) {
+            scrollState.scrollTo(((count - 1) * stride).roundToInt())
+        }
+        lastCount = count
     }
 
     // click into place: on every settle, ease the nearest droplet onto the line.
@@ -280,7 +305,7 @@ fun LumenChatScreen(
                             if (focused) {
                                 val glowR = 30.dp.toPx()
                                 val glow = if (step0.kind == StepKind.TOOL || step0.kind == StepKind.SUBAGENT) {
-                                    colors.spectrum[4].copy(alpha = 0.20f * bloom)
+                                    colors.spectrumAt(4).copy(alpha = 0.20f * bloom)
                                 } else {
                                     colors.accent.copy(alpha = 0.22f * bloom)
                                 }
@@ -296,7 +321,7 @@ fun LumenChatScreen(
                             }
 
                             val fill = when {
-                                step0.failed -> colors.spectrum.first()
+                                step0.failed -> colors.danger()
                                 step0.running -> colors.bg
                                 focused || p.bloom > 0.5f -> colors.fg
                                 else -> colors.faint
@@ -322,7 +347,7 @@ fun LumenChatScreen(
                                 val dots = min(step0.merged, 3)
                                 for (k in 0 until dots) {
                                     drawCircle(
-                                        color = colors.spectrum[k % colors.spectrum.size].copy(alpha = bloom),
+                                        color = colors.spectrumAt(k).copy(alpha = bloom),
                                         radius = (3.4f - 0.4f * k).dp.toPx(),
                                         center = Offset(x - 1.dp.toPx(), contentY - (11.dp.toPx() + k * 9.dp.toPx())),
                                     )
@@ -348,7 +373,7 @@ fun LumenChatScreen(
                                     val t = if (n == 1) 0.5f else k / (n - 1).toFloat()
                                     val endY = contentY + (t - 0.5f) * spread
                                     drawLine(
-                                        color = colors.spectrum[k % colors.spectrum.size].copy(alpha = 0.5f * bloom),
+                                        color = colors.spectrumAt(k).copy(alpha = 0.5f * bloom),
                                         start = Offset(x + spout * 0.5f, contentY),
                                         end = Offset(panelLeftPx, endY),
                                         strokeWidth = 1.2.dp.toPx(),
@@ -375,7 +400,7 @@ fun LumenChatScreen(
 
         if (error != null) {
             Text(
-                error, color = colors.spectrum.first(), fontFamily = Mono, fontSize = 12.sp,
+                error, color = colors.danger(), fontFamily = Mono, fontSize = 12.sp,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
             )
         }
@@ -455,9 +480,9 @@ private fun FocusPanel(
                     Modifier.padding(start = 4.dp, top = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text("·", color = colors.spectrum[k % colors.spectrum.size], fontFamily = Mono, fontSize = 13.sp)
+                    Text("·", color = colors.spectrumAt(k), fontFamily = Mono, fontSize = 13.sp)
                     Spacer(Modifier.width(8.dp))
-                    Text(r.first, color = colors.spectrum[k % colors.spectrum.size], fontFamily = Mono, fontSize = 13.sp)
+                    Text(r.first, color = colors.spectrumAt(k), fontFamily = Mono, fontSize = 13.sp)
                     if (r.second.isNotEmpty()) {
                         Spacer(Modifier.width(8.dp))
                         Text(r.second, color = colors.dim, fontFamily = Mono, fontSize = 13.sp)
