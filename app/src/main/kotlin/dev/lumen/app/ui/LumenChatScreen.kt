@@ -218,8 +218,8 @@ fun LumenChatScreen(
             val focusY = viewportHeightPx / 2f
             val maxScrollPx = (count - 1).coerceAtLeast(0) * stride
             val canvasHeightPx = viewportHeightPx + maxScrollPx
-            val panelLeftPx = gutterPx + with(density) { 20.dp.toPx() }
-            val panelMaxHeight = with(density) { (viewportHeightPx * 0.82f).toDp() }
+            val panelLeftPx = gutterPx + with(density) { 42.dp.toPx() }
+            val panelMaxHeight = with(density) { (viewportHeightPx * 0.72f).toDp() }
 
             Box(Modifier.fillMaxSize()) {
                 Box(
@@ -236,27 +236,30 @@ fun LumenChatScreen(
                         fun ropeXAt(contentY: Float): Float =
                             ropeX + RopeCurve.offset(contentY - ropeFocus, bowPx, bowHalfPx) * reveal
 
-                        // rope above the notch where the focused droplet detaches
-                        run {
-                            var y = scrollValue - 60f
-                            val end = ropeFocus - gapHalf
-                            if (y < end) {
-                                val p = Path().apply { moveTo(ropeXAt(y), y) }
-                                y += step
-                                while (y < end) { p.lineTo(ropeXAt(y), y); y += step }
-                                p.lineTo(ropeXAt(end), end)
-                                drawPath(p, color = colors.rule, style = Stroke(width = 1.dp.toPx()))
-                            }
+                        val visibleTop = scrollValue - 60f
+                        val visibleBottom = scrollValue + viewportHeightPx + 60f
+                        val reach = viewportHeightPx * reveal
+
+                        fun drawRope(from: Float, to: Float) {
+                            if (to <= from) return
+                            val p = Path().apply { moveTo(ropeXAt(from), from) }
+                            var y = from + step
+                            while (y < to) { p.lineTo(ropeXAt(y), y); y += step }
+                            p.lineTo(ropeXAt(to), to)
+                            drawPath(p, color = colors.faint.copy(alpha = 0.55f), style = Stroke(width = 1.dp.toPx()))
                         }
-                        run {
-                            var y = ropeFocus + gapHalf
-                            val end = scrollValue + viewportHeightPx + 60f
-                            if (y < end) {
-                                val p = Path().apply { moveTo(ropeXAt(y), y) }
-                                y += step
-                                while (y < end) { p.lineTo(ropeXAt(y), y); y += step }
-                                drawPath(p, color = colors.rule, style = Stroke(width = 1.dp.toPx()))
-                            }
+
+                        // the rope grows out of the focus; the notch is where the
+                        // focused droplet detaches from it
+                        drawRope(visibleTop.coerceAtLeast(ropeFocus - reach), ropeFocus - gapHalf)
+                        drawRope(ropeFocus + gapHalf, visibleBottom.coerceAtMost(ropeFocus + reach))
+
+                        if (count == 0) {
+                            drawCircle(
+                                color = colors.faint.copy(alpha = 0.5f),
+                                radius = 3.dp.toPx(),
+                                center = Offset(ropeX, focusY),
+                            )
                         }
 
                         for (p in result.placements) {
@@ -268,11 +271,11 @@ fun LumenChatScreen(
                             val focused = p.index == focusedIndex && bloom > 0.3f
                             val dy = contentY - ropeFocus
                             val lean = -RopeCurve.lean(dy, bowPx, bowHalfPx)
-                            val jiggle = if (focused) 12.dp.toPx() * bloom else 0f
+                            val jiggle = if (focused) 8.dp.toPx() * bloom else 0f
                             val x = ropeXAt(contentY) + 0.4f * p.size + jiggle
-                            val radius = p.size * (0.5f + 0.35f * p.bloom) + 2.dp.toPx() * bloom
-                            val tail = if (p.bloom > 0f) 9.dp.toPx() * p.bloom else 0f
-                            val spout = if (focused) 14.dp.toPx() * bloom else 0f
+                            val radius = p.size * (0.5f + 0.3f * p.bloom) + 1.6.dp.toPx() * bloom
+                            val tail = if (p.bloom > 0f) 8.dp.toPx() * p.bloom else 0f
+                            val spout = if (focused) 10.dp.toPx() * bloom else 0f
 
                             if (focused) {
                                 val glowR = 30.dp.toPx()
@@ -315,13 +318,17 @@ fun LumenChatScreen(
                             }
 
                             if (focused && step0.merged > 1) {
-                                // a merged run blooms into its dots in the middle
+                                // a merged run blooms into its dots in the gap
                                 val dots = min(step0.merged, 3)
+                                val startX = x + 9.dp.toPx()
+                                val endX = panelLeftPx - 10.dp.toPx()
                                 for (k in 0 until dots) {
+                                    val fx = if (dots == 1) startX
+                                    else startX + (endX - startX) * (k / (dots - 1).toFloat())
                                     drawCircle(
                                         color = colors.spectrum[k % colors.spectrum.size].copy(alpha = bloom),
-                                        radius = 3.dp.toPx(),
-                                        center = Offset(x + 12.dp.toPx() + k * 9.dp.toPx(), contentY),
+                                        radius = 2.6.dp.toPx(),
+                                        center = Offset(fx, contentY),
                                     )
                                 }
                             } else if (step0.merged > 1) {
@@ -335,17 +342,18 @@ fun LumenChatScreen(
                                 }
                             }
 
-                            // prism: a focused tool/subagent fans into the spectrum
+                            // prism: a focused tool/subagent fans into the spectrum,
+                            // staying inside the gutter so it never crosses the text
                             if (focused && step0.rows.isNotEmpty()) {
                                 val n = min(step0.rows.size, 6)
-                                val spread = 56.dp.toPx()
+                                val spread = 44.dp.toPx()
                                 for (k in 0 until n) {
                                     val t = if (n == 1) 0.5f else k / (n - 1).toFloat()
                                     val endY = contentY + (t - 0.5f) * spread
                                     drawLine(
                                         color = colors.spectrum[k % colors.spectrum.size].copy(alpha = 0.5f * bloom),
-                                        start = Offset(x + spout, contentY),
-                                        end = Offset(panelLeftPx + 8.dp.toPx(), endY),
+                                        start = Offset(x + spout * 0.5f, contentY),
+                                        end = Offset(panelLeftPx, endY),
                                         strokeWidth = 1.2.dp.toPx(),
                                     )
                                 }
@@ -402,6 +410,7 @@ private fun FocusPanel(
         modifier
             .fillMaxWidth()
             .padding(start = startPadding, end = 16.dp)
+            .background(colors.bg)
             .alpha(bloom)
             .heightIn(max = maxHeight)
             .animateContentSize()
