@@ -66,7 +66,7 @@ class RopeLayoutTest {
     @Test
     fun `arcs are strictly increasing`() {
         val r = RopeLayout.compute(nodes, 137f, m)
-        var prev = -1f
+        var prev = Float.NEGATIVE_INFINITY
         for (p in r.placements) {
             assertTrue(p.arc > prev, "arc must increase: ${p.key}")
             prev = p.arc

@@ -57,8 +57,8 @@ import dev.lumen.app.ui.model.UiStep
 import dev.spindle.core.ui.DropletShape
 import dev.spindle.core.ui.FocusPolicy
 import dev.spindle.core.ui.RopeLayout
+import kotlin.math.abs
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 private val Mono = FontFamily.Monospace
@@ -162,11 +162,14 @@ fun LumenChatScreen(
         }
     }
 
-    // click into place: when we settle, pull the target droplet onto the line
+    // click into place: when we settle, pull the target droplet onto the line.
+    // The tolerance guard stops a zero-distance animation from looping forever.
     LaunchedEffect(scrolling, focusedIndex, count) {
-        if (forceOpenIndex == null && !scrolling && count > 0) {
-            val target = result.placements.getOrNull(focusedIndex)?.arc ?: return@LaunchedEffect
-            scrollState.animateScrollTo(target.roundToInt())
+        if (forceOpenIndex == null && !scrolling && count > 1) {
+            val target = focusedIndex * stride
+            if (abs(scrollState.value - target) > 2f) {
+                scrollState.animateScrollTo(target.roundToInt())
+            }
         }
     }
 
@@ -176,8 +179,7 @@ fun LumenChatScreen(
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val viewportHeightPx = constraints.maxHeight.toFloat()
             val focusY = viewportHeightPx / 2f
-            val maxScrollPx = (count - 1).coerceAtLeast(0) * stride +
-                focusExtraPx * min((count - 1).coerceAtLeast(0), 4)
+            val maxScrollPx = (count - 1).coerceAtLeast(0) * stride
             val canvasHeightPx = viewportHeightPx + maxScrollPx
 
             Box(Modifier.fillMaxSize()) {

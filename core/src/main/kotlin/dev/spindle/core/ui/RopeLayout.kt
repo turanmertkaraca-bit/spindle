@@ -96,12 +96,22 @@ object RopeLayout {
             gaps[i] = metrics.baseGap + metrics.focusGapExtra * kernel(d, metrics.focusHalfWidth)
         }
 
-        val arcs = FloatArray(n)
+        val raw = FloatArray(n)
         var y = 0f
         for (i in 0 until n) {
-            arcs[i] = y
+            raw[i] = y
             if (i < n - 1) y += metrics.nodeSize + gaps[i]
         }
+
+        // Express positions relative to the focus, then re-base onto the scroll
+        // axis so that `scroll == index * stride` puts droplet `index` exactly on
+        // the focus line for ANY focus position. This removes the circular
+        // dependency between spacing and scroll.
+        val lo = floor(focusPos).toInt().coerceIn(0, n - 1)
+        val hi = (lo + 1).coerceAtMost(n - 1)
+        val frac = focusPos - lo
+        val rawFocus = raw[lo] + frac * (raw[hi] - raw[lo])
+        val arcs = FloatArray(n) { i -> raw[i] - rawFocus + focusPos * stride }
 
         val focusIndex = focusPos.roundToInt().coerceIn(0, n - 1)
         val placements = ArrayList<Placement>(n)
