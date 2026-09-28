@@ -117,6 +117,24 @@ class ScreenshotTest {
         )
     }
 
+    @Test fun light_running_tool() = shoot("light_running.png") {
+        LumenChatScreen(
+            steps = listOf(
+                UiStep("u", StepKind.YOU, "YOU", "aa11bb", "run the tests", "run the tests"),
+                UiStep(
+                    "r", StepKind.TOOL, "BASH", "cc22dd", "running…", "npm test",
+                    rows = listOf("run" to "npm test"), running = true,
+                ),
+            ),
+            input = "",
+            busy = true,
+            error = null,
+            colors = LumenColors.Light,
+            forceOpenIndex = 1,
+            onToggleTheme = {},
+        )
+    }
+
     @Test fun key_screen_light() = shoot("key_light.png") {
         KeyScreen(colors = LumenColors.Light, onSubmit = { _, _ -> }, onToggleTheme = {})
     }

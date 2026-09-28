@@ -318,17 +318,13 @@ fun LumenChatScreen(
                             }
 
                             if (focused && step0.merged > 1) {
-                                // a merged run blooms into its dots in the gap
+                                // a merged run unfolds into its dots along the rope
                                 val dots = min(step0.merged, 3)
-                                val startX = x + 9.dp.toPx()
-                                val endX = panelLeftPx - 14.dp.toPx()
                                 for (k in 0 until dots) {
-                                    val fx = if (dots == 1) startX
-                                    else startX + (endX - startX) * (k / (dots - 1).toFloat())
                                     drawCircle(
                                         color = colors.spectrum[k % colors.spectrum.size].copy(alpha = bloom),
-                                        radius = 2.6.dp.toPx(),
-                                        center = Offset(fx, contentY),
+                                        radius = (3.4f - 0.4f * k).dp.toPx(),
+                                        center = Offset(x - 1.dp.toPx(), contentY - (11.dp.toPx() + k * 9.dp.toPx())),
                                     )
                                 }
                             } else if (step0.merged > 1) {
