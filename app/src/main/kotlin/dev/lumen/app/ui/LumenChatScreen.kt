@@ -321,7 +321,7 @@ fun LumenChatScreen(
                                 // a merged run blooms into its dots in the gap
                                 val dots = min(step0.merged, 3)
                                 val startX = x + 9.dp.toPx()
-                                val endX = panelLeftPx - 10.dp.toPx()
+                                val endX = panelLeftPx - 14.dp.toPx()
                                 for (k in 0 until dots) {
                                     val fx = if (dots == 1) startX
                                     else startX + (endX - startX) * (k / (dots - 1).toFloat())
@@ -343,8 +343,9 @@ fun LumenChatScreen(
                             }
 
                             // prism: a focused tool/subagent fans into the spectrum,
-                            // staying inside the gutter so it never crosses the text
-                            if (focused && step0.rows.isNotEmpty()) {
+                            // staying inside the gutter so it never crosses the text.
+                            // A merged cluster already shows its dots, so skip the fan.
+                            if (focused && step0.merged == 1 && step0.rows.isNotEmpty()) {
                                 val n = min(step0.rows.size, 6)
                                 val spread = 44.dp.toPx()
                                 for (k in 0 until n) {

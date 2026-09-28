@@ -3,6 +3,7 @@ package dev.lumen.app.ui
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import androidx.activity.ComponentActivity
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.UiStep
@@ -16,7 +17,7 @@ import java.io.File
 import java.io.FileOutputStream
 
 /**
- * Renders the real screen to PNGs so the UI can be inspected without a device.
+ * Renders the real screens to PNGs so the UI can be inspected without a device.
  * Runs on a plain JVM via Robolectric's native graphics; it draws the decor view
  * directly because Compose's own capture path never sees a draw callback here.
  * Any failure is recorded to a .error.txt instead of failing the build.
@@ -66,18 +67,8 @@ class ScreenshotTest {
         ),
     )
 
-    private fun render(steps: List<UiStep>, colors: LumenColors, name: String, force: Int?) {
-        compose.setContent {
-            LumenChatScreen(
-                steps = steps,
-                input = "",
-                busy = false,
-                error = null,
-                colors = colors,
-                forceOpenIndex = force,
-                onToggleTheme = {},
-            )
-        }
+    private fun shoot(name: String, content: @Composable () -> Unit) {
+        compose.setContent(content)
         val dir = File("build/screenshots").apply { mkdirs() }
         runCatching {
             compose.waitForIdle()
@@ -93,21 +84,44 @@ class ScreenshotTest {
         }
     }
 
-    @Test
-    fun light_assistant() = render(sample(), LumenColors.Light, "light_assistant.png", 5)
+    private fun chat(colors: LumenColors, name: String, force: Int? = null) = shoot(name) {
+        LumenChatScreen(
+            steps = sample(),
+            input = "",
+            busy = false,
+            error = null,
+            colors = colors,
+            forceOpenIndex = force,
+            onToggleTheme = {},
+        )
+    }
 
-    @Test
-    fun dark_assistant() = render(sample(), LumenColors.Dark, "dark_assistant.png", 5)
+    @Test fun light_assistant() = chat(LumenColors.Light, "light_assistant.png", 5)
 
-    @Test
-    fun light_merged_tools() = render(sample(), LumenColors.Light, "light_merged_tools.png", 3)
+    @Test fun dark_assistant() = chat(LumenColors.Dark, "dark_assistant.png", 5)
 
-    @Test
-    fun dark_subagent() = render(sample(), LumenColors.Dark, "dark_subagent.png", 4)
+    @Test fun light_merged_tools() = chat(LumenColors.Light, "light_merged_tools.png", 3)
 
-    @Test
-    fun light_early_rope() = render(sample(), LumenColors.Light, "light_early.png", 1)
+    @Test fun dark_subagent() = chat(LumenColors.Dark, "dark_subagent.png", 4)
 
-    @Test
-    fun empty_session() = render(emptyList(), LumenColors.Dark, "empty_dark.png", null)
+    @Test fun light_early_rope() = chat(LumenColors.Light, "light_early.png", 1)
+
+    @Test fun empty_session() = shoot("empty_dark.png") {
+        LumenChatScreen(
+            steps = emptyList(),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Dark,
+            onToggleTheme = {},
+        )
+    }
+
+    @Test fun key_screen_light() = shoot("key_light.png") {
+        KeyScreen(colors = LumenColors.Light, onSubmit = { _, _ -> }, onToggleTheme = {})
+    }
+
+    @Test fun key_screen_dark() = shoot("key_dark.png") {
+        KeyScreen(colors = LumenColors.Dark, onSubmit = { _, _ -> }, onToggleTheme = {})
+    }
 }
