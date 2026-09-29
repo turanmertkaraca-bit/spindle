@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>lumen · prism</title>
+<style>
+  /* ---------- DARK PRISM (default) ---------- */
+  :root{
+    --bg:#08070d; --bg2:#0c0b13; --bot:#141221; --you:#1b1930;
+    --fg:#f2effb; --dim:#a49fc4; --faint:#5b5675;
+    --rule:rgba(255,255,255,.09);
+    --prism-a:#a78bfa;  /* violet */
+    --prism-b:#60a5fa;  /* azure */
+    --prism-c:#22d3ee;  /* cyan */
+    --prism-d:#34d399;  /* mint */
+    --danger:#fb7185;
+    --glow:rgba(167,139,250,.55);
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    --edge:rgba(167,139,250,.28);
+  }
+  /* ---------- LIGHT PRISM ---------- */
+  :root[data-theme="light"]{
+    --bg:#f7f6fb; --bg2:#ffffff; --bot:#ffffff; --you:#ecebfb;
+    --fg:#1a1730; --dim:#6b6588; --faint:#a9a4c0;
+    --rule:rgba(20,10,50,.10);
+    --prism-a:#6d28d9; --prism-b:#1d4ed8; --prism-c:#0e7490; --prism-d:#047857;
+    --danger:#be123c;
+    --glow:rgba(124,58,237,.35);
+    --edge:rgba(124,58,237,.30);
+  }
+  *{box-sizing:border-box} html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--fg);font-family:var(--sans);overflow:hidden}
+
+  .phone{max-width:460px;height:100%;margin:0 auto;display:flex;flex-direction:column;position:relative}
+  /* the prism backdrop: soft iridescent blooms rather than a flat wash */
+  .phone::before{
+    content:"";position:absolute;inset:0;pointer-events:none;z-index:0;
+    background:
+      radial-gradient(60% 34% at 12% -4%, color-mix(in srgb, var(--prism-a) 22%, transparent), transparent 70%),
+      radial-gradient(56% 30% at 88% -2%, color-mix(in srgb, var(--prism-c) 16%, transparent), transparent 72%),
+      radial-gradient(70% 40% at 50% 104%, color-mix(in srgb, var(--prism-b) 12%, transparent), transparent 74%);
+    opacity:.9;
+  }
+  .phone > *{position:relative;z-index:1}
+
+  header{display:flex;align-items:center;gap:12px;padding:16px 18px 12px}
+  header .back{color:var(--dim);font-size:22px;line-height:1;padding:2px 4px;border-radius:8px;cursor:pointer}
+  header .back:active{background:var(--bot)}
+  header .t{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;font-weight:600}
+  header .m{margin-left:auto;font:11px var(--mono);color:var(--faint);white-space:nowrap}
+  header .theme{margin-left:10px;color:var(--faint);cursor:pointer;font-size:14px}
+
+  /* thin spectral rule under the header */
+  header::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;
+    background:linear-gradient(90deg,transparent,var(--prism-a),var(--prism-c),var(--prism-d),transparent);
+    opacity:.55}
+
+  .chat{flex:1;overflow:auto;padding:10px 16px 12px;display:flex;flex-direction:column;gap:3px;scroll-behavior:smooth}
+
+  .who{font:10.5px var(--mono);letter-spacing:1.2px;color:var(--faint);margin:10px 6px 3px}
+  .who.you{text-align:right;color:var(--dim)}
+  .who .meta{color:var(--faint);letter-spacing:0}
+
+  .msg{max-width:84%;border-radius:20px;padding:11px 15px;font-size:14.5px;line-height:1.58;
+    position:relative;word-wrap:break-word;animation:rise .22s ease-out}
+  @keyframes rise{from{opacity:0;transform:translateY(6px)}}
+
+  .msg.you{align-self:flex-end;background:var(--you);border-bottom-right-radius:7px;
+    border:1px solid var(--rule)}
+  .msg.bot{align-self:flex-start;background:var(--bot);border-bottom-left-radius:7px;max-width:94%;
+    border:1px solid var(--rule);
+    box-shadow:0 1px 0 rgba(255,255,255,.02) inset, 0 8px 22px -18px var(--glow)}
+  /* a prism hairline on the agent bubble's leading edge */
+  .msg.bot::after{content:"";position:absolute;left:-1px;top:14px;bottom:14px;width:2px;border-radius:2px;
+    background:linear-gradient(180deg,var(--prism-a),var(--prism-c),var(--prism-d));opacity:.7}
+
+  /* spine droplets: spectrum-tinted, user side is neutral */
+  .msg.bot::before{content:"";position:absolute;left:-11px;top:14px;width:9px;height:12px;
+    background:linear-gradient(180deg,var(--prism-c),var(--prism-d));
+    border-radius:50% 50% 50% 50%/62% 62% 38% 38%;clip-path:polygon(0 0,100% 0,100% 68%,50% 100%,0 68%)}
+  .msg.you::before{content:"";position:absolute;right:-11px;top:14px;width:9px;height:12px;background:var(--faint);
+    border-radius:50% 50% 50% 50%/62% 62% 38% 38%;clip-path:polygon(0 0,100% 0,100% 68%,50% 100%,0 68%)}
+
+  /* reasoning pill */
+  .think{margin:0 0 9px;font:11.5px var(--mono)}
+  .think summary{cursor:pointer;list-style:none;display:inline-flex;gap:7px;align-items:center;
+    background:color-mix(in srgb, var(--prism-a) 14%, transparent);
+    border:1px solid color-mix(in srgb, var(--prism-a) 28%, transparent);
+    color:var(--prism-a);border-radius:999px;padding:4px 11px;-webkit-user-select:none;user-select:none}
+  .think summary::-webkit-details-marker{display:none}
+  .think summary .a{transition:transform .18s;display:inline-block}
+  .think[open] summary .a{transform:rotate(90deg)}
+  .think .tb{margin-top:8px;padding:9px 11px;border-radius:11px;background:var(--bg2);
+    color:var(--dim);border:1px solid var(--rule);line-height:1.62;white-space:pre-wrap}
+
+  /* tool pocket */
+  .pocket{margin-top:10px;border-top:1px dashed color-mix(in srgb, var(--prism-c) 26%, transparent);padding-top:9px}
+  .chip{display:flex;align-items:center;gap:8px;font:12px var(--mono);color:var(--fg);
+    background:var(--bg2);border:1px solid var(--rule);border-radius:9px;padding:7px 10px;margin-bottom:6px;cursor:pointer}
+  .chip:last-child{margin-bottom:0}
+  .chip .ic{width:16px;height:16px;border-radius:5px;flex:0 0 auto;display:grid;place-content:center;
+    font-size:10px;color:var(--bg);
+    background:linear-gradient(135deg,var(--prism-c),var(--prism-d))}
+  .chip .nm{letter-spacing:.5px;flex:0 0 auto;color:var(--dim)}
+  .chip .arg{margin-left:auto;color:var(--faint);font-size:11px;max-width:46%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chip.run .ic{background:transparent;border:2px solid var(--prism-c);animation:spin 1s linear infinite;color:transparent}
+  .chip.err{border-color:color-mix(in srgb, var(--danger) 45%, transparent)}
+  .chip.err .ic{background:var(--danger);color:var(--bg)}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .out{background:var(--bg2);border:1px solid var(--rule);border-radius:9px;padding:9px 11px;margin:2px 0 8px;
+    font:11.5px/1.62 var(--mono);color:var(--dim);white-space:pre;overflow:auto;max-height:200px}
+  .out .a{color:var(--prism-d)}.out .d{color:var(--danger)}
+  .out.collapsed{display:none}
+
+  .bubble-in{display:flex;align-items:center;gap:9px;color:var(--prism-c);font:13px var(--mono);
+    align-self:flex-start;background:var(--bot);border:1px solid var(--edge);
+    border-radius:20px 20px 20px 7px;padding:11px 15px;max-width:84%;animation:rise .22s ease-out}
+  .bubble-in .d{width:8px;height:11px;background:linear-gradient(180deg,var(--prism-c),var(--prism-d));
+    animation:rip 1.5s ease-out infinite;
+    border-radius:50% 50% 50% 50%/62% 62% 38% 38%;clip-path:polygon(0 0,100% 0,100% 68%,50% 100%,0 68%)}
+  .bubble-in .dots i{display:inline-block;width:5px;height:5px;margin-right:3px;border-radius:50%;
+    background:var(--prism-c);opacity:.4;animation:blink 1.2s infinite}
+  .bubble-in .dots i:nth-child(2){animation-delay:.2s}
+  .bubble-in .dots i:nth-child(3){animation-delay:.4s}
+  @keyframes blink{0%,100%{opacity:.35}50%{opacity:1}}
+  @keyframes rip{0%{box-shadow:0 0 0 0 color-mix(in srgb, var(--prism-c) 55%, transparent)}
+                100%{box-shadow:0 0 0 12px transparent}}
+
+  .notice{align-self:flex-start;max-width:94%;font:12px var(--mono);color:var(--fg);
+    background:color-mix(in srgb, var(--danger) 12%, transparent);
+    border:1px solid color-mix(in srgb, var(--danger) 42%, transparent);border-radius:12px;
+    padding:10px 12px;display:flex;gap:9px;align-items:center;animation:rise .22s ease-out}
+  .notice .x{color:var(--danger)}
+  .notice a{margin-left:auto;color:var(--prism-b);text-decoration:none;white-space:nowrap}
+
+  .empty{flex:1;display:grid;place-content:center;gap:16px;text-align:center;color:var(--faint)}
+  .empty .seed{width:14px;height:19px;margin:0 auto;
+    background:linear-gradient(180deg,var(--prism-a),var(--prism-c),var(--prism-d));
+    border-radius:50% 50% 50% 50%/62% 62% 38% 38%;clip-path:polygon(0 0,100% 0,100% 68%,50% 100%,0 68%)}
+  .empty .t{font:12px var(--mono);letter-spacing:4px;color:var(--dim)}
+  .empty .s{font:11px var(--mono)}
+
+  .composer{display:flex;align-items:center;gap:10px;padding:12px 16px 16px;position:relative}
+  .composer::before{content:"";position:absolute;left:16px;right:16px;top:0;height:1px;
+    background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--prism-a) 40%,transparent),
+      color-mix(in srgb,var(--prism-c) 40%,transparent),transparent)}
+  .composer .c{color:var(--faint);font-family:var(--mono)}
+  .composer input{flex:1;min-width:0;background:var(--bg2);border:1px solid var(--rule);border-radius:999px;
+    padding:11px 16px;outline:none;color:var(--fg);font:14.5px var(--sans)}
+  .composer input:focus{border-color:color-mix(in srgb,var(--prism-a) 55%,transparent);
+    box-shadow:0 0 0 3px color-mix(in srgb,var(--prism-a) 14%,transparent)}
+  .btn{width:42px;height:42px;border-radius:50%;border:0;color:var(--bg);
+    font-size:18px;cursor:pointer;display:grid;place-content:center;flex:0 0 auto;transition:transform .12s;
+    background:linear-gradient(135deg,var(--prism-a),var(--prism-b) 55%,var(--prism-c));
+    box-shadow:0 6px 18px -8px var(--glow)}
+  .btn:active{transform:scale(.9)}
+  .btn.stop{background:var(--danger);box-shadow:none}
+  .btn[disabled]{background:var(--bot);color:var(--faint);box-shadow:none;border:1px solid var(--rule)}
+  ::-webkit-scrollbar{width:9px}::-webkit-scrollbar-thumb{background:var(--rule);border-radius:9px}
+</style>
+</head>
+<body>
+<div class="phone">
+  <header>
+    <span class="back" title="back">‹</span>
+    <span class="t" id="title">fix the login redirect</span>
+    <span class="m" id="meta">deepseek-v4.1-flash</span>
+    <span class="theme" id="theme" title="toggle theme">◐</span>
+  </header>
+
+  <div class="chat" id="chat">
+    <div class="who you">you</div>
+    <div class="msg you">the /login redirect is broken — after signing in it bounces straight back to /login</div>
+
+    <div class="who">lumen <span class="meta">· 4.2s</span></div>
+    <div class="msg bot">
+      <details class="think">
+        <summary><span class="a">▸</span> thinking · 268 chars</summary>
+        <div class="tb">A redirect loop usually means the middleware runs before the session cookie is written. Read the auth middleware and the login route, then check the order of cookie-set vs redirect.</div>
+      </details>
+      Found it. The session cookie is set <code style="font-family:var(--mono);color:var(--prism-c)">after</code> <code style="font-family:var(--mono);color:var(--prism-c)">res.redirect()</code>, so the browser leaves before <code style="font-family:var(--mono);color:var(--prism-c)">Set-Cookie</code> is written — the next request looks unauthenticated and loops back. Writing the cookie first fixes it.
+      <div class="pocket">
+        <div class="chip" onclick="var o=this.nextElementSibling;o.classList.toggle('collapsed')">
+          <span class="ic">✓</span><span class="nm">READ</span><span class="arg">src/auth/middleware.ts</span></div>
+        <div class="out collapsed">export function requireAuth(req, res, next) {
+  if (!req.cookies.sid) return res.redirect('/login');
+  next();
+}</div>
+        <div class="chip" onclick="var o=this.nextElementSibling;o.classList.toggle('collapsed')">
+          <span class="ic">✓</span><span class="nm">READ</span><span class="arg">src/routes/login.ts</span></div>
+        <div class="out collapsed">router.post('/login', (req, res) => {
+  const token = signJwt(req.user);
+  return res.redirect(next ?? '/');
+  res.cookie('sid', token, { httpOnly: true }); // never reached
+});</div>
+        <div class="chip" onclick="var o=this.nextElementSibling;o.classList.toggle('collapsed')">
+          <span class="ic">✓</span><span class="nm">EDIT</span><span class="arg">src/routes/login.ts</span></div>
+        <div class="out">  const token = signJwt(req.user);
+<span class="a">+ res.cookie('sid', token, { httpOnly: true, sameSite: 'lax' });</span>
+  return res.redirect(next ?? '/');
+<span class="d">- res.cookie('sid', token, { httpOnly: true });</span></div>
+      </div>
+    </div>
+
+    <div class="who">lumen <span class="meta">· running</span></div>
+    <div class="msg bot">
+      <div class="pocket" style="border-top:0;padding-top:0;margin-top:0">
+        <div class="chip run"><span class="ic"></span><span class="nm">BASH</span><span class="arg">npm test -- auth</span></div>
+      </div>
+    </div>
+
+    <div class="bubble-in"><span class="d"></span><span class="dots"><i></i><i></i><i></i></span></div>
+
+    <div class="notice"><span class="x">!</span> Authentication failed — check your API key.<a href="#" onclick="return false">update key</a></div>
+  </div>
+
+  <form class="composer" id="composer" onsubmit="return false">
+    <span class="c">&gt;</span>
+    <input id="input" placeholder="ask the agent…" autocomplete="off">
+    <button class="btn" id="send" title="send">↑</button>
+  </form>
+</div>
+
+<script>
+// theme toggle: dark prism <-> light prism
+const themeBtn = document.getElementById('theme');
+themeBtn.addEventListener('click', () => {
+  const cur = document.documentElement.getAttribute('data-theme');
+  document.documentElement.setAttribute('data-theme', cur === 'light' ? 'dark' : 'light');
+});
+
+const chat = document.getElementById('chat');
+const input = document.getElementById('input');
+const send = document.getElementById('send');
+let busy = false;
+
+function syncButton(){
+  send.classList.toggle('stop', busy);
+  send.textContent = busy ? '■' : '↑';
+  send.title = busy ? 'stop' : 'send';
+  send.disabled = !busy && input.value.trim() === '';
+}
+input.addEventListener('input', syncButton);
+syncButton();
+
+document.getElementById('composer').addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (busy) return;
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  const who = document.createElement('div'); who.className = 'who you'; who.textContent = 'you';
+  const m = document.createElement('div'); m.className = 'msg you'; m.textContent = text;
+  chat.append(who, m);
+  busy = true; syncButton();
+  const think = document.createElement('div'); think.className = 'bubble-in';
+  think.innerHTML = '<span class="d"></span><span class="dots"><i></i><i></i><i></i></span>';
+  chat.append(think);
+  chat.scrollTop = chat.scrollHeight;
+  setTimeout(() => {
+    think.remove();
+    const w = document.createElement('div'); w.className = 'who'; w.textContent = 'lumen';
+    const b = document.createElement('div'); b.className = 'msg bot';
+    b.textContent = '(demo) wired up — this is where the streamed answer lands.';
+    chat.append(w, b); chat.scrollTop = chat.scrollHeight;
+    busy = false; syncButton();
+  }, 1400);
+});
+send.addEventListener('click', () => {
+  if (busy) { busy = false; syncButton(); } else { document.getElementById('composer').requestSubmit(); }
+});
+</script>
+</body>
+</html>
