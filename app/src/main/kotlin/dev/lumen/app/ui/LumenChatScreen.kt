@@ -393,9 +393,18 @@ fun LumenChatScreen(
                             var y = from + step
                             while (y < to) { p.lineTo(ropeXAt(y), y); y += step }
                             p.lineTo(ropeXAt(to), to)
+                            val a = 0.7f + 0.2f * waveEnv
                             drawPath(
                                 p,
-                                color = colors.faint.copy(alpha = 0.7f + 0.2f * waveEnv),
+                                brush = Brush.verticalGradient(
+                                    0f to Color.Transparent,
+                                    0.16f to colors.faint.copy(alpha = 0.7f * a),
+                                    0.5f to colors.faint.copy(alpha = a),
+                                    0.84f to colors.faint.copy(alpha = 0.7f * a),
+                                    1f to Color.Transparent,
+                                    startY = visibleTop,
+                                    endY = visibleBottom,
+                                ),
                                 style = Stroke(width = 1.2.dp.toPx()),
                             )
                         }
@@ -523,6 +532,7 @@ fun LumenChatScreen(
         if (error != null) {
             ErrorNotice(error, colors, onEditKey)
         }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.rule))
         Composer(input, busy, colors, onInput, onSend, onStop, onToggleTheme, onEditKey)
     }
 }
@@ -534,7 +544,9 @@ private fun EmptyRope(colors: LumenColors, modifier: Modifier = Modifier) {
         modifier.padding(horizontal = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("lumen", color = colors.faint, fontFamily = Mono, fontSize = 15.sp, letterSpacing = 7.sp)
+        Box(Modifier.size(10.dp).clip(CircleShape).background(colors.faint))
+        Spacer(Modifier.height(16.dp))
+        Text("lumen", color = colors.dim, fontFamily = Mono, fontSize = 15.sp, letterSpacing = 7.sp)
         Spacer(Modifier.height(8.dp))
         Text(
             "ask the agent to begin",
