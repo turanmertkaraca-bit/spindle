@@ -18,7 +18,7 @@ jobs:
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
       - name: Build + test JVM modules
-        run: ./gradlew :core:test :tools:test :provider-openai:test :provider-anthropic:test :store-sqlite:test --no-daemon --stacktrace
+        run: ./gradlew :core:test :tools:test :provider-openai:test :provider-anthropic:test :store-sqlite:test :server:test --no-daemon --stacktrace
 
   android:
     name: android app (robolectric)

@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>lumen · ui lab</title>
+<style>
+  :root{
+    --bg:#0a1a24; --surface:#0e2230; --fg:#e8f4f8; --dim:#8fb0be; --faint:#48667a;
+    --rule:#173340; --water:#22d3ee; --accent:#38bdf8; --danger:#e5484d;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f7fbfc; --surface:#edf5f8; --fg:#0c2530; --dim:#557785;
+           --faint:#9ab5c1; --rule:#dbe9ef; --water:#0ea5c9; --accent:#0e7490; }
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--fg); font-family:var(--mono);
+    display:grid; grid-template-columns:260px 1fr; grid-template-rows:100%;
+    overflow:hidden;
+  }
+  aside{border-right:1px solid var(--rule); display:flex; flex-direction:column; min-height:0}
+  aside header{padding:16px 16px 8px}
+  .brand{font-size:20px; letter-spacing:6px; color:var(--fg)}
+  .sub{font-size:11px; color:var(--faint); margin-top:4px}
+  .newbtn{
+    margin:10px 12px; padding:10px; border:0; border-radius:999px; cursor:pointer;
+    background:var(--water); color:var(--bg); font:600 13px var(--mono);
+  }
+  .session-list{flex:1; overflow:auto; padding:4px 8px 16px}
+  .session{display:flex; gap:8px; align-items:center; padding:8px 8px; border-radius:10px; cursor:pointer}
+  .session:hover{background:color-mix(in srgb, var(--surface) 80%, transparent)}
+  .session.active{background:var(--surface)}
+  .dot{width:9px;height:12px;flex:0 0 auto;background:var(--water);
+       border-radius:50% 50% 50% 50%/60% 60% 40% 40%; clip-path:polygon(0 0,100% 0,100% 70%,50% 100%,0 70%)}
+  .s-title{font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .s-prev{font-size:11px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .s-txt{min-width:0; flex:1}
+
+  main{display:flex; flex-direction:column; min-width:0; min-height:0}
+  .topbar{display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid var(--rule)}
+  .topbar select{
+    background:var(--surface); color:var(--fg); border:1px solid var(--rule);
+    border-radius:8px; padding:6px 8px; font:12px var(--mono); max-width:340px;
+  }
+  .status{font-size:11px; color:var(--dim); margin-left:auto}
+  .status b{color:var(--water); font-weight:600}
+  select:focus{outline:1px solid var(--water)}
+
+  .timeline{flex:1; overflow:auto; padding:24px 0; display:flex; flex-direction:column; gap:2px}
+  .row{position:relative; padding:0 22px; display:flex; justify-content:center}
+  .row::before{
+    content:""; position:absolute; left:50%; top:0; bottom:0; width:1px;
+    background:linear-gradient(var(--rule),color-mix(in srgb,var(--water) 40%,var(--rule)),var(--rule));
+    opacity:.5;
+  }
+  .node{position:relative; z-index:1; max-width:760px; width:100%}
+
+  .dot-only{display:flex; justify-content:center; padding:10px 0}
+  .dot-only .dot{width:10px;height:14px;opacity:.9;background:var(--dim)}
+
+  .card{
+    border:1px solid color-mix(in srgb,var(--water) 22%,var(--rule));
+    background:linear-gradient(var(--surface),color-mix(in srgb,var(--surface) 92%,transparent));
+    border-radius:20px; padding:14px 16px; backdrop-filter:blur(2px);
+  }
+  .card.you{border-color:var(--rule)}
+  .card.err{border-color:color-mix(in srgb,var(--danger) 55%,var(--rule))}
+  .head{display:flex; align-items:center; gap:8px; margin-bottom:8px}
+  .label{font-size:11px; letter-spacing:1.5px; color:var(--dim)}
+  .tag{margin-left:auto; font-size:11px; color:var(--faint)}
+  .body{font-size:14px; line-height:1.65; white-space:pre-wrap; word-break:break-word}
+  .reasoning{
+    border:1px solid color-mix(in srgb,var(--water) 18%,var(--rule));
+    background:color-mix(in srgb,var(--water) 8%,transparent);
+    border-radius:12px; margin-bottom:10px; overflow:hidden;
+  }
+  .reasoning summary{cursor:pointer; padding:7px 10px; font-size:11px; color:var(--dim); list-style:none}
+  .reasoning summary::-webkit-details-marker{display:none}
+  .reasoning[open] summary{border-bottom:1px solid color-mix(in srgb,var(--water) 15%,transparent)}
+  .reasoning .rbody{padding:8px 10px; font-size:12px; line-height:1.6; color:var(--dim); white-space:pre-wrap}
+  .tool{margin-top:10px; border-top:1px solid var(--rule); padding-top:8px; font-size:12px; color:var(--dim)}
+  .tool .name{color:var(--water)}
+  .tool.err .name{color:var(--danger)}
+  .tool pre{margin:6px 0 0; white-space:pre-wrap; color:var(--faint); max-height:220px; overflow:auto}
+
+  .composer{
+    display:flex; align-items:center; gap:10px; padding:12px 16px;
+    border-top:1px solid var(--rule); background:var(--bg);
+  }
+  .composer .chev{color:var(--faint)}
+  .composer input{
+    flex:1; background:transparent; border:0; color:var(--fg); font:14px var(--mono); outline:none;
+  }
+  .send{
+    border:0; background:transparent; color:var(--water); font:600 14px var(--mono);
+    cursor:pointer; padding:6px 10px; border-radius:8px; transition:transform .12s ease;
+  }
+  .send:active{transform:scale(.86)}
+  .send.stop{color:var(--danger)}
+
+  .empty{flex:1; display:grid; place-content:center; text-align:center; color:var(--faint); gap:14px}
+  .empty .seed{width:12px;height:16px;margin:0 auto}
+  .hint{font-size:11px; color:var(--faint); padding:0 16px 8px}
+
+  /* simple water ripple on new nodes */
+  @keyframes ripple{ from{ box-shadow:0 0 0 0 color-mix(in srgb,var(--water) 45%,transparent) }
+                     to  { box-shadow:0 0 0 16px transparent } }
+  .ripple{animation:ripple .9s ease-out 1}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:var(--rule); border-radius:8px}
+</style>
+</head>
+<body>
+  <aside>
+    <header>
+      <div class="brand">lumen</div>
+      <div class="sub">ui lab · real agent, editable page</div>
+    </header>
+    <button class="newbtn" id="newchat">＋ new chat</button>
+    <div class="session-list" id="sessions"></div>
+  </aside>
+
+  <main>
+    <div class="topbar">
+      <select id="model"></select>
+      <div class="status" id="status">idle</div>
+    </div>
+    <div class="timeline" id="timeline">
+      <div class="empty" id="empty">
+        <div class="dot seed" style="background:var(--faint)"></div>
+        <div>ask the agent to begin</div>
+      </div>
+    </div>
+    <div class="hint">edit <code>web/index.html</code> + refresh — the backend is live</div>
+    <form class="composer" id="composer">
+      <span class="chev">&gt;</span>
+      <input id="input" placeholder="ask the agent…" autocomplete="off">
+      <button class="send" id="send" type="submit">send</button>
+    </form>
+  </main>
+
+<script>
+// ---- tiny state ----
+const state = {
+  sessionId: null,
+  model: null,
+  busy: false,
+  // render model: messageId -> {role, parts:[{id,type,text,done}], el}
+  messages: new Map(),
+  order: [],
+};
+
+const $ = (id) => document.getElementById(id);
+const timeline = $('timeline');
+const input = $('input');
+const sendBtn = $('send');
+
+// ---- boot ----
+async function boot() {
+  const info = await fetch('/api/models').then(r => r.json());
+  const sel = $('model');
+  sel.innerHTML = '';
+  for (const m of info.models) {
+    const o = document.createElement('option');
+    o.value = m.ref; o.textContent = m.label + ' · ' + m.provider;
+    sel.appendChild(o);
+  }
+  state.model = sel.value;
+  if (!info.hasKey) $('status').innerHTML = 'no key · free routing only';
+  sel.onchange = () => { state.model = sel.value; };
+  await loadSessions();
+  subscribe();
+}
+
+async function loadSessions() {
+  const rows = await fetch('/api/sessions').then(r => r.json());
+  const box = $('sessions');
+  box.innerHTML = '';
+  if (!rows.length) {
+    box.innerHTML = '<div class="sub" style="padding:8px">no chats yet</div>';
+    return;
+  }
+  for (const s of rows) {
+    const el = document.createElement('div');
+    el.className = 'session' + (s.id === state.sessionId ? ' active' : '');
+    el.onclick = () => openSession(s.id);
+    el.innerHTML = `<span class="dot"></span><span class="s-txt">
+      <div class="s-title">${esc(s.title)}</div>
+      <div class="s-prev">${esc(s.preview || '')}</div></span>`;
+    box.appendChild(el);
+  }
+}
+
+async function newChat() {
+  const r = await fetch('/api/sessions', {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({model: state.model}),
+  }).then(r => r.json());
+  state.sessionId = r.id;
+  resetTimeline();
+  await loadSessions();
+  input.focus();
+}
+
+async function openSession(id) {
+  const s = await fetch('/api/sessions/' + id).then(r => r.json());
+  state.sessionId = s.id;
+  resetTimeline();
+  for (const m of s.messages) ingestMessage(m);
+  await loadSessions();
+}
+
+function resetTimeline() {
+  state.messages.clear();
+  state.order = [];
+  timeline.innerHTML = '';
+  timeline.appendChild($('empty') || document.createElement('div'));
+}
+
+// ---- composer ----
+$('composer').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if (!text || !state.sessionId) return;
+  input.value = '';
+  // optimistic echo
+  addPart('local-you', 'you', 'text', text);
+  setBusy(true);
+  await fetch(`/api/sessions/${state.sessionId}/send`, {
+    method: 'POST',
+    headers: {'content-type':'application/json'},
+    body: JSON.stringify({text, model: state.model}),
+  });
+});
+
+sendBtn.onclick = (e) => {
+  if (state.busy) {
+    e.preventDefault();
+    fetch(`/api/sessions/${state.sessionId}/stop`, {method:'POST'});
+    setBusy(false);
+  }
+};
+
+function setBusy(b) {
+  state.busy = b;
+  sendBtn.textContent = b ? 'stop' : 'send';
+  sendBtn.classList.toggle('stop', b);
+  $('status').innerHTML = b ? '<b>running…</b>' : 'idle';
+}
+
+// ---- events (SSE) ----
+function subscribe() {
+  const es = new EventSource('/api/events');
+  es.onmessage = (ev) => {
+    let e; try { e = JSON.parse(ev.data); } catch { return; }
+    if (e.hello) return;
+    if (e.sessionId && state.sessionId && e.sessionId !== state.sessionId) {
+      // keep the sidebar fresh even for other sessions
+      if (e.state) loadSessions();
+      return;
+    }
+    handle(e);
+  };
+}
+
+function handle(e) {
+  if (e.type === undefined && e.state) onState(e);
+  else if (e.role) { /* MessageCreated: ignore, store rebuild covers it */ if (e.role === 'assistant') setBusy(true); }
+  else if (e.kind) onDelta(e);
+  else if (e.part) onPartUpdated(e);
+  else if (e.output !== undefined && e.partId) onToolFinished(e);
+  else if (e.name && e.index !== undefined) onToolStarted(e);
+  else if (e.message && e.state === undefined && e.fraction === undefined && !e.tool) onError(e);
+  else if (e.fraction !== undefined) onProgress(e);
+  else if (e.state) onState(e);
+  else if (e.tool) onPermission(e);
+  else if (e.question) onQuestion(e);
+}
+
+function onState(e) {
+  setBusy(e.state === 'RUNNING');
+  if (e.state === 'IDLE' || e.state === 'ERROR') { loadSessions(); rebuildFromStore(); }
+}
+
+function onDelta(e) {
+  const kind = e.kind === 'reasoning' ? 'reasoning' : 'text';
+  addPart(e.messageId, e.kind === 'reasoning' ? 'think' : 'assistant', kind, e.text, e.partId);
+}
+
+function onPartUpdated(e) {
+  if (e.part?.type === 'tool' && e.part.tool) {
+    upsertTool(e.messageId, e.part.id, e.part.tool);
+  }
+}
+
+function onToolStarted(e) {
+  upsertTool(e.messageId, `call:${e.messageId}:${e.index}`,
+    {name: e.name, argumentsJson: '', state: 'RUNNING', output: null, isError: false});
+}
+
+function onToolFinished(e) {
+  upsertTool(e.messageId, e.partId,
+    {name: '', argumentsJson: '', state: e.isError ? 'ERROR' : 'DONE', output: e.output, isError: e.isError});
+}
+
+function onProgress(e) { $('status').textContent = e.message; }
+function onError(e) { $('status').innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`; }
+function onPermission(e) { $('status').textContent = 'permission: ' + e.tool; }
+function onQuestion(e) { $('status').textContent = 'question: ' + e.question; }
+
+async function rebuildFromStore() {
+  if (!state.sessionId) return;
+  const s = await fetch('/api/sessions/' + state.sessionId).then(r => r.json());
+  resetTimeline();
+  for (const m of s.messages) ingestMessage(m);
+}
+
+// ---- rendering ----
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function getMessage(id, roleFallback) {
+  let m = state.messages.get(id);
+  if (!m) {
+    m = { role: roleFallback || 'assistant', parts: [], el: null };
+    state.messages.set(id, m);
+    state.order.push(id);
+  }
+  return m;
+}
+
+function addPart(msgId, role, type, text, partId) {
+  const m = getMessage(msgId, role);
+  m.role = role;
+  const pid = partId || (type + ':' + m.parts.length);
+  let p = m.parts.find(p => p.id === pid);
+  if (!p) { p = { id: pid, type, text: '' }; m.parts.push(p); }
+  p.text += text;
+  render();
+}
+
+function upsertTool(msgId, partId, tool) {
+  const m = getMessage(msgId, 'assistant');
+  let p = m.parts.find(p => p.id === partId);
+  if (!p) { p = { id: partId, type: 'tool', text: '', tool: {...tool} }; m.parts.push(p); }
+  else p.tool = { ...p.tool, ...tool };
+  render();
+}
+
+function ingestMessage(msg) {
+  const m = getMessage(msg.id, msg.role);
+  m.role = msg.role;
+  m.parts = (msg.parts || []).map(p => {
+    if (p.type === 'text') return { id: p.id, type: 'text', text: p.text || '' };
+    if (p.type === 'reasoning') return { id: p.id, type: 'reasoning', text: p.reasoning || '' };
+    if (p.type === 'tool') return { id: p.id, type: 'tool', text: '', tool: p.tool };
+    return { id: p.id, type: 'other', text: '' };
+  });
+  render();
+}
+
+function render() {
+  $('empty')?.remove();
+  timeline.innerHTML = '';
+  for (const id of state.order) {
+    const m = state.messages.get(id);
+    if (!m) continue;
+    const texts = m.parts.filter(p => p.type === 'text' || p.type === 'reasoning');
+    const reasonings = m.parts.filter(p => p.type === 'reasoning');
+    const tools = m.parts.filter(p => p.type === 'tool');
+    const body = m.parts.filter(p => p.type === 'text').map(p => p.text).join('');
+
+    // collapse reasoning when there is a body; show it while thinking
+    const row = document.createElement('div');
+    row.className = 'row';
+
+    if (m.role === 'you') {
+      row.innerHTML = card('you', 'YOU', '', body);
+    } else if (m.role === 'system') {
+      row.innerHTML = card('', 'SYSTEM', '', body);
+    } else {
+      const inner = document.createElement('div');
+      inner.className = 'node';
+      const hasBody = body.trim().length > 0;
+      if (reasonings.length) {
+        const total = reasonings.reduce((a, p) => a + p.text.length, 0);
+        const open = !hasBody || m.streaming;
+        inner.innerHTML += `<details class="reasoning" ${open ? 'open' : ''}>
+          <summary>${open ? '▾' : '▸'} thinking · ${total} chars</summary>
+          <div class="rbody">${esc(reasonings.map(p => p.text).join('\\n\\n'))}</div></details>`;
+      }
+      if (hasBody || tools.length === 0) {
+        inner.innerHTML += `<div class="body">${esc(body) || (state.busy ? '<span style="color:var(--dim)">…</span>' : '')}</div>`;
+      }
+      for (const t of tools) inner.innerHTML += toolHtml(t.tool);
+      const card = document.createElement('div');
+      card.className = 'card' + (tools.some(t => t.tool.isError) ? ' err' : '');
+      card.appendChild(inner);
+      const head = document.createElement('div');
+      head.className = 'head';
+      head.innerHTML = `<span class="dot" style="width:8px;height:11px"></span>
+        <span class="label">${tools.length ? tools[0].tool.name.toUpperCase() : 'ASSISTANT'}</span>
+        <span class="tag">${id.slice(-6)}</span>`;
+      card.prepend(head);
+      row.appendChild(card);
+    }
+    timeline.appendChild(row);
+  }
+  timeline.scrollTop = timeline.scrollHeight;
+}
+
+function card(cls, label, tag, body) {
+  return `<div class="card ${cls}"><div class="head">
+    <span class="dot" style="width:8px;height:11px"></span>
+    <span class="label">${label}</span><span class="tag">${tag}</span></div>
+    <div class="body">${esc(body)}</div></div>`;
+}
+
+function toolHtml(t) {
+  if (!t) return '';
+  const out = t.output ? `<pre>${esc(t.output.slice(0, 4000))}</pre>` : '';
+  return `<div class="tool ${t.isError ? 'err' : ''}">
+    <span class="name">${esc(t.name || t.state.toLowerCase())}</span> · ${esc(t.state.toLowerCase())}
+    ${out}</div>`;
+}
+
+$('newchat').onclick = newChat;
+boot();
+</script>
+</body>
+</html>
