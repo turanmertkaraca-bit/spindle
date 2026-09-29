@@ -433,7 +433,7 @@ private fun SpineNode(
                             stiffness = Spring.StiffnessMediumLow,
                         ),
                     )
-                    .clip(WaterShapes.drop(taper = 0.10f))
+                    .clip(RoundedCornerShape(26.dp))
                     .background(
                         Brush.verticalGradient(
                             0f to colors.surface,
@@ -443,7 +443,7 @@ private fun SpineNode(
                     .border(
                         1.dp,
                         if (step.failed) colors.danger().copy(alpha = 0.5f) else tint.copy(alpha = 0.22f),
-                        WaterShapes.drop(taper = 0.10f),
+                        RoundedCornerShape(26.dp),
                     )
                     .padding(horizontal = 16.dp, vertical = 14.dp),
             ) {
@@ -545,27 +545,17 @@ private fun WaterDot(size: androidx.compose.ui.unit.Dp, color: Color, ring: Bool
 @Composable
 private fun ThinkSection(think: String, colors: LumenColors) {
     var open by remember(think) { mutableStateOf(false) }
-    val arrow by animateFloatAsState(
-        targetValue = if (open) 90f else 0f,
-        animationSpec = tween(180),
-        label = "think-arrow",
-    )
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(colors.water.copy(alpha = 0.08f))
-            .border(1.dp, colors.water.copy(alpha = 0.16f), RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
+            .background(colors.water.copy(alpha = 0.10f))
             .clickable { open = !open }
             .padding(horizontal = 10.dp, vertical = 7.dp)
             .testTag("think-toggle"),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "▸",
-                color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
-                modifier = Modifier.graphicsLayer { rotationZ = arrow },
-            )
+            Text(if (open) "▾" else "▸", color = colors.dim, fontFamily = Mono, fontSize = 11.sp)
             Spacer(Modifier.width(7.dp))
             Text(
                 "thinking · ${think.length} chars",
