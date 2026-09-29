@@ -178,6 +178,6 @@ class LumenChatScreenTest {
         noNode(think)
         compose.onNodeWithTag("think-toggle").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText(think).assertExists()
+        compose.onNodeWithTag("think-body").assertExists()
     }
 }

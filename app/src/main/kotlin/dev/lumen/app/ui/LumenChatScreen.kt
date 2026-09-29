@@ -553,12 +553,6 @@ private fun ThinkSection(think: String, colors: LumenColors) {
     Column(
         Modifier
             .fillMaxWidth()
-            .animateContentSize(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMediumLow,
-                ),
-            )
             .clip(RoundedCornerShape(12.dp))
             .background(colors.water.copy(alpha = 0.08f))
             .border(1.dp, colors.water.copy(alpha = 0.16f), RoundedCornerShape(12.dp))
@@ -581,7 +575,11 @@ private fun ThinkSection(think: String, colors: LumenColors) {
         if (open) {
             Spacer(Modifier.height(6.dp))
             SelectionContainer {
-                Text(think, color = colors.dim, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp)
+                Text(
+                    think,
+                    color = colors.dim, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp,
+                    modifier = Modifier.testTag("think-body"),
+                )
             }
         }
     }
