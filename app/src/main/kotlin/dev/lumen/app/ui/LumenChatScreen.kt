@@ -17,6 +17,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.FlingBehavior
 import androidx.compose.foundation.gestures.ScrollScope
@@ -60,6 +61,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -80,7 +82,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.UiStep
-import dev.spindle.core.ui.DropletShape
 import dev.spindle.core.ui.FocusPolicy
 import dev.spindle.core.ui.RopeCurve
 import dev.spindle.core.ui.RopeLayout
@@ -338,7 +339,7 @@ fun LumenChatScreen(
             val focusY = viewportHeightPx / 2f
             val maxScrollPx = (count - 1).coerceAtLeast(0) * stride
             val canvasHeightPx = viewportHeightPx + maxScrollPx
-            val panelLeftPx = gutterPx + with(density) { 42.dp.toPx() }
+            val panelLeftPx = gutterPx + with(density) { 50.dp.toPx() }
             val panelMaxHeight = with(density) { (viewportHeightPx * 0.72f).toDp() }
 
             Box(Modifier.fillMaxSize()) {
@@ -393,8 +394,8 @@ fun LumenChatScreen(
                             p.lineTo(ropeXAt(to), to)
                             drawPath(
                                 p,
-                                color = colors.faint.copy(alpha = 0.55f + 0.25f * waveEnv),
-                                style = Stroke(width = 1.dp.toPx()),
+                                color = colors.faint.copy(alpha = 0.7f + 0.2f * waveEnv),
+                                style = Stroke(width = 1.2.dp.toPx()),
                             )
                         }
 
@@ -411,25 +412,21 @@ fun LumenChatScreen(
                             if (screenY < -120f || screenY > viewportHeightPx + 120f) continue
 
                             val focused = p.index == focusedIndex && bloom > 0.3f
-                            val dy = contentY - ropeFocus
-                            val lean = -RopeCurve.lean(dy, bowPx, bowHalfPx)
-                            val jiggle = if (focused) 8.dp.toPx() * bloom else 0f
-                            val x = ropeXAt(contentY) + 0.4f * p.size + jiggle
+                            val isTool = step0.kind == StepKind.TOOL || step0.kind == StepKind.SUBAGENT
+                            val tint = if (isTool) colors.spectrumAt(4) else colors.accent
                             val breathe = if (focused) breath else 1f
-                            val radius = (p.size * (0.5f + 0.3f * p.bloom) + 1.6.dp.toPx() * bloom) * breathe
-                            val tail = if (p.bloom > 0f) 8.dp.toPx() * p.bloom else 0f
-                            val spout = if (focused) 10.dp.toPx() * bloom else 0f
+                            val x = ropeXAt(contentY) + 0.4f * p.size + (if (focused) 6.dp.toPx() * bloom else 0f)
+                            val radius = (p.size * (0.42f + 0.36f * p.bloom) + 2.2.dp.toPx() * bloom) * breathe
+                            val rw = radius / stretch
+                            val rh = radius * stretch
+                            val topLeft = Offset(x - rw, contentY - rh)
+                            val oval = Size(2f * rw, 2f * rh)
 
                             if (focused) {
-                                val glowR = 30.dp.toPx()
-                                val glow = if (step0.kind == StepKind.TOOL || step0.kind == StepKind.SUBAGENT) {
-                                    colors.spectrumAt(4).copy(alpha = 0.20f * bloom)
-                                } else {
-                                    colors.accent.copy(alpha = 0.22f * bloom)
-                                }
+                                val glowR = 34.dp.toPx()
                                 drawCircle(
                                     brush = Brush.radialGradient(
-                                        colors = listOf(glow, Color.Transparent),
+                                        colors = listOf(tint.copy(alpha = 0.22f * bloom), Color.Transparent),
                                         center = Offset(x, contentY),
                                         radius = glowR,
                                     ),
@@ -438,52 +435,55 @@ fun LumenChatScreen(
                                 )
                             }
 
-                            val fill = when {
-                                step0.failed -> colors.danger()
-                                step0.running -> colors.bg
-                                focused -> colors.fg
-                                else -> lerp(colors.faint, colors.fg, p.bloom)
-                            }
-                            val pts = DropletShape.outline(
-                                x, contentY,
-                                DropletShape.Params(
-                                    radius = radius, tail = tail, spout = spout,
-                                    stretch = stretch, lean = lean,
-                                ),
-                            )
-                            val path = Path()
-                            path.moveTo(pts[0].x, pts[0].y)
-                            for (i in 1 until pts.size) path.lineTo(pts[i].x, pts[i].y)
-                            path.close()
-                            drawPath(path, color = fill)
-                            if (step0.running) {
-                                drawPath(path, color = colors.fg, style = Stroke(width = 2.dp.toPx()))
+                            when {
+                                step0.failed -> drawOval(colors.danger(), topLeft, oval)
+                                step0.running -> {
+                                    // a calm ring with a breathing core while a tool runs
+                                    drawOval(
+                                        tint.copy(alpha = 0.14f * (if (focused) bloom.coerceAtLeast(0.5f) else 0.6f)),
+                                        Offset(topLeft.x - 4.dp.toPx(), topLeft.y - 4.dp.toPx()),
+                                        Size(oval.width + 8.dp.toPx(), oval.height + 8.dp.toPx()),
+                                    )
+                                    drawOval(colors.bg, topLeft, oval)
+                                    drawOval(tint, topLeft, oval, style = Stroke(1.6.dp.toPx()))
+                                    val ir = radius * 0.4f * breathe
+                                    drawOval(tint, Offset(x - ir, contentY - ir), Size(2f * ir, 2f * ir))
+                                }
+                                else -> {
+                                    drawOval(lerp(colors.faint, colors.fg, p.bloom), topLeft, oval)
+                                    if (focused) {
+                                        drawOval(
+                                            tint.copy(alpha = 0.6f * bloom),
+                                            topLeft,
+                                            oval,
+                                            style = Stroke(1.4.dp.toPx()),
+                                        )
+                                        // a quiet thread from the bloomed bead to its text
+                                        drawLine(
+                                            color = colors.faint.copy(alpha = 0.45f * bloom),
+                                            start = Offset(x + rw + 2.dp.toPx(), contentY),
+                                            end = Offset(panelLeftPx, contentY),
+                                            strokeWidth = 1.dp.toPx(),
+                                        )
+                                    }
+                                }
                             }
 
-                            if (focused && step0.merged > 1) {
-                                // a merged run unfolds into its dots along the rope
+                            if (step0.merged > 1) {
+                                // a merged run keeps a tidy spectrum stack above the bead
                                 val dots = min(step0.merged, 3)
+                                val a = if (focused) bloom else 0.5f
                                 for (k in 0 until dots) {
                                     drawCircle(
-                                        color = colors.spectrumAt(k).copy(alpha = bloom),
-                                        radius = (3.4f - 0.4f * k).dp.toPx(),
-                                        center = Offset(x - 1.dp.toPx(), contentY - (15.dp.toPx() + k * 10.dp.toPx())),
-                                    )
-                                }
-                            } else if (step0.merged > 1) {
-                                val extra = (step0.merged - 1).coerceAtMost(2)
-                                for (k in 1..extra) {
-                                    drawCircle(
-                                        color = colors.faint,
-                                        radius = 1.6.dp.toPx(),
-                                        center = Offset(x - 1.8.dp.toPx() * k, contentY - 7.dp.toPx() - 3.dp.toPx() * k),
+                                        color = colors.spectrumAt(k).copy(alpha = a),
+                                        radius = (if (focused) 3.2f else 2f).dp.toPx(),
+                                        center = Offset(x, contentY - rh - 5.dp.toPx() - k * 4.dp.toPx()),
                                     )
                                 }
                             }
 
                             // prism: a focused tool/subagent fans into the spectrum,
                             // staying inside the gutter so it never crosses the text.
-                            // A merged cluster already shows its dots, so skip the fan.
                             if (focused && step0.merged == 1 && step0.rows.isNotEmpty()) {
                                 val n = min(step0.rows.size, 6)
                                 val spread = 44.dp.toPx()
@@ -492,7 +492,7 @@ fun LumenChatScreen(
                                     val endY = contentY + (t - 0.5f) * spread
                                     drawLine(
                                         color = colors.spectrumAt(k).copy(alpha = 0.5f * bloom),
-                                        start = Offset(x + spout * 0.5f, contentY),
+                                        start = Offset(x + rw * 0.4f, contentY),
                                         end = Offset(panelLeftPx, endY),
                                         strokeWidth = 1.2.dp.toPx(),
                                     )
@@ -549,26 +549,31 @@ private fun ErrorNotice(message: String, colors: LumenColors, onEditKey: (() -> 
     val auth = lower.contains("401") || lower.contains("auth") ||
         lower.contains("api key") || lower.contains("unauthorized")
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(8.dp))
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(10.dp))
             .background(colors.rule)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            .border(1.dp, colors.danger().copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(6.dp).clip(CircleShape).background(colors.danger()))
-        Spacer(Modifier.width(8.dp))
+        Box(Modifier.size(7.dp).clip(CircleShape).background(colors.danger()))
+        Spacer(Modifier.width(10.dp))
         Text(
             text = if (auth) "Authentication failed — check your API key." else oneLine(message),
-            color = colors.fg, fontFamily = Mono, fontSize = 11.sp,
+            color = colors.fg, fontFamily = Mono, fontSize = 12.sp, lineHeight = 16.sp,
             maxLines = 2, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         if (auth && onEditKey != null) {
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(10.dp))
             Text(
                 "update key",
-                color = colors.accent, fontFamily = Mono, fontSize = 11.sp,
-                modifier = Modifier.clickable { onEditKey() }.testTag("update-key"),
+                color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { onEditKey() }
+                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                    .testTag("update-key"),
             )
         }
     }

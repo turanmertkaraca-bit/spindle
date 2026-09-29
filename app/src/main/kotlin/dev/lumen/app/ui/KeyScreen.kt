@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -24,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -116,16 +118,22 @@ fun KeyScreen(
 
         Spacer(Modifier.height(24.dp))
         val canGo = key.isNotBlank()
-        Text(
-            "continue",
-            color = if (canGo) colors.accent else colors.faint,
-            fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium,
-            modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
+        Box(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(if (canGo) colors.accent else Color.Transparent)
+                .border(1.dp, if (canGo) Color.Transparent else colors.rule, RoundedCornerShape(10.dp))
                 .clickable(enabled = canGo) { onSubmit(provider, key) }
-                .padding(vertical = 10.dp, horizontal = 4.dp)
+                .padding(vertical = 14.dp)
                 .testTag("continue"),
-        )
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "continue",
+                color = if (canGo) colors.bg else colors.faint,
+                fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+            )
+        }
         Spacer(Modifier.weight(1f))
         Text(
             "keys stay on this device.\nthey are sent only to the provider you pick.",
