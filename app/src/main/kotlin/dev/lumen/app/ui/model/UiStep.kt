@@ -14,6 +14,9 @@ enum class StepKind { YOU, THINKING, TOOL, SUBAGENT, QUESTION, ASSISTANT }
  * @param failed the step ended in an error (red node)
  * @param merged how many steps this row represents; consecutive tool/subagent
  *        calls merge into a single merged droplet (>1 shows the extra dots)
+ * @param think reasoning folded into this block (see StepMapper.groupSteps);
+ *        shown expanded while it is alone and collapsed once [body] exists
+ * @param thinkTag the stable tag of the reasoning row, kept for tests/traceability
  */
 data class UiStep(
     val id: String,
@@ -28,4 +31,8 @@ data class UiStep(
     val merged: Int = 1,
     /** Child session id for a subagent step, so the UI can show what it did. */
     val childId: String? = null,
+    /** Reasoning grouped with this step; null when the step has none. */
+    val think: String? = null,
+    /** Tag of the folded reasoning row. */
+    val thinkTag: String? = null,
 )

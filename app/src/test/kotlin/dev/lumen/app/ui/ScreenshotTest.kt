@@ -100,15 +100,49 @@ class ScreenshotTest {
         )
     }
 
-    @Test fun light_assistant() = chat(LumenColors.Light, "light_assistant.png", 5)
+    @Test fun light_assistant() = chat(LumenColors.Light, "light_assistant.png", 4)
 
-    @Test fun dark_assistant() = chat(LumenColors.Dark, "dark_assistant.png", 5)
+    @Test fun dark_assistant() = chat(LumenColors.Dark, "dark_assistant.png", 4)
 
-    @Test fun light_merged_tools() = chat(LumenColors.Light, "light_merged_tools.png", 3)
+    @Test fun light_merged_tools() = chat(LumenColors.Light, "light_merged_tools.png", 2)
 
-    @Test fun dark_subagent() = chat(LumenColors.Dark, "dark_subagent.png", 4)
+    @Test fun dark_subagent() = chat(LumenColors.Dark, "dark_subagent.png", 3)
 
     @Test fun light_early_rope() = chat(LumenColors.Light, "light_early.png", 1)
+
+    @Test fun dark_thinking() = shoot("dark_thinking.png") {
+        LumenChatScreen(
+            steps = listOf(
+                UiStep("u1", StepKind.YOU, "YOU", "a1b2c3", "why is the sky blue", "why is the sky blue"),
+                UiStep(
+                    "t1", StepKind.THINKING, "THINKING", "c3d4e5", "considering",
+                    "Rayleigh scattering makes shorter wavelengths bounce around the atmosphere far more than longer ones, so blue light reaches the eye from every direction.",
+                ),
+            ),
+            input = "", busy = true, error = null,
+            colors = LumenColors.Dark, forceOpenIndex = 1,
+            onHome = {}, ambient = false, onToggleTheme = {}, onEditKey = {},
+        )
+    }
+
+    @Test fun light_answered() = shoot("light_answered.png") {
+        LumenChatScreen(
+            steps = listOf(
+                UiStep("u1", StepKind.YOU, "YOU", "a1b2c3", "why is the sky blue", "why is the sky blue"),
+                UiStep(
+                    "t1", StepKind.THINKING, "THINKING", "c3d4e5", "considering",
+                    "Rayleigh scattering makes shorter wavelengths bounce around the atmosphere far more than longer ones, so blue light reaches the eye from every direction.",
+                ),
+                UiStep(
+                    "a1", StepKind.ASSISTANT, "ASSISTANT", "d1e2f3", "it scatters",
+                    "sunlight scatters off air molecules, and short blue wavelengths scatter far more than red, so the sky looks blue.",
+                ),
+            ),
+            input = "", busy = false, error = null,
+            colors = LumenColors.Light, forceOpenIndex = 1,
+            onHome = {}, ambient = false, onToggleTheme = {}, onEditKey = {},
+        )
+    }
 
     @Test fun empty_session() = shoot("empty_dark.png") {
         LumenChatScreen(
@@ -203,7 +237,7 @@ class ScreenshotTest {
             busy = false,
             error = null,
             colors = LumenColors.Dark,
-            forceOpenIndex = 6,
+            forceOpenIndex = 5,
             ambient = false,
             onToggleTheme = {},
         )
@@ -219,7 +253,7 @@ class ScreenshotTest {
             busy = false,
             error = null,
             colors = LumenColors.Light,
-            forceOpenIndex = 6,
+            forceOpenIndex = 5,
             ambient = false,
             onToggleTheme = {},
         )

@@ -149,4 +149,34 @@ class LumenChatScreenTest {
         }
         compose.onNodeWithTag("theme").assertIsDisplayed()
     }
+
+    @Test
+    fun `a lone thinking block is shown expanded`() {
+        compose.setContent {
+            LumenChatScreen(
+                listOf(UiStep("t", StepKind.THINKING, "THINKING", "x", "reasoning", "the full reasoning text")),
+                input = "", busy = true, error = null, modifier = viewport, ambient = false, forceOpenIndex = 0,
+            )
+        }
+        compose.onNodeWithText("the full reasoning text").assertIsDisplayed()
+    }
+
+    @Test
+    fun `an answered think collapses to a header and expands on tap`() {
+        val think = "weigh the options carefully"
+        compose.setContent {
+            LumenChatScreen(
+                listOf(
+                    UiStep("u", StepKind.YOU, "YOU", "x", "hi", "hi"),
+                    UiStep("t", StepKind.THINKING, "THINKING", "x", "reasoning", think),
+                    UiStep("a", StepKind.ASSISTANT, "ASSISTANT", "x", "answer", "the answer"),
+                ),
+                input = "", busy = false, error = null, modifier = viewport, ambient = false, forceOpenIndex = 1,
+            )
+        }
+        compose.onNodeWithText("thinking · ${think.length} chars").assertIsDisplayed()
+        noNode(think)
+        compose.onNodeWithTag("think-toggle").performClick()
+        compose.onNodeWithText(think).assertExists()
+    }
 }

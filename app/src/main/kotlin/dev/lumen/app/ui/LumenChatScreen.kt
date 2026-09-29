@@ -15,7 +15,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.FlingBehavior
 import androidx.compose.foundation.gestures.ScrollScope
-import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
@@ -46,10 +45,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
@@ -61,7 +58,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -73,10 +69,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.ui.model.StepKind
+import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
 import dev.spindle.core.ui.SpineLayout
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.filterNotNull
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -176,7 +172,6 @@ fun LumenChatScreen(
     ambient: Boolean = true,
 ) {
     val density = LocalDensity.current
-    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val flingBehavior = remember { calmFling() }
 
@@ -194,16 +189,27 @@ fun LumenChatScreen(
         1f
     }
 
+    // Fold each think block into the answer/tool that follows, so it can
+    // auto-collapse once the block has a real body. The raw rows stay intact
+    // upstream, so streaming deltas still find their part id.
+    val grouped = remember(steps) { StepMapper.groupSteps(steps) }
+
     // While the loop is between turns, show a working node so the screen is
     // never blank. It disappears as soon as real text arrives.
-    val pending = busy && steps.none { it.running } && (
-        steps.isEmpty() ||
-            steps.last().kind == StepKind.YOU ||
-            steps.last().kind == StepKind.TOOL ||
-            steps.last().kind == StepKind.SUBAGENT
+    val pending = busy && grouped.none { it.running } && (
+        grouped.isEmpty() ||
+            grouped.last().kind == StepKind.YOU ||
+            grouped.last().kind == StepKind.TOOL ||
+            grouped.last().kind == StepKind.SUBAGENT
         )
-    val display = remember(steps, pending) { if (pending) steps + WorkingStep else steps }
+    val display = remember(grouped, pending) { if (pending) grouped + WorkingStep else grouped }
     val count = display.size
+
+    // The expanded node is sticky: it follows the reader's scroll, or the tail
+    // while following. It is never recomputed from live geometry while a node
+    // grows — that flip-flop was the bulk of the old timeline's glitch.
+    var focusedId by remember { mutableStateOf<String?>(null) }
+    val firstId = display.firstOrNull()?.id
 
     Column(modifier.fillMaxSize().background(colors.bg).imePadding()) {
         if (onHome != null) {
@@ -234,19 +240,18 @@ fun LumenChatScreen(
             val viewportCenter = viewportPx / 2f
             val verticalPad = with(density) { viewportCenter.toDp() }
 
-            val focusedIndex = if (forceOpenIndex != null) {
-                forceOpenIndex.coerceIn(0, max(0, count - 1))
-            } else {
-                SpineLayout.nearestCenter(
-                    listState.layoutInfo.visibleItemsInfo.map { it.index to (it.offset + it.size / 2f) },
-                    (listState.layoutInfo.viewportStartOffset + listState.layoutInfo.viewportEndOffset) / 2f,
-                )
-            }
+            val focusedIndex = forceOpenIndex?.coerceIn(0, max(0, count - 1))
+                ?: display.indexOfFirst { it.id == focusedId }.takeIf { it >= 0 }
+                ?: max(0, count - 1)
+
+            // A new session (or an emptied one) clears the anchor, so focus
+            // falls back to the tail again.
+            LaunchedEffect(firstId) { focusedId = null }
 
             // Cold start lands on the newest node; appends are followed only when
             // the reader was already at the tail.
             var lastCount by remember { mutableStateOf(0) }
-            LaunchedEffect(count, forceOpenIndex) {
+            LaunchedEffect(count, firstId, forceOpenIndex) {
                 if (count == 0) {
                     lastCount = 0
                     return@LaunchedEffect
@@ -257,27 +262,47 @@ fun LumenChatScreen(
                     return@LaunchedEffect
                 }
                 val prev = lastCount
-                if (prev == 0) {
-                    listState.scrollToItem(count - 1)
-                } else if (count > prev && focusedIndex >= prev - 1) {
-                    listState.animateScrollToItem(count - 1)
+                when {
+                    prev == 0 -> listState.scrollToItem(count - 1)
+                    count > prev && focusedIndex >= prev - 1 -> listState.animateScrollToItem(count - 1)
                 }
                 lastCount = count
             }
 
-            // Click into place: on every settle, ease the nearest node onto the line.
-            LaunchedEffect(count, forceOpenIndex) {
+            // While the reader scrolls, the node nearest the line becomes the
+            // focused one. Our own scrolls land on the same node, so feeding this
+            // from any scroll (not just gestures) is safe; only a value change
+            // touches state.
+            LaunchedEffect(count, firstId, forceOpenIndex) {
                 if (forceOpenIndex != null) return@LaunchedEffect
-                snapshotFlow { listState.isScrollInProgress }
-                    .filter { !it }
-                    .collect {
-                        val info = listState.layoutInfo.visibleItemsInfo
+                snapshotFlow { if (listState.isScrollInProgress) listState.layoutInfo else null }
+                    .filterNotNull()
+                    .collect { layout ->
+                        val info = layout.visibleItemsInfo
                         if (info.isEmpty()) return@collect
-                        val vc = (listState.layoutInfo.viewportStartOffset +
-                            listState.layoutInfo.viewportEndOffset) / 2f
+                        val vc = (layout.viewportStartOffset + layout.viewportEndOffset) / 2f
                         val nearest = info.minByOrNull { abs((it.offset + it.size / 2f) - vc) } ?: return@collect
-                        val delta = SpineLayout.centerDelta(nearest.offset + nearest.size / 2f, vc)
-                        if (abs(delta) > 1f) listState.animateScrollBy(delta)
+                        val id = display.getOrNull(nearest.index)?.id
+                        if (id != null && id != focusedId) focusedId = id
+                    }
+            }
+
+            // Keep the focused node on the focus line. One instant correction per
+            // layout change (never an animation, so it cannot fight the growing
+            // node), and never while the reader is scrolling.
+            LaunchedEffect(focusedIndex, count, forceOpenIndex) {
+                if (forceOpenIndex != null) return@LaunchedEffect
+                snapshotFlow {
+                    val vc = (listState.layoutInfo.viewportStartOffset +
+                        listState.layoutInfo.viewportEndOffset) / 2f
+                    val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == focusedIndex }
+                    if (info == null) null else (info.offset + info.size / 2f) - vc
+                }
+                    .filterNotNull()
+                    .collect { delta ->
+                        if (!listState.isScrollInProgress && abs(delta) > 1f) {
+                            listState.scrollBy(delta)
+                        }
                     }
             }
 
@@ -309,13 +334,6 @@ fun LumenChatScreen(
                                 focused = index == focusedIndex,
                                 colors = colors,
                                 pulse = pulse,
-                                onGrow = { grew ->
-                                    if (!listState.isScrollInProgress) {
-                                        scope.launch {
-                                            listState.scrollBy(SpineLayout.growthRecenter(grew.toFloat()))
-                                        }
-                                    }
-                                },
                             )
                         }
                     }
@@ -341,7 +359,6 @@ private fun SpineNode(
     focused: Boolean,
     colors: LumenColors,
     pulse: Float,
-    onGrow: (Int) -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(step.id) { mutableStateOf(false) }
@@ -359,9 +376,6 @@ private fun SpineNode(
         else -> colors.accent
     }
 
-    var prevSize by remember(step.id) { mutableIntStateOf(0) }
-    var wasFocused by remember(step.id) { mutableStateOf(false) }
-
     Box(
         Modifier
             .fillMaxWidth()
@@ -373,12 +387,6 @@ private fun SpineNode(
                     end = Offset(cx, size.height),
                     strokeWidth = 1.dp.toPx(),
                 )
-            }
-            .onSizeChanged { s ->
-                val grew = s.height - prevSize
-                prevSize = s.height
-                if (focused && wasFocused && grew != 0) onGrow(grew)
-                wasFocused = focused
             },
         contentAlignment = Alignment.Center,
     ) {
@@ -452,6 +460,10 @@ private fun SpineNode(
                     )
                 }
                 Spacer(Modifier.height(8.dp))
+                if (step.think != null) {
+                    ThinkSection(step.think, colors)
+                    Spacer(Modifier.height(8.dp))
+                }
                 if (step.running && step.body.isBlank()) {
                     Text("thinking…", color = tint.copy(alpha = 0.4f + 0.6f * pulse), fontFamily = Mono, fontSize = 15.sp)
                 } else {
@@ -479,6 +491,39 @@ private fun SpineNode(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * The reasoning folded into a step: a one-line header that expands on tap. It
+ * starts collapsed, so once the answer arrives the thinking tucks away.
+ */
+@Composable
+private fun ThinkSection(think: String, colors: LumenColors) {
+    var open by remember(think) { mutableStateOf(false) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(colors.bg.copy(alpha = 0.5f))
+            .clickable { open = !open }
+            .padding(horizontal = 10.dp, vertical = 7.dp)
+            .testTag("think-toggle"),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(if (open) "▾" else "▸", color = colors.dim, fontFamily = Mono, fontSize = 11.sp)
+            Spacer(Modifier.width(7.dp))
+            Text(
+                "thinking · ${think.length} chars",
+                color = colors.dim, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 0.5.sp,
+            )
+        }
+        if (open) {
+            Spacer(Modifier.height(6.dp))
+            SelectionContainer {
+                Text(think, color = colors.dim, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp)
             }
         }
     }

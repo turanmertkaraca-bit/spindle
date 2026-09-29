@@ -98,6 +98,42 @@ object StepMapper {
     private fun isMergeable(kind: StepKind): Boolean =
         kind == StepKind.TOOL || kind == StepKind.SUBAGENT
 
+    /**
+     * Fold a reasoning row into the step that follows it in the same assistant
+     * turn — the answer text, or the tool/subagent call that comes next. The
+     * thinking rides on the host row as [UiStep.think]; the timeline shows it
+     * expanded while it is alone and collapses it to a header once the host has
+     * a body. Pure, so the fold is unit-tested and can run on every frame of a
+     * stream (the raw rows stay untouched, so deltas still find their part id).
+     */
+    fun groupSteps(steps: List<UiStep>): List<UiStep> {
+        val out = ArrayList<UiStep>(steps.size)
+        var pending: UiStep? = null
+        for (s in steps) {
+            if (s.kind == StepKind.THINKING) {
+                val prev = pending
+                pending = if (prev == null) s else prev.copy(
+                    body = prev.body + "\n\n" + s.body,
+                    summary = oneLine(prev.body + " " + s.body),
+                )
+                continue
+            }
+            val host = if (s.kind == StepKind.ASSISTANT || isMergeable(s.kind)) pending else null
+            if (host != null && s.body.isNotBlank()) {
+                out += s.copy(think = host.body, thinkTag = host.tag)
+                pending = null
+            } else {
+                if (pending != null) {
+                    out += pending
+                    pending = null
+                }
+                out += s
+            }
+        }
+        if (pending != null) out += pending
+        return out
+    }
+
     private fun merge(a: UiStep, b: UiStep): UiStep {
         val merged = a.merged + b.merged
         val promoted = a.kind == StepKind.SUBAGENT || b.kind == StepKind.SUBAGENT
