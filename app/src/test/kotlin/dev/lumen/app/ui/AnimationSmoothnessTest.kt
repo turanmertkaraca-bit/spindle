@@ -125,6 +125,17 @@ class AnimationSmoothnessTest {
                     " hitchRatio=%.2f".format(hitchRatio) +
                     " converged=$converged distinctPairs=$distinctPairs",
             )
+            File(dir, "metrics.txt").writeText(
+                buildString {
+                    appendLine("frames=${frames.size}")
+                    appendLine("firstLast=%.4f".format(firstLast))
+                    appendLine("medianConsecutive=%.4f".format(medianConsecutive))
+                    appendLine("maxConsecutive=%.4f".format(maxConsecutive))
+                    appendLine("hitchRatio=%.2f".format(hitchRatio))
+                    appendLine("converged=$converged")
+                    appendLine("distinctPairs=$distinctPairs")
+                },
+            )
             if (firstLast <= 0.25) println("[anim] WARN: first and last frames look nearly identical (no visible motion)")
             if (!converged) println("[anim] WARN: frames did not settle monotonically toward the last frame")
             if (hitchRatio > 6.0) println("[anim] WARN: possible hitch (max/median consecutive diff > 6x)")
