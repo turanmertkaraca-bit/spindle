@@ -1,6 +1,7 @@
 package dev.lumen.app.ui
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -333,6 +334,7 @@ fun LumenChatScreen(
                                 focused = index == focusedIndex,
                                 colors = colors,
                                 pulse = pulse,
+                                modifier = Modifier.animateItem(),
                             )
                         }
                     }
@@ -358,6 +360,7 @@ private fun SpineNode(
     focused: Boolean,
     colors: LumenColors,
     pulse: Float,
+    modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(step.id) { mutableStateOf(false) }
@@ -376,8 +379,18 @@ private fun SpineNode(
         else -> colors.accent
     }
 
+    // A one-shot ripple when a node becomes the focused one: draw-only, so it
+    // never re-lays-out the list. This is the "water moves" feedback on send.
+    val ripple = remember(step.id) { Animatable(0f) }
+    LaunchedEffect(focused, step.id) {
+        if (focused) {
+            ripple.snapTo(0f)
+            ripple.animateTo(1f, tween(durationMillis = 900, easing = FastOutSlowInEasing))
+        }
+    }
+
     Box(
-        Modifier
+        modifier
             .fillMaxWidth()
             .drawBehind {
                 val cx = size.width / 2f
@@ -396,9 +409,20 @@ private fun SpineNode(
                     strokeWidth = 1.5.dp.toPx(),
                 )
                 if (focused) {
-                    // A ripple ring around the focused node: the water surface.
+                    // A ripple ring that expands once and dissipates.
+                    val p = ripple.value
+                    if (p > 0f && p < 1f) {
+                        val grow = 0.18f + 0.5f * p
+                        drawCircle(
+                            color = colors.water.copy(alpha = (1f - p) * 0.5f),
+                            radius = size.height * grow,
+                            center = Offset(cx, size.height / 2f),
+                            style = Stroke(width = (1f + 1.5f * p).dp.toPx()),
+                        )
+                    }
+                    // A steady waterline ring so the focus always reads as "wet".
                     drawCircle(
-                        color = colors.water.copy(alpha = 0.16f + 0.1f * pulse),
+                        color = colors.water.copy(alpha = 0.14f + 0.08f * pulse),
                         radius = size.height * 0.22f,
                         center = Offset(cx, size.height / 2f),
                         style = Stroke(width = 1.dp.toPx()),
