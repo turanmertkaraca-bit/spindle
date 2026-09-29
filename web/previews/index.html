@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lumen · previews</title>
+<style>
+  :root{--bg:#07161f;--surface:#0e2230;--fg:#e8f4f8;--dim:#8fb0be;--faint:#4a6673;
+    --rule:#173340;--water:#22d3ee;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--mono);padding:32px 20px}
+  h1{font-size:15px;letter-spacing:6px;font-weight:500;margin:0 0 4px}
+  p{color:var(--faint);font-size:12px;margin:0 0 24px}
+  a.card{display:block;text-decoration:none;color:inherit;border:1px solid var(--rule);
+    background:var(--surface);border-radius:14px;padding:16px 16px;margin-bottom:12px}
+  a.card:hover{border-color:var(--water)}
+  .n{color:var(--water);font-size:12px;letter-spacing:1px}
+  .t{font-size:14px;margin:4px 0 4px}
+  .d{font-size:12px;color:var(--dim);line-height:1.6}
+</style>
+</head>
+<body>
+  <h1>lumen</h1>
+  <p>chat timeline directions · spine on the left, bubble chat</p>
+
+  <a class="card" href="1-spine-bubbles.html">
+    <div class="n">01</div>
+    <div class="t">spine + bubbles</div>
+    <div class="d">Thin rail on the left edge; each turn hangs a bubble. Reasoning and tools collapse inline. Closest to a normal chat.</div>
+  </a>
+
+  <a class="card" href="2-rail-ledger.html">
+    <div class="n">02</div>
+    <div class="t">rail ledger</div>
+    <div class="d">The rail is the identity: one continuous line, a droplet bead per turn, tinted by who spoke. Bubbles read like a log.</div>
+  </a>
+
+  <a class="card" href="3-depth-gauge.html">
+    <div class="n">03</div>
+    <div class="t">depth gauge</div>
+    <div class="d">A thick water column on the left that glows where the agent is live; tool output flows as a "log river" under each bubble.</div>
+  </a>
+</body>
+</html>

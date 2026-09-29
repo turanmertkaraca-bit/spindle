@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>lumen · rail ledger</title>
+<style>
+  :root{
+    --bg:#07161f; --surface:#0e2230; --fg:#e8f4f8; --dim:#8fb0be; --faint:#4a6673;
+    --rule:#173340; --water:#22d3ee; --danger:#e5484d; --you:#123043;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; --rail:26px;
+  }
+  *{box-sizing:border-box} html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--fg);font-family:var(--mono);overflow:hidden}
+  .phone{max-width:430px;height:100%;margin:0 auto;display:flex;flex-direction:column}
+
+  header{display:flex;gap:10px;align-items:center;padding:14px 16px 10px;border-bottom:1px solid var(--rule)}
+  header .back{color:var(--dim);font-size:20px}
+  header .title{font-size:13px;color:var(--dim)}
+
+  .stream{flex:1;overflow:auto;padding:10px 12px 6px 0}
+  .turn{position:relative;display:grid;grid-template-columns:var(--rail) 1fr}
+  /* continuous rail built from each row's own line so it can be tinted by state */
+  .turn .rail{position:relative}
+  .turn .rail::before{content:"";position:absolute;left:50%;transform:translateX(-50%);
+    top:0;bottom:0;width:2px;background:var(--rule)}
+  .turn:first-child .rail::before{top:16px}
+  .turn:last-child .rail::before{bottom:calc(100% - 16px)}
+  .turn .rail::after{content:"";position:absolute;left:50%;top:10px;transform:translateX(-50%);
+    width:11px;height:14px;background:var(--dim);
+    border-radius:50% 50% 50% 50%/62% 62% 38% 38%;
+    clip-path:polygon(0 0,100% 0,100% 68%,50% 100%,0 68%)}
+  .turn.you .rail::after{background:var(--dim)}
+  .turn.bot .rail::after{background:var(--water)}
+  .turn.live .rail::after{animation:rip 1.4s ease-out infinite}
+  .turn.live .rail::before{background:color-mix(in srgb,var(--water) 45%,var(--rule))}
+  @keyframes rip{0%{box-shadow:0 0 0 0 rgba(34,211,238,.45)}100%{box-shadow:0 0 0 12px rgba(34,211,238,0)}}
+
+  .body{padding:2px 0 16px;display:flex;flex-direction:column;gap:7px;min-width:0}
+  .who{font-size:10.5px;letter-spacing:1.6px;color:var(--faint);padding:4px 0 0}
+  .who.you{color:var(--dim)}
+
+  .bubble{max-width:94%;border-radius:14px;padding:10px 13px;font-size:14px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+  .bubble.you{align-self:flex-end;background:var(--you);border:1px solid var(--rule)}
+  .bubble.bot{align-self:flex-start;background:var(--surface);border:1px solid color-mix(in srgb,var(--water) 18%,var(--rule))}
+
+  details.reason{align-self:flex-start;font-size:11px;color:var(--dim)}
+  details.reason summary{cursor:pointer;list-style:none;background:color-mix(in srgb,var(--water) 9%,transparent);
+    border:1px solid color-mix(in srgb,var(--water) 16%,var(--rule));border-radius:10px;padding:6px 10px}
+  details.reason summary::-webkit-details-marker{display:none}
+  details.reason[open] summary{border-bottom-left-radius:0;border-bottom-right-radius:0}
+  details.reason .rb{font-size:12.5px;line-height:1.6;color:var(--dim);white-space:pre-wrap;
+    border-left:2px solid color-mix(in srgb,var(--water) 30%,var(--rule));padding:8px 0 2px 10px}
+
+  details.tools{align-self:flex-start;width:100%;max-width:94%}
+  details.tools summary{list-style:none;cursor:pointer;display:flex;gap:8px;align-items:center;
+    background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:9px 12px;font-size:11.5px;color:var(--dim)}
+  details.tools summary::-webkit-details-marker{display:none}
+  details.tools summary .nm{color:var(--water);letter-spacing:1px}
+  details.tools summary .n{margin-left:auto;color:var(--faint)}
+  details.tools[open] summary{border-bottom-left-radius:0;border-bottom-right-radius:0}
+  .tlist{border:1px solid var(--rule);border-top:0;border-radius:0 0 12px 12px;background:var(--surface);padding:4px 12px 8px}
+  .tr{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--dim);padding:5px 0;border-top:1px solid var(--rule)}
+  .tr .k{width:8px;height:11px;background:var(--water);flex:0 0 auto;
+    border-radius:50% 50% 50% 50%/62% 62% 38% 38%;clip-path:polygon(0 0,100% 0,100% 68%,50% 100%,0 68%)}
+  .tr.err .k{background:var(--danger)}
+
+  .livebox{align-self:flex-start;display:flex;gap:9px;align-items:center;color:var(--water);font-size:13px}
+  .livebox .l{width:8px;height:11px;background:var(--water);animation:rip 1.4s ease-out infinite;
+    border-radius:50% 50% 50% 50%/62% 62% 38% 38%;clip-path:polygon(0 0,100% 0,100% 68%,50% 100%,0 68%)}
+
+  .composer{display:flex;gap:10px;align-items:center;padding:12px 14px;border-top:1px solid var(--rule)}
+  .composer input{flex:1;background:transparent;border:0;outline:none;color:var(--fg);font:14px var(--mono)}
+  .send{border:0;background:transparent;color:var(--water);font:600 14px var(--mono);cursor:pointer}
+  ::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:var(--rule);border-radius:8px}
+</style>
+</head>
+<body>
+<div class="phone">
+  <header><span class="back">‹</span><span class="title">fix the login redirect</span></header>
+  <div class="stream">
+
+    <div class="turn you">
+      <div class="rail"></div>
+      <div class="body">
+        <div class="who you">YOU</div>
+        <div class="bubble you">the /login redirect is broken — it loops back to itself</div>
+      </div>
+    </div>
+
+    <div class="turn bot live">
+      <div class="rail"></div>
+      <div class="body">
+        <div class="who">ASSISTANT</div>
+        <details class="reason">
+          <summary>▸ thinking · 214 chars</summary>
+          <div class="rb">The redirect loops because the middleware checks the session before it is written. Read the auth handler and the middleware order first.</div>
+        </details>
+        <details class="tools" open>
+          <summary><span class="nm">READ ×2</span><span class="n">▾</span></summary>
+          <div class="tlist">
+            <div class="tr"><span class="k"></span><span>read</span><span style="color:var(--faint)">src/auth/middleware.ts</span></div>
+            <div class="tr"><span class="k"></span><span>read</span><span style="color:var(--faint)">src/routes/login.ts</span></div>
+          </div>
+        </details>
+        <div class="bubble bot">Found it — the session cookie is written after the redirect, so the next request still looks unauthenticated. Move the cookie write before the redirect.</div>
+        <details class="tools">
+          <summary><span class="nm">EDIT</span><span class="n">▸</span></summary>
+          <div class="tlist">
+            <div class="tr"><span class="k"></span><span>edit</span><span style="color:var(--faint)">set cookie before redirect</span></div>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <div class="turn bot live">
+      <div class="rail"></div>
+      <div class="body">
+        <div class="livebox"><span class="l"></span> running tests…</div>
+      </div>
+    </div>
+
+  </div>
+  <form class="composer" onsubmit="return false">
+    <span style="color:var(--faint)">&gt;</span>
+    <input placeholder="ask the agent…">
+    <button class="send">send</button>
+  </form>
+</div>
+</body>
+</html>
