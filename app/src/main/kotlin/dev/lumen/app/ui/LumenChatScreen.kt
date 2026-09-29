@@ -41,7 +41,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -607,7 +606,7 @@ private fun EmptyState(colors: LumenColors, modifier: Modifier = Modifier) {
         modifier.padding(horizontal = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(Modifier.size(10.dp).clip(CircleShape).background(colors.faint))
+        WaterDot(size = 10.dp, color = colors.faint)
         Spacer(Modifier.height(16.dp))
         Text("lumen", color = colors.dim, fontFamily = Mono, fontSize = 15.sp, letterSpacing = 7.sp)
         Spacer(Modifier.height(8.dp))
@@ -632,7 +631,7 @@ private fun ErrorNotice(message: String, colors: LumenColors, onEditKey: (() -> 
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(7.dp).clip(CircleShape).background(colors.danger()))
+        WaterDot(size = 7.dp, color = colors.danger())
         Spacer(Modifier.width(10.dp))
         Text(
             text = if (auth) "Authentication failed — check your API key." else oneLine(message),
