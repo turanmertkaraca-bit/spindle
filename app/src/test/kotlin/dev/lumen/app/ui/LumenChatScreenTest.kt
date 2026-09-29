@@ -177,6 +177,7 @@ class LumenChatScreenTest {
         compose.onNodeWithText("thinking · ${think.length} chars").assertIsDisplayed()
         noNode(think)
         compose.onNodeWithTag("think-toggle").performClick()
+        compose.waitForIdle()
         compose.onNodeWithText(think).assertExists()
     }
 }
