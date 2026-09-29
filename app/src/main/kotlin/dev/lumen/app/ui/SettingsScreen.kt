@@ -92,7 +92,7 @@ fun SettingsScreen(
                 Modifier.fillMaxWidth()
                     .padding(vertical = 2.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .border(1.dp, if (selected) colors.accent else colors.rule, RoundedCornerShape(10.dp))
+                    .border(1.dp, if (selected) colors.water else colors.rule, RoundedCornerShape(10.dp))
                     .background(if (selected) colors.surface else Color.Transparent)
                     .clickable { onModel(ref) }
                     .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -149,7 +149,7 @@ private fun chip(
         fontFamily = Mono, fontSize = 13.sp,
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
-            .border(1.dp, if (selected) colors.accent else colors.rule, RoundedCornerShape(8.dp))
+            .border(1.dp, if (selected) colors.water else colors.rule, RoundedCornerShape(8.dp))
             .background(if (selected) colors.surface else Color.Transparent)
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 9.dp)

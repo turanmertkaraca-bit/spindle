@@ -86,7 +86,7 @@ fun HomeScreen(
         Box(
             Modifier.fillMaxWidth()
                 .clip(RoundedCornerShape(50))
-                .background(colors.accent)
+                .background(colors.water)
                 .clickable { onNewChat() }
                 .padding(vertical = 14.dp)
                 .testTag("new-chat"),
@@ -98,7 +98,11 @@ fun HomeScreen(
 
         if (sessions.isEmpty()) {
             Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                Text("no chats yet", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(Modifier.size(10.dp).background(colors.faint, WaterShapes.droplet(tail = 0.55f)))
+                    Spacer(Modifier.height(16.dp))
+                    Text("no chats yet", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
+                }
             }
         } else {
             LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("sessions")) {
@@ -111,7 +115,7 @@ fun HomeScreen(
                             .padding(horizontal = 12.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(colors.accent))
+                        Box(Modifier.size(8.dp).background(colors.water, WaterShapes.droplet(tail = 0.55f)))
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(

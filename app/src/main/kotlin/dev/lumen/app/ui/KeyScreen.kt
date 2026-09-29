@@ -60,7 +60,7 @@ private val KeyHints: Map<String, String> = mapOf(
 )
 
 /** The "failed" colour, matching the chat screen's ErrorNotice. */
-private fun LumenColors.alert(): Color = spectrum.firstOrNull() ?: accent
+private fun LumenColors.alert(): Color = Color(0xFFE5484D)
 
 /**
  * First-run key entry. Minimal: pick a provider, paste a key, done. The key is
@@ -128,10 +128,10 @@ fun KeyScreen(
                     fontFamily = Mono, fontSize = 13.sp,
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
-                        .border(1.dp, if (selected) colors.fg else colors.rule, RoundedCornerShape(8.dp))
-                        .background(if (selected) colors.rule else colors.bg)
+                        .border(1.dp, if (selected) colors.water else colors.rule, RoundedCornerShape(8.dp))
+                        .background(if (selected) colors.surface else Color.Transparent)
                         .clickable { provider = p.first }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .padding(horizontal = 14.dp, vertical = 9.dp)
                         .testTag("provider-${p.first}")
                         .semantics { contentDescription = "provider ${p.second}" },
                 )
@@ -225,7 +225,7 @@ fun KeyScreen(
         Box(
             Modifier.fillMaxWidth()
                 .clip(RoundedCornerShape(50))
-                .background(if (canGo) colors.accent else Color.Transparent)
+                .background(if (canGo) colors.water else Color.Transparent)
                 .border(1.dp, if (canGo) Color.Transparent else colors.rule, RoundedCornerShape(50))
                 .clickable(enabled = canGo) { onSubmit(provider, key) }
                 .padding(vertical = 14.dp)

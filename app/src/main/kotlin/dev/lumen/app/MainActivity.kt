@@ -150,6 +150,7 @@ private fun animatedColors(dark: Boolean): LumenColors {
         faint = animateColorAsState(target.faint, spec, label = "faint").value,
         rule = animateColorAsState(target.rule, spec, label = "rule").value,
         accent = animateColorAsState(target.accent, spec, label = "accent").value,
+        water = animateColorAsState(target.water, spec, label = "water").value,
         spectrum = target.spectrum.mapIndexed { i, c ->
             animateColorAsState(c, spec, label = "spectrum$i").value
         },
