@@ -82,6 +82,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.UiStep
+import dev.spindle.core.ui.DropletShape
 import dev.spindle.core.ui.FocusPolicy
 import dev.spindle.core.ui.RopeCurve
 import dev.spindle.core.ui.RopeLayout
