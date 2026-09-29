@@ -445,7 +445,16 @@ private fun SpineNode(
                         if (step.failed) colors.danger().copy(alpha = 0.5f) else tint.copy(alpha = 0.22f),
                         RoundedCornerShape(26.dp),
                     )
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
+                    .pointerInput(step.id) {
+                        detectTapGestures(
+                            onTap = { /* single tap does nothing */ },
+                            onDoubleTap = {
+                                clipboard.setText(AnnotatedString(step.body))
+                                copied = true
+                            },
+                        )
+                    },
             ) {
                 Row(
                     Modifier.fillMaxWidth(),
@@ -489,14 +498,6 @@ private fun SpineNode(
                         Text(
                             step.body.ifBlank { step.summary },
                             color = colors.fg, fontFamily = Mono, fontSize = 15.sp, lineHeight = 22.sp,
-                            modifier = Modifier.pointerInput(step.id) {
-                                detectTapGestures(
-                                    onDoubleTap = {
-                                        clipboard.setText(AnnotatedString(step.body))
-                                        copied = true
-                                    },
-                                )
-                            },
                         )
                     }
                 }
