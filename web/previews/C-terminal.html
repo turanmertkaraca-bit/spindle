@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>lumen · terminal</title>
+<style>
+  :root{
+    --bg:#04101a; --panel:#071c27; --fg:#d3ecf2; --dim:#7ea3b1; --faint:#3c5a67;
+    --rule:#123040; --water:#2dd4bf; --grid:#0a2634; --danger:#ff6b70; --you:#0e3340;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box} html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--fg);font-family:var(--mono);overflow:hidden}
+  .phone{max-width:480px;height:100%;margin:0 auto;display:flex;flex-direction:column;
+    background:linear-gradient(var(--bg),var(--bg)) padding-box}
+
+  header{display:flex;align-items:center;gap:8px;padding:14px 14px 10px;border-bottom:1px solid var(--rule);
+    background:var(--panel)}
+  header .back{color:var(--dim);font-size:18px}
+  header .t{font-size:12.5px;color:var(--fg)}
+  header .pill{margin-left:auto;font-size:10px;letter-spacing:1px;color:var(--water);
+    border:1px solid rgba(45,212,191,.3);border-radius:999px;padding:3px 9px}
+  header .pill .p{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--water);margin-right:5px;
+    box-shadow:0 0 0 0 rgba(45,212,191,.5);animation:rip 1.4s ease-out infinite}
+  @keyframes rip{0%{box-shadow:0 0 0 0 rgba(45,212,191,.5)}100%{box-shadow:0 0 0 11px rgba(45,212,191,0)}}
+
+  .log{flex:1;overflow:auto;padding:12px 14px 14px;font-size:12.5px;line-height:1.65}
+  .ln{display:grid;grid-template-columns:44px 1fr;gap:10px;padding:2px 0}
+  .gut{color:var(--faint);text-align:right;user-select:none}
+  .gut.w{color:var(--water)}
+  .gut.e{color:var(--danger)}
+
+  .you{margin:10px 0 12px}
+  .you .u{display:grid;grid-template-columns:44px 1fr;gap:10px}
+  .you .u .g{color:var(--faint);text-align:right}
+  .you .u .m{color:#bfe6ee;background:var(--you);border-left:2px solid var(--water);
+    padding:8px 11px;border-radius:0 8px 8px 0;white-space:pre-wrap}
+
+  .agent{color:var(--fg)}
+  .agent .m{color:var(--fg);white-space:pre-wrap}
+  .agent .m .hl{color:#9fe9e0}
+
+  .think{grid-column:2;color:var(--dim);font-size:11.5px;border-left:2px solid rgba(45,212,191,.25);
+    padding:2px 0 2px 10px;margin:4px 0;white-space:pre-wrap}
+  .think .t{color:var(--water);opacity:.8}
+
+  .tool{grid-column:2;margin:5px 0}
+  .tool .head{display:flex;gap:9px;color:var(--dim)}
+  .tool .head .tag{color:var(--water)}
+  .tool .head .tag.e{color:var(--danger)}
+  .tool .head .st{margin-left:auto;color:var(--faint);font-size:11px}
+  .tool .box{margin:6px 0 2px;background:#030d15;border:1px solid var(--rule);border-radius:6px;
+    padding:9px 11px;font-size:11.5px;color:#9dc2ce;white-space:pre;overflow:auto;max-height:200px}
+  .tool .box .a{color:#63d6a4}.tool .box .d{color:var(--danger)}
+  .tool.run .head .tag::after{content:"";display:inline-block;width:6px;height:6px;margin-left:7px;border-radius:50%;
+    background:var(--water);animation:rip 1.4s ease-out infinite;vertical-align:middle}
+
+  .bar{height:3px;border-radius:3px;background:var(--rule);overflow:hidden;margin:8px 0 2px;grid-column:2}
+  .bar i{display:block;height:100%;width:62%;background:linear-gradient(90deg,var(--water),#67e8f9);
+    border-radius:3px;animation:slide 1.6s ease-in-out infinite}
+  @keyframes slide{0%,100%{margin-left:0}50%{margin-left:38%}}
+
+  .cursor{display:inline-block;width:8px;height:14px;background:var(--water);vertical-align:-2px;
+    animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  .composer{display:flex;align-items:center;gap:9px;padding:11px 14px;border-top:1px solid var(--rule);background:var(--panel)}
+  .composer .c{color:var(--water)}
+  .composer input{flex:1;background:transparent;border:0;outline:none;color:var(--fg);font:13px var(--mono)}
+  .send{border:1px solid rgba(45,212,191,.35);background:transparent;color:var(--water);
+    font:600 12px var(--mono);padding:6px 13px;border-radius:6px;cursor:pointer}
+  .send:active{background:rgba(45,212,191,.15)}
+  ::-webkit-scrollbar{width:9px}::-webkit-scrollbar-thumb{background:var(--rule);border-radius:9px}
+</style>
+</head>
+<body>
+<div class="phone">
+  <header>
+    <span class="back">‹</span>
+    <span class="t">fix the login redirect</span>
+    <span class="pill"><span class="p"></span>RUNNING</span>
+  </header>
+
+  <div class="log">
+    <div class="you">
+      <div class="u"><span class="g">you</span><span class="m">the /login redirect is broken — after signing in it bounces straight back to /login</span></div>
+    </div>
+
+    <div class="ln"><span class="gut w">cup</span><span class="agent"><div class="think"><span class="t">◆ reasoning</span>
+A redirect loop usually means the middleware runs before the session cookie is written. I should read the auth middleware and the login route, then check the order of cookie-set vs redirect.</div></span></div>
+
+    <div class="ln">
+      <span class="gut w">tool</span>
+      <span class="tool">
+        <div class="head"><span class="tag">READ</span><span>src/auth/middleware.ts</span><span class="st">ok · 0.8s</span></div>
+      </span>
+    </div>
+    <div class="ln">
+      <span class="gut w">tool</span>
+      <span class="tool">
+        <div class="head"><span class="tag">READ</span><span>src/routes/login.ts</span><span class="st">ok · 0.6s</span></div>
+      </span>
+    </div>
+
+    <div class="ln"><span class="gut">out</span><span class="agent"><div class="m">Found it. In <span class="hl">login.ts</span> the session cookie is set <span class="hl">after</span> <span class="hl">res.redirect()</span>, so the browser leaves before <span class="hl">Set-Cookie</span> is written. The next request is unauthenticated and loops back.<span class="cursor"></span></div></span></div>
+
+    <div class="ln">
+      <span class="gut w">tool</span>
+      <span class="tool">
+        <div class="head"><span class="tag">EDIT</span><span>src/routes/login.ts</span><span class="st">ok · 0.3s</span></div>
+        <div class="box">  const token = signJwt(user);
+<span class="a">+ res.cookie('sid', token, { httpOnly: true, sameSite: 'lax' });</span>
+  return res.redirect(next ?? '/');
+<span class="d">- res.cookie('sid', token, { httpOnly: true });</span></div>
+      </span>
+    </div>
+
+    <div class="ln">
+      <span class="gut w">tool</span>
+      <span class="tool run">
+        <div class="head"><span class="tag">BASH</span><span>npm test -- auth</span><span class="st">running…</span></div>
+        <div class="bar"><i></i></div>
+      </span>
+    </div>
+  </div>
+
+  <form class="composer" onsubmit="return false">
+    <span class="c">&gt;</span>
+    <input placeholder="ask the agent…">
+    <button class="send">run ↵</button>
+  </form>
+</div>
+</body>
+</html>

@@ -5,40 +5,44 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>lumen · previews</title>
 <style>
-  :root{--bg:#07161f;--surface:#0e2230;--fg:#e8f4f8;--dim:#8fb0be;--faint:#4a6673;
-    --rule:#173340;--water:#22d3ee;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  :root{--bg:#04101a;--panel:#071c27;--fg:#d3ecf2;--dim:#7ea3b1;--faint:#3c5a67;
+    --rule:#123040;--water:#2dd4bf;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--mono);padding:32px 20px}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--mono);padding:36px 20px;max-width:560px;margin:0 auto}
   h1{font-size:15px;letter-spacing:6px;font-weight:500;margin:0 0 4px}
-  p{color:var(--faint);font-size:12px;margin:0 0 24px}
+  p{color:var(--faint);font-size:12px;margin:0 0 26px;line-height:1.6}
   a.card{display:block;text-decoration:none;color:inherit;border:1px solid var(--rule);
-    background:var(--surface);border-radius:14px;padding:16px 16px;margin-bottom:12px}
+    background:var(--panel);border-radius:14px;padding:18px;margin-bottom:14px;transition:border-color .15s}
   a.card:hover{border-color:var(--water)}
-  .n{color:var(--water);font-size:12px;letter-spacing:1px}
-  .t{font-size:14px;margin:4px 0 4px}
-  .d{font-size:12px;color:var(--dim);line-height:1.6}
+  .n{color:var(--water);font-size:12px;letter-spacing:2px}
+  .t{font-size:15px;margin:6px 0 6px}
+  .d{font-size:12.5px;color:var(--dim);line-height:1.65}
+  .m{margin-top:10px;font-size:10.5px;color:var(--faint);letter-spacing:1px}
 </style>
 </head>
 <body>
   <h1>lumen</h1>
-  <p>chat timeline directions · spine on the left, bubble chat</p>
+  <p>chat screen directions — each is a full screen with a real tool run</p>
 
-  <a class="card" href="1-spine-bubbles.html">
-    <div class="n">01</div>
-    <div class="t">spine + bubbles</div>
-    <div class="d">Thin rail on the left edge; each turn hangs a bubble. Reasoning and tools collapse inline. Closest to a normal chat.</div>
+  <a class="card" href="A-reader.html">
+    <div class="n">A</div>
+    <div class="t">reader</div>
+    <div class="d">The agent writes like a document with a left margin rule. No agent bubbles — only your own messages are bubbles. Most readable for long answers; the spine is a quiet vertical accent.</div>
+    <div class="m">README-ISH · PROSE · FULL WIDTH</div>
   </a>
 
-  <a class="card" href="2-rail-ledger.html">
-    <div class="n">02</div>
-    <div class="t">rail ledger</div>
-    <div class="d">The rail is the identity: one continuous line, a droplet bead per turn, tinted by who spoke. Bubbles read like a log.</div>
+  <a class="card" href="B-conversation.html">
+    <div class="n">B</div>
+    <div class="t">conversation</div>
+    <div class="d">Familiar two-sided chat: your bubbles right, the agent's left, with a droplet spine dot on each. Tools live in a pocket inside the agent's bubble. Closest to iMessage.</div>
+    <div class="m">BUBBLES · POCKETS · FAMILIAR</div>
   </a>
 
-  <a class="card" href="3-depth-gauge.html">
-    <div class="n">03</div>
-    <div class="t">depth gauge</div>
-    <div class="d">A thick water column on the left that glows where the agent is live; tool output flows as a "log river" under each bubble.</div>
+  <a class="card" href="C-terminal.html">
+    <div class="n">C</div>
+    <div class="t">terminal</div>
+    <div class="d">A live activity stream: line-number gutter on the left, monospace log, inline reasoning, tool output boxes and a progress bar. Dense and technical — feels like watching the agent work.</div>
+    <div class="m">LOG · GUTTER SPINE · LIVE</div>
   </a>
 </body>
 </html>

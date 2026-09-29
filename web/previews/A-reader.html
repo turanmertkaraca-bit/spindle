@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>lumen · reader</title>
+<style>
+  :root{
+    --bg:#061219; --paper:#0b1d27; --fg:#dfeef4; --dim:#8aa9b7; --faint:#3f5a68;
+    --rule:#16313d; --water:#2dd4bf; --water2:#22d3ee; --danger:#f0565b; --you:#10303f;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box} html,body{height:100%;margin:0}
+  body{background:var(--bg);color:var(--fg);font-family:var(--sans);overflow:hidden}
+  .phone{max-width:460px;height:100%;margin:0 auto;display:flex;flex-direction:column}
+
+  header{display:flex;align-items:center;gap:12px;padding:16px 20px 12px}
+  header .back{color:var(--dim);font-size:22px;line-height:1}
+  header .meta{min-width:0}
+  header .t{font-size:14px;font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  header .s{font-size:11px;color:var(--faint);font-family:var(--mono);margin-top:2px}
+  header .live{margin-left:auto;display:flex;align-items:center;gap:6px;font:11px var(--mono);color:var(--water)}
+  header .live .p{width:7px;height:7px;border-radius:50%;background:var(--water);box-shadow:0 0 0 0 rgba(45,212,191,.5);animation:rip 1.5s ease-out infinite}
+  @keyframes rip{0%{box-shadow:0 0 0 0 rgba(45,212,191,.5)}100%{box-shadow:0 0 0 13px rgba(45,212,191,0)}}
+
+  .doc{flex:1;overflow:auto;padding:4px 0 20px}
+
+  /* YOU: the only bubble, right aligned */
+  .you{display:flex;justify-content:flex-end;padding:10px 20px 10px 44px}
+  .you .b{background:var(--you);border:1px solid #1b4353;border-radius:16px 16px 4px 16px;
+    padding:10px 14px;font-size:14.5px;line-height:1.55;max-width:86%}
+
+  /* AGENT: a document block with a margin rule — the spine */
+  .block{margin:6px 0 6px 20px;padding:6px 20px 14px 26px;position:relative}
+  .block::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;
+    background:linear-gradient(180deg,transparent,var(--water) 8%,var(--water) 92%,transparent);opacity:.5}
+  .block.plain::before{background:var(--rule);opacity:1}
+  .stamp{font:10.5px var(--mono);letter-spacing:1.4px;color:var(--faint);margin:0 0 10px;text-transform:uppercase}
+
+  .think{margin:0 0 12px;border-radius:10px;background:rgba(45,212,191,.06);
+    border:1px solid rgba(45,212,191,.16);overflow:hidden}
+  .think summary{cursor:pointer;list-style:none;padding:8px 12px;font:11px var(--mono);color:var(--dim);display:flex;gap:8px;align-items:center}
+  .think summary::-webkit-details-marker{display:none}
+  .think summary .d{width:14px;height:14px;border-radius:50%;border:1px dashed rgba(45,212,191,.5)}
+  .think .tb{padding:0 12px 10px;font:12.5px/1.65 var(--mono);color:var(--dim);white-space:pre-wrap;
+    border-top:1px solid rgba(45,212,191,.12)}
+
+  /* prose: readable sans, full width — this is the point of "reader" */
+  .prose{font-size:15px;line-height:1.68;color:var(--fg);max-width:64ch}
+  .prose p{margin:0 0 12px}
+  .prose code{font-family:var(--mono);font-size:13px;background:rgba(45,212,191,.1);
+    padding:1px 5px;border-radius:4px;color:var(--water)}
+
+  /* tool: a quiet inset log line, not a card */
+  .tool{margin:12px 0;font:12.5px/1.7 var(--mono)}
+  .tool .ln{display:flex;gap:10px;color:var(--dim);align-items:baseline}
+  .tool .ln .k{color:var(--water);width:16px;flex:0 0 auto;text-align:center}
+  .tool .ln .k.e{color:var(--danger)}
+  .tool .ln .v{color:var(--faint)}
+  .tool .out{margin:8px 0 0 26px;background:#04101a;border:1px solid var(--rule);border-radius:8px;
+    padding:10px 12px;font-size:12px;color:#9fc0cd;white-space:pre;overflow:auto;max-height:210px}
+  .tool .out .add{color:#5fd3a0}.tool .out .del{color:var(--danger)}
+
+  .typing{display:flex;gap:9px;align-items:center;color:var(--water);font:13px var(--mono);padding:8px 0}
+  .typing .d{width:8px;height:11px;background:var(--water);animation:rip 1.5s ease-out infinite;
+    border-radius:50% 50% 50% 50%/62% 62% 38% 38%;clip-path:polygon(0 0,100% 0,100% 68%,50% 100%,0 68%)}
+
+  .composer{display:flex;align-items:center;gap:10px;padding:14px 18px;border-top:1px solid var(--rule);
+    background:linear-gradient(transparent,var(--bg))}
+  .composer .c{color:var(--faint);font-family:var(--mono)}
+  .composer input{flex:1;background:transparent;border:0;outline:none;color:var(--fg);font:15px var(--sans)}
+  .send{border:0;background:var(--water);color:#04141a;font:600 13px var(--mono);padding:8px 16px;border-radius:999px;cursor:pointer}
+  .send:active{transform:scale(.93)}
+  ::-webkit-scrollbar{width:9px}::-webkit-scrollbar-thumb{background:var(--rule);border-radius:9px}
+</style>
+</head>
+<body>
+<div class="phone">
+  <header>
+    <span class="back">‹</span>
+    <span class="meta"><div class="t">fix the login redirect</div><div class="s">deepseek-v4.1-flash · 3 turns</div></span>
+    <span class="live"><span class="p"></span> running</span>
+  </header>
+
+  <div class="doc">
+    <div class="you"><div class="b">the /login redirect is broken — after signing in it bounces straight back to /login</div></div>
+
+    <div class="block">
+      <div class="stamp">agent</div>
+      <details class="think">
+        <summary><span class="d"></span> thinking · 268 chars</summary>
+        <div class="tb">A redirect loop usually means the middleware runs before the session cookie is written. I should read the auth middleware and the login route, then check the order of cookie-set vs redirect.</div>
+      </details>
+      <div class="tool">
+        <div class="ln"><span class="k">›</span><span>read</span><span class="v">src/auth/middleware.ts</span></div>
+        <div class="ln"><span class="k">›</span><span>read</span><span class="v">src/routes/login.ts</span></div>
+      </div>
+      <div class="prose">
+        <p>Found it. In <code>login.ts</code> the session cookie is set <em>after</em> <code>res.redirect()</code> returns, so the browser leaves before the <code>Set-Cookie</code> header is written. The next request arrives unauthenticated and the middleware sends it back to <code>/login</code> — hence the loop.</p>
+        <p>The fix is to write the cookie first, then redirect.</p>
+      </div>
+      <div class="tool">
+        <div class="ln"><span class="k">›</span><span>edit</span><span class="v">src/routes/login.ts</span></div>
+        <div class="out">  const token = signJwt(user);
+<span class="add">+ res.cookie('sid', token, { httpOnly: true, sameSite: 'lax' });</span>
+  return res.redirect(next ?? '/');
+<span class="del">- res.cookie('sid', token, { httpOnly: true });</span></div>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="stamp">agent</div>
+      <div class="typing"><span class="d"></span> running tests…</div>
+      <div class="tool">
+        <div class="ln"><span class="k">›</span><span>bash</span><span class="v">npm test -- auth</span></div>
+      </div>
+    </div>
+  </div>
+
+  <form class="composer" onsubmit="return false">
+    <span class="c">&gt;</span>
+    <input placeholder="ask the agent…">
+    <button class="send">send</button>
+  </form>
+</div>
+</body>
+</html>
