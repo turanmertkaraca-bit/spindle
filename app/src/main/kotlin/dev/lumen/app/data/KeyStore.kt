@@ -23,6 +23,11 @@ class KeyStore(context: Context) {
         get() = prefs.getString("model", defaultModel(provider)) ?: defaultModel(provider)
         set(value) = prefs.edit().putString("model", value).apply()
 
+    /** "system" | "light" | "dark". */
+    var theme: String
+        get() = prefs.getString("theme", "system") ?: "system"
+        set(value) = prefs.edit().putString("theme", value).apply()
+
     val hasKey: Boolean get() = !apiKey.isNullOrBlank()
 
     companion object {

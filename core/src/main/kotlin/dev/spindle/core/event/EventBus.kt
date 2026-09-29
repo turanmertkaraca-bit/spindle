@@ -35,6 +35,17 @@ sealed interface AgentEvent {
         val result: ToolResult,
     ) : AgentEvent
 
+    /**
+     * Emitted the moment the model starts emitting a tool call, before it is
+     * persisted, so the UI can show a live node.
+     */
+    data class ToolCallStarted(
+        override val sessionId: SessionId,
+        val messageId: String,
+        val index: Int,
+        val name: String,
+    ) : AgentEvent
+
     data class PermissionRequested(
         override val sessionId: SessionId,
         val requestId: String,

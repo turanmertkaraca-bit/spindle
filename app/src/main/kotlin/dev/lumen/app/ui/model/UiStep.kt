@@ -26,4 +26,6 @@ data class UiStep(
     val running: Boolean = false,
     val failed: Boolean = false,
     val merged: Int = 1,
+    /** Child session id for a subagent step, so the UI can show what it did. */
+    val childId: String? = null,
 )

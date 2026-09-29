@@ -1,10 +1,11 @@
 package dev.lumen.app
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import android.content.Context
 import dev.lumen.app.data.AndroidSessionStore
 import dev.lumen.app.data.KeyStore
+import dev.lumen.app.data.ProviderCatalogue
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
@@ -16,10 +17,9 @@ import dev.spindle.core.event.AgentEvent
 import dev.spindle.core.event.DeltaKind
 import dev.spindle.core.event.EventBus
 import dev.spindle.core.model.Ids
+import dev.spindle.core.model.Part
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
-import dev.spindle.core.provider.ModelInfo
-import dev.spindle.core.provider.Provider
 import dev.spindle.core.provider.SimpleProviderRegistry
 import dev.spindle.core.store.SessionStore
 import dev.spindle.tool.DefaultTools
@@ -30,21 +30,36 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.nio.file.Path
 
-/** What the screen needs to draw, in one immutable snapshot. */
+/** One row on the home screen. */
+data class SessionRow(
+    val id: String,
+    val title: String,
+    val updatedAt: Long,
+    val preview: String,
+)
+
+/** What the screens need to draw, in one immutable snapshot. */
 data class ChatState(
     val steps: List<UiStep> = emptyList(),
     val busy: Boolean = false,
     val input: String = "",
     val error: String? = null,
     val model: String = "",
-    /** True until an API key is saved — the screen shows the key form instead. */
+    val provider: String = "opencode-go",
+    /** True until an API key is saved — the app shows the key form instead. */
     val needsKey: Boolean = true,
+    /** Recent chats, newest first. */
+    val sessions: List<SessionRow> = emptyList(),
+    /** The chat currently open, or null on the home screen. */
+    val currentSessionId: String? = null,
+    /** "system" | "light" | "dark". */
+    val theme: String = "system",
 )
 
 /**
- * Owns the agent loop and turns it into UI state. One session, one store, one
- * bus — the same objects the backend tests exercise, so what runs here is the
- * code that is proven.
+ * Owns the agent loop, the session store and the navigation-relevant state.
+ * One process, many sessions: the store is the source of truth and the screens
+ * render what it says.
  */
 class ChatViewModel(
     private val workspace: Path,
@@ -54,12 +69,13 @@ class ChatViewModel(
 ) : ViewModel() {
 
     private val bus = EventBus()
-    private val sessionId = SessionId(Ids.new("ses"))
 
     private val _state = MutableStateFlow(
         ChatState(
             model = keys.model,
+            provider = keys.provider,
             needsKey = !keys.hasKey,
+            theme = keys.theme,
         ),
     )
     val state: StateFlow<ChatState> = _state.asStateFlow()
@@ -67,12 +83,62 @@ class ChatViewModel(
     private var runJob: Job? = null
 
     init {
+        viewModelScope.launch { refreshSessions() }
+        viewModelScope.launch { collectEvents() }
+    }
+
+    // ---- key + settings ----
+
+    /** Called by the key screen. Persists the key and re-enables the app. */
+    fun saveKey(provider: String, key: String) {
+        // Only reset the model when the provider actually changed, so a model
+        // chosen in Settings survives a key re-entry.
+        if (keys.provider != provider || keys.apiKey.isNullOrBlank()) {
+            keys.provider = provider
+            keys.model = KeyStore.defaultModel(provider)
+        }
+        keys.provider = provider
+        keys.apiKey = key
+        _state.value = _state.value.copy(
+            needsKey = !keys.hasKey,
+            model = keys.model,
+            provider = keys.provider,
+            error = null,
+        )
+    }
+
+    fun clearKey() {
+        keys.apiKey = null
+        closeChat()
+        _state.value = _state.value.copy(needsKey = true, error = null)
+    }
+
+    fun setProvider(provider: String) {
+        keys.provider = provider
+        keys.model = KeyStore.defaultModel(provider)
+        _state.value = _state.value.copy(provider = provider, model = keys.model)
+    }
+
+    fun setModel(model: String) {
+        keys.model = model
+        _state.value = _state.value.copy(model = model)
+    }
+
+    fun setTheme(theme: String) {
+        keys.theme = theme
+        _state.value = _state.value.copy(theme = theme)
+    }
+
+    // ---- sessions ----
+
+    fun newChat() {
         viewModelScope.launch {
             val now = System.currentTimeMillis()
+            val id = SessionId(Ids.new("ses"))
             store.createSession(
                 Session(
-                    id = sessionId,
-                    title = "chat",
+                    id = id,
+                    title = "new chat",
                     cwd = workspace.toString(),
                     createdAt = now,
                     updatedAt = now,
@@ -80,29 +146,56 @@ class ChatViewModel(
                     providerId = keys.model.substringBefore('/', "opencode-go"),
                 ),
             )
-            _state.value = _state.value.copy(steps = StepMapper.fromMessages(store.messages(sessionId)))
-            collectEvents()
+            _state.value = _state.value.copy(currentSessionId = id.value, steps = emptyList(), input = "", error = null)
+            refreshSessions()
         }
     }
 
-    /** Called by the key screen. Persists and re-enables sending. */
-    fun saveKey(provider: String, key: String) {
-        keys.provider = provider
-        keys.apiKey = key
-        keys.model = KeyStore.defaultModel(provider)
-        _state.value = _state.value.copy(needsKey = !keys.hasKey, model = keys.model, error = null)
+    fun openSession(id: String) {
+        viewModelScope.launch {
+            val sid = SessionId(id)
+            _state.value = _state.value.copy(
+                currentSessionId = id,
+                steps = enrich(StepMapper.fromMessages(store.messages(sid))),
+                input = "",
+                error = null,
+                busy = false,
+            )
+        }
     }
 
-    fun clearKey() {
-        keys.apiKey = null
-        _state.value = _state.value.copy(needsKey = true, error = null)
+    fun closeChat() {
+        runJob?.cancel()
+        _state.value = _state.value.copy(currentSessionId = null, steps = emptyList(), busy = false, error = null)
     }
+
+    fun deleteSession(id: String) {
+        viewModelScope.launch {
+            store.deleteSession(SessionId(id))
+            if (_state.value.currentSessionId == id) closeChat()
+            refreshSessions()
+        }
+    }
+
+    private suspend fun refreshSessions() {
+        val rows = store.sessions().map { s ->
+            val preview = runCatching { store.latestMessage(s.id) }.getOrNull()
+                ?.parts?.filterIsInstance<Part.Text>()?.joinToString("") { it.text }
+                ?.let { oneLine(it, 90) } ?: ""
+            SessionRow(s.id.value, s.title.ifBlank { "chat" }, s.updatedAt, preview)
+        }
+        _state.value = _state.value.copy(sessions = rows)
+    }
+
+    // ---- chat ----
 
     private fun providersFor(provider: String, key: String): SimpleProviderRegistry =
-        dev.lumen.app.data.ProviderCatalogue.registry(provider, key)
+        ProviderCatalogue.registry(provider, key)
 
     private suspend fun collectEvents() {
         bus.events.collect { e ->
+            val current = _state.value.currentSessionId
+            if (current == null || e.sessionId.value != current) return@collect
             when (e) {
                 is AgentEvent.PartDelta -> {
                     val kind = if (e.kind == DeltaKind.REASONING) StepKind.THINKING else StepKind.ASSISTANT
@@ -111,28 +204,38 @@ class ChatViewModel(
                         steps = StepMapper.applyDelta(_state.value.steps, e.partId.value, e.delta, kind, label),
                     )
                 }
-                is AgentEvent.PartUpdated -> {
-                    // after the turn, rebuild from the store — the source of truth
-                    _state.value = _state.value.copy(steps = StepMapper.fromMessages(store.messages(sessionId)))
-                }
-                is AgentEvent.ToolFinished -> {
-                    _state.value = _state.value.copy(steps = StepMapper.fromMessages(store.messages(sessionId)))
+                is AgentEvent.PartUpdated -> rebuild(SessionId(current))
+                is AgentEvent.ToolFinished -> rebuild(SessionId(current))
+                is AgentEvent.ToolCallStarted, is AgentEvent.Progress -> {
+                    _state.value = _state.value.copy(steps = StepMapper.applyEvent(_state.value.steps, e))
                 }
                 is AgentEvent.StateChanged -> {
                     val busy = e.state == dev.spindle.core.model.SessionState.RUNNING
                     _state.value = _state.value.copy(busy = busy)
+                    if (!busy) refreshSessions()
                 }
-                is AgentEvent.Error -> {
-                    _state.value = _state.value.copy(error = e.message)
-                }
+                is AgentEvent.Error -> _state.value = _state.value.copy(error = e.message)
                 else -> Unit
             }
         }
     }
 
+    private suspend fun rebuild(sid: SessionId) {
+        _state.value = _state.value.copy(steps = enrich(StepMapper.fromMessages(store.messages(sid))))
+    }
+
+    /** Surface what a subagent actually did by inlining its child steps as rows. */
+    private suspend fun enrich(steps: List<UiStep>): List<UiStep> = steps.map { step ->
+        val child = step.childId ?: return@map step
+        val kids = runCatching { StepMapper.fromMessages(store.messages(SessionId(child))) }.getOrDefault(emptyList())
+        step.copy(rows = kids.take(8).map { it.label to it.summary })
+    }
+
     fun onInput(v: String) { _state.value = _state.value.copy(input = v) }
 
     fun send() {
+        val currentId = _state.value.currentSessionId ?: return
+        val sid = SessionId(currentId)
         val text = _state.value.input.trim()
         if (text.isEmpty() || _state.value.busy) return
         val key = keys.apiKey
@@ -143,22 +246,27 @@ class ChatViewModel(
         _state.value = _state.value.copy(input = "", error = null)
 
         runJob = viewModelScope.launch {
+            // Title a fresh chat from its first message.
+            runCatching {
+                val s = store.session(sid)
+                if (s != null && (s.title == "new chat" || s.title.isBlank())) {
+                    store.updateSession(s.copy(title = oneLine(text, 48), updatedAt = System.currentTimeMillis()))
+                }
+            }
             val loop = AgentLoop(
                 providers = providersFor(keys.provider, key),
                 tools = DefaultTools.registry(),
                 store = store,
                 bus = bus,
                 permissions = PermissionGate { _, _, _ -> true },
-                questions = QuestionGate { _, _, options, _ ->
-                    // no UI gate yet: take the first option, or acknowledge
-                    listOf(options.firstOrNull() ?: "ok")
-                },
+                questions = QuestionGate { _, _, options, _ -> listOf(options.firstOrNull() ?: "ok") },
             )
             try {
-                loop.prompt(sessionId, text, keys.model, AgentConfig(maxSteps = 12))
+                loop.prompt(sid, text, keys.model, AgentConfig(maxSteps = 12))
             } catch (t: Throwable) {
                 _state.value = _state.value.copy(error = t.message ?: t.toString(), busy = false)
             }
+            refreshSessions()
         }
     }
 
@@ -171,6 +279,9 @@ class ChatViewModel(
         super.onCleared()
         runCatching { ownedStore?.close() }
     }
+
+    private fun oneLine(s: String, max: Int): String =
+        s.replace(Regex("\\s+"), " ").trim().let { if (it.length > max) it.take(max) + "…" else it }
 
     companion object {
         fun Factory(context: Context, workspace: java.io.File): androidx.lifecycle.ViewModelProvider.Factory =

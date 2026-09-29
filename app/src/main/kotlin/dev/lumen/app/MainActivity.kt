@@ -3,6 +3,7 @@ package dev.lumen.app
 import android.app.Activity
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.animation.animateColorAsState
@@ -15,15 +16,17 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import dev.lumen.app.ui.HomeScreen
 import dev.lumen.app.ui.KeyScreen
 import dev.lumen.app.ui.LumenChatScreen
 import dev.lumen.app.ui.LumenColors
+import dev.lumen.app.ui.SettingsScreen
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -37,9 +40,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             val state by viewModel.state.collectAsState()
             val systemDark = isSystemInDarkTheme()
-            var darkOverride by remember { mutableStateOf<Boolean?>(null) }
-            val dark = darkOverride ?: systemDark
+            val dark = when (state.theme) {
+                "light" -> false
+                "dark" -> true
+                else -> systemDark
+            }
             val colors = animatedColors(dark)
+            val toggleTheme = { viewModel.setTheme(if (dark) "light" else "dark") }
 
             // Keep the system bar icons legible against our own background.
             val view = LocalView.current
@@ -49,26 +56,76 @@ class MainActivity : ComponentActivity() {
                 WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !dark
             }
 
+            var route by rememberSaveable { mutableStateOf("home") }
+            val onChat = route == "chat" && state.currentSessionId != null
+
+            BackHandler(enabled = route != "home" || state.currentSessionId != null) {
+                when {
+                    route == "settings" -> route = "home"
+                    route == "chat" -> {
+                        viewModel.closeChat()
+                        route = "home"
+                    }
+                    state.currentSessionId != null -> viewModel.closeChat()
+                }
+            }
+
+            val modifier = Modifier.fillMaxSize().systemBarsPadding()
             if (state.needsKey) {
                 KeyScreen(
                     colors = colors,
-                    onSubmit = viewModel::saveKey,
-                    modifier = Modifier.fillMaxSize().systemBarsPadding(),
-                    onToggleTheme = { darkOverride = !dark },
+                    onSubmit = { provider, key ->
+                        viewModel.saveKey(provider, key)
+                        route = "home"
+                    },
+                    modifier = modifier,
+                    onToggleTheme = toggleTheme,
+                    initialProvider = state.provider,
                 )
-            } else {
-                LumenChatScreen(
+            } else when {
+                onChat -> LumenChatScreen(
                     steps = state.steps,
                     input = state.input,
                     busy = state.busy,
                     error = state.error,
                     colors = colors,
-                    modifier = Modifier.fillMaxSize().systemBarsPadding(),
+                    modifier = modifier,
                     onInput = viewModel::onInput,
                     onSend = viewModel::send,
                     onStop = viewModel::stop,
-                    onToggleTheme = { darkOverride = !dark },
-                    onEditKey = viewModel::clearKey,
+                    onToggleTheme = toggleTheme,
+                    onEditKey = { route = "settings" },
+                )
+                route == "settings" -> SettingsScreen(
+                    colors = colors,
+                    provider = state.provider,
+                    model = state.model,
+                    theme = state.theme,
+                    onProvider = viewModel::setProvider,
+                    onModel = viewModel::setModel,
+                    onTheme = viewModel::setTheme,
+                    onEditKey = {
+                        viewModel.clearKey()
+                        route = "home"
+                    },
+                    onBack = { route = "home" },
+                    modifier = modifier,
+                )
+                else -> HomeScreen(
+                    colors = colors,
+                    sessions = state.sessions,
+                    onNewChat = {
+                        viewModel.newChat()
+                        route = "chat"
+                    },
+                    onOpen = { id ->
+                        viewModel.openSession(id)
+                        route = "chat"
+                    },
+                    onDelete = viewModel::deleteSession,
+                    onSettings = { route = "settings" },
+                    modifier = modifier,
+                    onToggleTheme = toggleTheme,
                 )
             }
         }

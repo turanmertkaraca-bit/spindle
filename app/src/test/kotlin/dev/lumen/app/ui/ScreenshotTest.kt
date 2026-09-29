@@ -222,4 +222,51 @@ class ScreenshotTest {
             onToggleTheme = {},
         )
     }
+
+    private fun sessionRows(): List<dev.lumen.app.SessionRow> {
+        val now = System.currentTimeMillis()
+        return listOf(
+            dev.lumen.app.SessionRow("s1", "make the timeline a spine", now - 120_000, "the new timeline is a centre spine of dots"),
+            dev.lumen.app.SessionRow("s2", "fix the build", now - 3_600_000, "gradle assembleDebug is green now"),
+            dev.lumen.app.SessionRow("s3", "new chat", now - 86_400_000, ""),
+        )
+    }
+
+    @Test fun home_light() = shoot("home_light.png") {
+        HomeScreen(
+            colors = LumenColors.Light,
+            sessions = sessionRows(),
+            onNewChat = {}, onOpen = {}, onDelete = {}, onSettings = {},
+            onToggleTheme = {},
+        )
+    }
+
+    @Test fun home_dark() = shoot("home_dark.png") {
+        HomeScreen(
+            colors = LumenColors.Dark,
+            sessions = sessionRows(),
+            onNewChat = {}, onOpen = {}, onDelete = {}, onSettings = {},
+            onToggleTheme = {},
+        )
+    }
+
+    @Test fun settings_light() = shoot("settings_light.png") {
+        SettingsScreen(
+            colors = LumenColors.Light,
+            provider = "openrouter",
+            model = "openrouter/openrouter/free",
+            theme = "system",
+            onProvider = {}, onModel = {}, onTheme = {}, onEditKey = {}, onBack = {},
+        )
+    }
+
+    @Test fun settings_dark() = shoot("settings_dark.png") {
+        SettingsScreen(
+            colors = LumenColors.Dark,
+            provider = "deepseek",
+            model = "deepseek/deepseek-flash",
+            theme = "dark",
+            onProvider = {}, onModel = {}, onTheme = {}, onEditKey = {}, onBack = {},
+        )
+    }
 }

@@ -64,6 +64,7 @@ object StepMapper {
                                     rows = rows,
                                     running = p.state == ToolState.RUNNING || p.state == ToolState.PENDING,
                                     failed = p.state == ToolState.ERROR,
+                                    childId = if (isSub) p.result?.metadata?.get("sessionId") else null,
                                 )
                             }
                             else -> Unit
@@ -142,6 +143,17 @@ object StepMapper {
      */
     fun applyEvent(current: List<UiStep>, event: AgentEvent): List<UiStep> = when (event) {
         is AgentEvent.PartDelta -> current // deltas are cheap; see applyDelta
+        is AgentEvent.ToolCallStarted -> {
+            val id = "call:${event.messageId}:${event.index}"
+            if (current.any { it.id == id }) {
+                current
+            } else {
+                current + UiStep(
+                    id = id, kind = StepKind.TOOL, label = event.name.uppercase(), tag = "",
+                    summary = "calling…", body = "", running = true,
+                )
+            }
+        }
         is AgentEvent.Progress -> current.map {
             if (it.running) it.copy(summary = oneLine(event.message)) else it
         }

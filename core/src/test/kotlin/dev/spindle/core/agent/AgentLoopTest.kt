@@ -58,6 +58,16 @@ class AgentLoopTest {
             ToolOutcome("echo: " + (input["text"]?.toString() ?: "(none)"))
     }
 
+    /** A tool that exists only so its spec shows up in the offered request. */
+    private class NamedTool(name: String) : Tool {
+        override val spec = ToolSpec(
+            name = name,
+            description = "test tool $name",
+            parametersJson = """{"type":"object","properties":{}}""",
+        )
+        override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome = ToolOutcome("ok")
+    }
+
     private fun store() = InMemorySessionStore()
 
     private suspend fun newSession(store: InMemorySessionStore, id: String) {
@@ -133,6 +143,71 @@ class AgentLoopTest {
         assertTrue(events.any { it is AgentEvent.PartDelta })
         assertTrue(events.any { it is AgentEvent.ToolFinished })
         assertTrue(events.any { it is AgentEvent.StateChanged && it.state == SessionState.IDLE })
+    }
+
+    @Test
+    fun `emits ToolCallStarted when the model starts a tool call`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(3, "call_9", "echo"),
+                ProviderEvent.ToolCallArgsDelta(3, "{\"text\":\"hi\"}"),
+                ProviderEvent.ToolCallEnd(3),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            listOf(
+                ProviderEvent.TextDelta("done"),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+        )
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = bus,
+        )
+        newSession(store, "ses_tcs")
+
+        val events = mutableListOf<AgentEvent>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            bus.events.collect { events += it }
+        }
+        loop.prompt(SessionId("ses_tcs"), "go", "fake/fake-1")
+        job.cancel()
+
+        val started = events.filterIsInstance<AgentEvent.ToolCallStarted>()
+        assertEquals(1, started.size)
+        assertEquals(3, started.single().index)
+        assertEquals("echo", started.single().name)
+
+        val toolMessage = store.messages(SessionId("ses_tcs"))
+            .first { m -> m.parts.any { it is Part.Tool } }
+        assertEquals(toolMessage.id.value, started.single().messageId)
+    }
+
+    @Test
+    fun `allowSubagents controls whether the task tool is offered`() = runTest {
+        fun done() = listOf(ProviderEvent.TextDelta("ok"), ProviderEvent.Finished(FinishReason.STOP))
+        val provider = ScriptedProvider(done(), done())
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool(), NamedTool("task"))),
+            store = store,
+            bus = EventBus(),
+        )
+        newSession(store, "ses_sub")
+
+        loop.prompt(SessionId("ses_sub"), "hi", "fake/fake-1", agent = AgentConfig(allowSubagents = false))
+        loop.prompt(SessionId("ses_sub"), "hi", "fake/fake-1", agent = AgentConfig(allowSubagents = true))
+
+        assertEquals(2, provider.requests.size)
+        val denied = provider.requests[0].tools.map { it.name }
+        assertTrue(denied.contains("echo"), "echo should still be offered: $denied")
+        assertTrue("task" !in denied, "task must not be offered when allowSubagents=false: $denied")
+        val allowed = provider.requests[1].tools.map { it.name }
+        assertTrue("task" in allowed, "task must be offered when allowSubagents=true: $allowed")
     }
 
     @Test

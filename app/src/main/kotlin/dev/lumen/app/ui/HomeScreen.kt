@@ -1,0 +1,156 @@
+package dev.lumen.app.ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import dev.lumen.app.SessionRow
+
+private val Mono = FontFamily.Monospace
+
+/** The home screen: recent chats, a new chat, and a way into settings. */
+@Composable
+fun HomeScreen(
+    colors: LumenColors,
+    sessions: List<SessionRow>,
+    onNewChat: () -> Unit,
+    onOpen: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onSettings: () -> Unit,
+    modifier: Modifier = Modifier,
+    onToggleTheme: (() -> Unit)? = null,
+) {
+    Column(
+        modifier.fillMaxSize().background(colors.bg).imePadding()
+            .padding(start = 20.dp, end = 20.dp, top = 56.dp, bottom = 20.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("lumen", color = colors.fg, fontFamily = Mono, fontSize = 26.sp, fontWeight = FontWeight.Medium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (onToggleTheme != null) {
+                    Text(
+                        "◐",
+                        color = colors.faint, fontFamily = Mono, fontSize = 16.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { onToggleTheme() }
+                            .padding(4.dp)
+                            .testTag("theme"),
+                    )
+                }
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    "settings",
+                    color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { onSettings() }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .testTag("settings"),
+                )
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+
+        Box(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(50))
+                .background(colors.accent)
+                .clickable { onNewChat() }
+                .padding(vertical = 14.dp)
+                .testTag("new-chat"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("new chat", color = colors.bg, fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        }
+        Spacer(Modifier.height(20.dp))
+
+        if (sessions.isEmpty()) {
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("no chats yet", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
+            }
+        } else {
+            LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("sessions")) {
+                items(sessions, key = { it.id }) { s ->
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .padding(vertical = 2.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onOpen(s.id) }
+                            .padding(horizontal = 12.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(colors.accent))
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                s.title, color = colors.fg, fontFamily = Mono, fontSize = 14.sp,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            )
+                            if (s.preview.isNotEmpty()) {
+                                Spacer(Modifier.height(3.dp))
+                                Text(
+                                    s.preview, color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Text(ago(s.updatedAt), color = colors.faint, fontFamily = Mono, fontSize = 11.sp)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "×",
+                            color = colors.faint, fontFamily = Mono, fontSize = 16.sp,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .clickable { onDelete(s.id) }
+                                .padding(horizontal = 6.dp)
+                                .testTag("delete-${s.id}"),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun ago(ts: Long): String {
+    val d = System.currentTimeMillis() - ts
+    return when {
+        d < 60_000 -> "just now"
+        d < 3_600_000 -> "${d / 60_000}m"
+        d < 86_400_000 -> "${d / 3_600_000}h"
+        else -> "${d / 86_400_000}d"
+    }
+}

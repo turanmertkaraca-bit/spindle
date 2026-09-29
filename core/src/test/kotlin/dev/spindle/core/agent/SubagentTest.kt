@@ -2,6 +2,8 @@ package dev.spindle.core.agent
 
 import dev.spindle.core.event.EventBus
 import dev.spindle.core.model.FinishReason
+import dev.spindle.core.model.Message
+import dev.spindle.core.model.MessageId
 import dev.spindle.core.model.Part
 import dev.spindle.core.model.Role
 import dev.spindle.core.model.Session
@@ -27,6 +29,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -155,6 +158,76 @@ class SubagentTest {
         assertTrue(
             followUp.any { it.role == "tool" && it.text?.contains("[subagent") == true },
             "follow-up wire messages did not include the subagent result: $followUp",
+        )
+    }
+
+    @Test
+    fun `inheritance prefers the latest assistant message over stale session fields`() {
+        val parent = Session(
+            id = SessionId("ses_p"),
+            cwd = "/tmp",
+            createdAt = 0,
+            updatedAt = 0,
+            model = "stale-model",
+            providerId = "stale-provider",
+        )
+        val assistant = Message(
+            id = MessageId("msg_1"),
+            sessionId = parent.id,
+            role = Role.ASSISTANT,
+            createdAt = 1,
+            model = "fake-1",
+            providerId = "fake",
+        )
+
+        assertEquals("fake" to "fake-1", SubagentInheritance.resolve(parent, listOf(assistant)))
+        assertEquals("stale-provider" to "stale-model", SubagentInheritance.resolve(parent, emptyList()))
+        assertNull(SubagentInheritance.resolve(parent.copy(model = null, providerId = null), emptyList()))
+    }
+
+    @Test
+    fun `child inherits provider and model from the parent's latest assistant message`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_task", "task"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"description\":\"x\",\"prompt\":\"look\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            listOf(
+                ProviderEvent.TextDelta("child ok"),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+            listOf(
+                ProviderEvent.TextDelta("parent ok"),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+        )
+        val store = InMemorySessionStore()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(TaskTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val parentId = SessionId("ses_parent")
+        // Stale session fields; the chosen model is only recorded on the assistant message.
+        newSession(store, parentId.value, model = "stale-model", provider = "stale-provider")
+
+        val last = loop.prompt(parentId, "please delegate", "fake/fake-1")
+        assertEquals(
+            "parent ok",
+            last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text },
+        )
+
+        val child = store.sessions(includeChildren = true).single { it.parentId == parentId }
+        assertEquals("fake", child.providerId)
+        assertEquals("fake-1", child.model)
+        assertTrue(
+            store.messages(child.id).any { m ->
+                m.role == Role.ASSISTANT && m.parts.filterIsInstance<Part.Text>().any { it.text.contains("child ok") }
+            },
+            "child never ran with the inherited model: ${store.messages(child.id)}",
         )
     }
 }

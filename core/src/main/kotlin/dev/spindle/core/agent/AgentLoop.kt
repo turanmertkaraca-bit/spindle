@@ -96,7 +96,9 @@ class AgentLoop(
                 ),
             )
 
-            val active = tools.without(agent.denyTools)
+            // Subagents that must not recurse can't even be offered the `task` tool.
+            val denied = if (agent.allowSubagents) agent.denyTools else agent.denyTools + "task"
+            val active = tools.without(denied)
             var step = 0
             var compacted = false
             while (true) {
@@ -175,7 +177,10 @@ class AgentLoop(
                                     reasoning.append(ev.text)
                                     bus.emit(AgentEvent.PartDelta(sessionId, assistant.id.value, reasoningPartId, DeltaKind.REASONING, ev.text))
                                 }
-                                is ProviderEvent.ToolCallStart -> calls.getOrPut(ev.index) { MutableToolCall(ev.id, ev.name) }
+                                is ProviderEvent.ToolCallStart -> {
+                                    calls.getOrPut(ev.index) { MutableToolCall(ev.id, ev.name) }
+                                    bus.emit(AgentEvent.ToolCallStarted(sessionId, assistant.id.value, ev.index, ev.name))
+                                }
                                 is ProviderEvent.ToolCallArgsDelta ->
                                     calls.getOrPut(ev.index) { MutableToolCall("call_${ev.index}", "unknown") }.args.append(ev.argsDelta)
                                 is ProviderEvent.ToolCallEnd -> Unit
