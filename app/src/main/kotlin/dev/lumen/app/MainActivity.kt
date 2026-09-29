@@ -90,6 +90,11 @@ class MainActivity : ComponentActivity() {
                     error = state.error,
                     colors = colors,
                     modifier = modifier,
+                    title = state.sessions.firstOrNull { it.id == state.currentSessionId }?.title ?: "",
+                    onHome = {
+                        viewModel.closeChat()
+                        route = "home"
+                    },
                     onInput = viewModel::onInput,
                     onSend = viewModel::send,
                     onStop = viewModel::stop,

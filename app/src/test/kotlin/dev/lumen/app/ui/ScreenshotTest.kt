@@ -92,6 +92,8 @@ class ScreenshotTest {
             error = null,
             colors = colors,
             forceOpenIndex = force,
+            title = "make the timeline a spine",
+            onHome = {},
             ambient = false,
             onToggleTheme = {},
             onEditKey = {},

@@ -166,6 +166,8 @@ fun LumenChatScreen(
     colors: LumenColors = LumenColors.Light,
     modifier: Modifier = Modifier,
     forceOpenIndex: Int? = null,
+    title: String = "",
+    onHome: (() -> Unit)? = null,
     onInput: (String) -> Unit = {},
     onSend: () -> Unit = {},
     onStop: () -> Unit = {},
@@ -204,6 +206,29 @@ fun LumenChatScreen(
     val count = display.size
 
     Column(modifier.fillMaxSize().background(colors.bg).imePadding()) {
+        if (onHome != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 10.dp, end = 16.dp, top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "‹",
+                    color = colors.dim, fontFamily = Mono, fontSize = 20.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { onHome() }
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                        .testTag("home"),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    title.ifBlank { "chat" },
+                    color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
             val viewportPx = constraints.maxHeight.toFloat()
             val viewportCenter = viewportPx / 2f
