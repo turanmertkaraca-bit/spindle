@@ -243,7 +243,16 @@ class ChatViewModel(
             _state.value = _state.value.copy(needsKey = true, input = "")
             return
         }
-        _state.value = _state.value.copy(input = "", error = null)
+
+        // Optimistic echo + busy, both SYNCHRONOUS with the tap, so the user
+        // sees their own bubble and the stop affordance instantly instead of
+        // waiting for the agent's first event round-trip.
+        _state.value = _state.value.copy(
+            input = "",
+            error = null,
+            busy = true,
+            steps = _state.value.steps + StepMapper.optimisticUser(text),
+        )
 
         runJob = viewModelScope.launch {
             // Title a fresh chat from its first message.

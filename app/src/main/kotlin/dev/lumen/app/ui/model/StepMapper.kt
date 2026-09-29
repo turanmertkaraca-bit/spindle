@@ -196,6 +196,16 @@ object StepMapper {
         else -> current
     }
 
+    /**
+     * The row shown the instant send is tapped, before the store has the
+     * message. Its [PENDING_USER_ID] id makes it replaceable by the next
+     * store-backed rebuild without duplicating the user's turn.
+     */
+    fun optimisticUser(text: String): UiStep = UiStep(
+        id = PENDING_USER_ID, kind = StepKind.YOU, label = "YOU", tag = "",
+        summary = oneLine(text), body = text.trim(),
+    )
+
     /** Append-or-grow a streaming text row by partId. */
     fun applyDelta(current: List<UiStep>, partId: String, delta: String, kind: StepKind, label: String): List<UiStep> {
         val i = current.indexOfFirst { it.id == partId }
@@ -212,4 +222,7 @@ object StepMapper {
             )
         }
     }
+
+    /** Id of the optimistic user row; a rebuild replaces it with the store row. */
+    const val PENDING_USER_ID = "\u0000you"
 }

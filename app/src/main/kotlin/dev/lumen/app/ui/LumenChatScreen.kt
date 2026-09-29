@@ -4,12 +4,16 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.AnimationState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDecay
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.exponentialDecay
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,6 +21,8 @@ import androidx.compose.foundation.gestures.FlingBehavior
 import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -55,8 +61,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
@@ -71,10 +80,7 @@ import androidx.compose.ui.unit.sp
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
-import dev.spindle.core.ui.SpineLayout
-import kotlinx.coroutines.flow.filterNotNull
 import kotlin.math.abs
-import kotlin.math.max
 
 private val Mono = FontFamily.Monospace
 
@@ -106,8 +112,8 @@ private fun LumenColors.spectrumAt(index: Int): Color {
     return s[i]
 }
 
-/** The "failed" colour. */
-private fun LumenColors.danger(): Color = spectrumAt(0)
+/** The "failed" colour — an explicit red, independent of the water spectrum. */
+private fun LumenColors.danger(): Color = Color(0xFFE5484D)
 
 /** Light / dark palettes. Dark is deliberately not pure black (see bg). */
 data class LumenColors(
@@ -118,24 +124,26 @@ data class LumenColors(
     val faint: Color,
     val rule: Color,
     val accent: Color,
+    /** The core water hue: cyan-teal. Used for the spine, ripples and send. */
+    val water: Color,
     val spectrum: List<Color>,
 ) {
     companion object {
         val Light = LumenColors(
-            bg = Color(0xFFFCFCFB), surface = Color(0xFFF3F3F1), fg = Color(0xFF141414),
-            dim = Color(0xFF747474), faint = Color(0xFFB4B4B4), rule = Color(0xFFE7E7E4),
-            accent = Color(0xFF3B82F6),
+            bg = Color(0xFFF7FBFC), surface = Color(0xFFEDF5F8), fg = Color(0xFF0C2530),
+            dim = Color(0xFF557785), faint = Color(0xFFA6C0CB), rule = Color(0xFFDBE9EF),
+            accent = Color(0xFF0E7490), water = Color(0xFF0EA5C9),
             spectrum = listOf(
-                Color(0xFFFF4B4B), Color(0xFFFF9F1A), Color(0xFFF5D000),
-                Color(0xFF22C55E), Color(0xFF3B82F6), Color(0xFF8B5CF6),
+                Color(0xFFFF4B4B), Color(0xFF0EA5C9), Color(0xFF14B8A6),
+                Color(0xFF22C55E), Color(0xFF3B82F6), Color(0xFF6366F1),
             ),
         )
         val Dark = LumenColors(
             // Non-OLED-friendly: a touch of light so pixels never fully switch off,
             // but dark enough to read as "dark", not gray.
-            bg = Color(0xFF101014), surface = Color(0xFF191920), fg = Color(0xFFF1F1F4),
-            dim = Color(0xFF9A9AA4), faint = Color(0xFF565660), rule = Color(0xFF26262D),
-            accent = Color(0xFF6EA8FF),
+            bg = Color(0xFF07161F), surface = Color(0xFF0E2230), fg = Color(0xFFE8F4F8),
+            dim = Color(0xFF8FB0BE), faint = Color(0xFF4A6673), rule = Color(0xFF173340),
+            accent = Color(0xFF38BDF8), water = Color(0xFF22D3EE),
             spectrum = Light.spectrum,
         )
     }
@@ -175,14 +183,15 @@ fun LumenChatScreen(
     val listState = rememberLazyListState()
     val flingBehavior = remember { calmFling() }
 
-    // Ambient motion (a slow pulse on the working node); off in tests so the
-    // Robolectric frame clock can settle.
-    val pulse = if (ambient) {
+    // Ambient motion (a slow water breathe on running nodes). It only runs while
+    // something is actually running, so an idle timeline costs no frames.
+    val running = busy || steps.any { it.running }
+    val pulse = if (ambient && running) {
         val t = rememberInfiniteTransition(label = "pulse")
         t.animateFloat(
             initialValue = 0.35f,
             targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            animationSpec = infiniteRepeatable(tween(1400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
             label = "pulse",
         ).value
     } else {
@@ -240,81 +249,71 @@ fun LumenChatScreen(
             val viewportCenter = viewportPx / 2f
             val verticalPad = with(density) { viewportCenter.toDp() }
 
-            val focusedIndex = forceOpenIndex?.coerceIn(0, max(0, count - 1))
+            val focusedIndex = forceOpenIndex?.let { clampIndex(it, count) }
                 ?: display.indexOfFirst { it.id == focusedId }.takeIf { it >= 0 }
-                ?: max(0, count - 1)
+                ?: clampIndex(count - 1, count)
 
             // A new session (or an emptied one) clears the anchor, so focus
             // falls back to the tail again.
             LaunchedEffect(firstId) { focusedId = null }
 
-            // Cold start lands on the newest node; appends are followed only when
-            // the reader was already at the tail.
-            var lastCount by remember { mutableStateOf(0) }
+            // One owner for scroll. It:
+            //  * lands on the newest node at cold start,
+            //  * follows appends only when the reader was at the tail,
+            //  * anchors the focused node to the focus line while it grows,
+            //  * re-picks the focused node only from a settled scroll (never
+            //    mid-growth), so a streaming answer cannot flip the capsule.
+            // Keeping all of it in one loop is what removed the jitter: the old
+            // code had three effects each recomputing geometry every frame.
             LaunchedEffect(count, firstId, forceOpenIndex) {
-                if (count == 0) {
-                    lastCount = 0
-                    return@LaunchedEffect
-                }
+                if (count == 0) return@LaunchedEffect
                 if (forceOpenIndex != null) {
-                    listState.scrollToItem(forceOpenIndex.coerceIn(0, count - 1))
-                    lastCount = count
+                    // Screenshots/tests: put the requested node on the line.
+                    withFrameNanos { }
+                    val vp = TimelineViewport.read(listState, clampIndex(forceOpenIndex, count))
+                    vp.centerDelta()?.let { listState.scrollBy(it) }
                     return@LaunchedEffect
                 }
-                val prev = lastCount
-                when {
-                    prev == 0 -> listState.scrollToItem(count - 1)
-                    count > prev && focusedIndex >= prev - 1 -> listState.animateScrollToItem(count - 1)
-                }
-                lastCount = count
-            }
 
-            // While the reader scrolls, the node nearest the line becomes the
-            // focused one. Our own scrolls land on the same node, so feeding this
-            // from any scroll (not just gestures) is safe; only a value change
-            // touches state.
-            LaunchedEffect(count, firstId, forceOpenIndex) {
-                if (forceOpenIndex != null) return@LaunchedEffect
-                snapshotFlow { if (listState.isScrollInProgress) listState.layoutInfo else null }
-                    .filterNotNull()
-                    .collect { layout ->
-                        val info = layout.visibleItemsInfo
-                        if (info.isEmpty()) return@collect
-                        val vc = (layout.viewportStartOffset + layout.viewportEndOffset) / 2f
-                        val nearest = info.minByOrNull { abs((it.offset + it.size / 2f) - vc) } ?: return@collect
+                // Cold start: no scroll history yet, so land on the newest node.
+                var lastCount = 0
+                if (listState.firstVisibleItemIndex == 0 && listState.layoutInfo.totalItemsCount == 0) {
+                    listState.scrollToItem(clampIndex(count - 1, count))
+                    lastCount = count
+                }
+
+                snapshotFlow {
+                    val vp = TimelineViewport.read(listState, focusedIndex)
+                    // Only react to settled frames; while a gesture/fling runs we
+                    // leave the reader alone.
+                    if (listState.isScrollInProgress) vp.copy(focusedTop = null) else vp
+                }.collect { vp ->
+                    if (!vp.hasFocus) return@collect
+
+                    // Re-anchor the expanded node from a settled scroll only.
+                    // Growth never triggers this: the node's own height change is
+                    // handled by the top anchor below, not by re-picking focus.
+                    val nearestId = display.getOrNull(vp.firstVisibleIndex)?.id
+                    val nearest = listState.layoutInfo.visibleItemsInfo
+                        .minByOrNull { abs((it.offset + it.size / 2f) - vp.center) }
+                    val nearestFocused = nearest?.index == focusedIndex
+                    if (!nearestFocused && nearest != null && nearestId != null) {
                         val id = display.getOrNull(nearest.index)?.id
                         if (id != null && id != focusedId) focusedId = id
+                        return@collect
                     }
-            }
 
-            // Keep the focused node on the focus line. One instant correction per
-            // layout change (never an animation, so it cannot fight the growing
-            // node), and never while the reader is scrolling.
-            LaunchedEffect(focusedIndex, count, forceOpenIndex) {
-                if (forceOpenIndex != null) return@LaunchedEffect
-                snapshotFlow {
-                    val vc = (listState.layoutInfo.viewportStartOffset +
-                        listState.layoutInfo.viewportEndOffset) / 2f
-                    val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == focusedIndex }
-                    if (info == null) null else (info.offset + info.size / 2f) - vc
-                }
-                    .filterNotNull()
-                    .collect { delta ->
-                        if (!listState.isScrollInProgress && abs(delta) > 1f) {
-                            listState.scrollBy(delta)
-                        }
+                    // Keep the focused node's TOP on the line so added text grows
+                    // downward; this is the only scroll we do while streaming.
+                    vp.topDelta()?.let { delta ->
+                        if (abs(delta) > 1f) listState.scrollBy(delta)
                     }
-            }
 
-            // The forced node (screenshots/tests) is centred once it is laid out.
-            LaunchedEffect(forceOpenIndex, count) {
-                if (forceOpenIndex == null || count == 0) return@LaunchedEffect
-                withFrameNanos { }
-                val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == forceOpenIndex }
-                if (info != null) {
-                    val vc = (listState.layoutInfo.viewportStartOffset +
-                        listState.layoutInfo.viewportEndOffset) / 2f
-                    listState.scrollBy(SpineLayout.centerDelta(info.offset + info.size / 2f, vc))
+                    // Follow appends when the reader is at the tail.
+                    if (count > lastCount && vp.lastVisibleIndex >= count - 2) {
+                        listState.animateScrollToItem(clampIndex(count - 1, count))
+                    }
+                    lastCount = count
                 }
             }
 
@@ -372,7 +371,8 @@ private fun SpineNode(
     val isTool = step.kind == StepKind.TOOL || step.kind == StepKind.SUBAGENT
     val tint = when {
         step.failed -> colors.danger()
-        isTool -> colors.spectrumAt(4)
+        isTool -> colors.water
+        step.kind == StepKind.YOU -> colors.dim
         else -> colors.accent
     }
 
@@ -381,26 +381,44 @@ private fun SpineNode(
             .fillMaxWidth()
             .drawBehind {
                 val cx = size.width / 2f
+                // The spine is water, not a wire: a soft vertical gradient with a
+                // ripple at the focused node.
                 drawLine(
-                    color = colors.rule,
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            colors.rule.copy(alpha = 0.0f),
+                            colors.rule,
+                            colors.rule.copy(alpha = 0.0f),
+                        ),
+                    ),
                     start = Offset(cx, 0f),
                     end = Offset(cx, size.height),
-                    strokeWidth = 1.dp.toPx(),
+                    strokeWidth = 1.5.dp.toPx(),
                 )
+                if (focused) {
+                    // A ripple ring around the focused node: the water surface.
+                    drawCircle(
+                        color = colors.water.copy(alpha = 0.16f + 0.1f * pulse),
+                        radius = size.height * 0.22f,
+                        center = Offset(cx, size.height / 2f),
+                        style = Stroke(width = 1.dp.toPx()),
+                    )
+                }
             },
         contentAlignment = Alignment.Center,
     ) {
         if (!focused) {
             Box(Modifier.height(42.dp), contentAlignment = Alignment.Center) {
                 if (step.running) {
-                    Box(
-                        Modifier.size(13.dp).clip(CircleShape)
-                            .border(2.dp, tint.copy(alpha = 0.35f + 0.65f * pulse), CircleShape),
+                    WaterDot(
+                        size = 13.dp,
+                        color = tint.copy(alpha = 0.35f + 0.65f * pulse),
+                        ring = true,
                     )
                 } else {
-                    Box(
-                        Modifier.size(if (isTool) 7.dp else 9.dp).clip(CircleShape)
-                            .background(if (isTool) tint.copy(alpha = 0.85f) else colors.dim),
+                    WaterDot(
+                        size = if (isTool) 7.dp else 9.dp,
+                        color = if (isTool) tint.copy(alpha = 0.9f) else colors.faint,
                     )
                 }
             }
@@ -409,13 +427,23 @@ private fun SpineNode(
                 Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 18.dp)
-                    .animateContentSize()
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(colors.surface)
+                    .animateContentSize(
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioLowBouncy,
+                            stiffness = Spring.StiffnessMediumLow,
+                        ),
+                    )
+                    .clip(WaterShapes.drop(taper = 0.10f))
+                    .background(
+                        Brush.verticalGradient(
+                            0f to colors.surface,
+                            1f to colors.surface.copy(alpha = 0.92f),
+                        ),
+                    )
                     .border(
                         1.dp,
-                        if (step.failed) colors.danger().copy(alpha = 0.5f) else colors.rule,
-                        RoundedCornerShape(20.dp),
+                        if (step.failed) colors.danger().copy(alpha = 0.5f) else tint.copy(alpha = 0.22f),
+                        WaterShapes.drop(taper = 0.10f),
                     )
                     .padding(horizontal = 16.dp, vertical = 14.dp)
                     .pointerInput(step.id) {
@@ -434,10 +462,9 @@ private fun SpineNode(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            Modifier.size(7.dp).clip(CircleShape).background(
-                                if (step.running) tint.copy(alpha = 0.35f + 0.65f * pulse) else tint,
-                            ),
+                        WaterDot(
+                            size = 8.dp,
+                            color = if (step.running) tint.copy(alpha = 0.35f + 0.65f * pulse) else tint,
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
@@ -452,7 +479,7 @@ private fun SpineNode(
                             else -> step.tag
                         },
                         color = when {
-                            copied -> colors.accent
+                            copied -> colors.water
                             step.running -> tint
                             else -> colors.faint
                         },
@@ -481,7 +508,7 @@ private fun SpineNode(
                             Modifier.padding(top = 2.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text("·", color = colors.spectrumAt(k), fontFamily = Mono, fontSize = 13.sp)
+                            WaterDot(size = 4.dp, color = colors.spectrumAt(k))
                             Spacer(Modifier.width(8.dp))
                             Text(r.first, color = colors.spectrumAt(k), fontFamily = Mono, fontSize = 13.sp)
                             if (r.second.isNotEmpty()) {
@@ -496,6 +523,22 @@ private fun SpineNode(
     }
 }
 
+/** A water droplet node: a teardrop silhouette, optionally a ring. */
+@Composable
+private fun WaterDot(size: androidx.compose.ui.unit.Dp, color: Color, ring: Boolean = false) {
+    if (ring) {
+        Box(
+            Modifier.size(size)
+                .border(2.dp, color, WaterShapes.droplet(tail = 0.5f)),
+        )
+    } else {
+        Box(
+            Modifier.size(size)
+                .background(color, WaterShapes.droplet(tail = 0.55f)),
+        )
+    }
+}
+
 /**
  * The reasoning folded into a step: a one-line header that expands on tap. It
  * starts collapsed, so once the answer arrives the thinking tucks away.
@@ -503,17 +546,33 @@ private fun SpineNode(
 @Composable
 private fun ThinkSection(think: String, colors: LumenColors) {
     var open by remember(think) { mutableStateOf(false) }
+    val arrow by animateFloatAsState(
+        targetValue = if (open) 90f else 0f,
+        animationSpec = tween(180),
+        label = "think-arrow",
+    )
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(colors.bg.copy(alpha = 0.5f))
+            .animateContentSize(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow,
+                ),
+            )
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.water.copy(alpha = 0.08f))
+            .border(1.dp, colors.water.copy(alpha = 0.16f), RoundedCornerShape(12.dp))
             .clickable { open = !open }
             .padding(horizontal = 10.dp, vertical = 7.dp)
             .testTag("think-toggle"),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (open) "▾" else "▸", color = colors.dim, fontFamily = Mono, fontSize = 11.sp)
+            Text(
+                "▸",
+                color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
+                modifier = Modifier.graphicsLayer { rotationZ = arrow },
+            )
             Spacer(Modifier.width(7.dp))
             Text(
                 "thinking · ${think.length} chars",
@@ -598,6 +657,15 @@ private fun Composer(
     onToggleTheme: (() -> Unit)?,
     onEditKey: (() -> Unit)?,
 ) {
+    val canSend = input.isNotBlank() && !busy
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    // The button gives itself back to the finger: it sinks a little on press.
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.86f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh),
+        label = "send-scale",
+    )
     Row(
         Modifier.fillMaxWidth().background(colors.bg)
             .padding(start = 16.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
@@ -614,9 +682,9 @@ private fun Composer(
                 onValueChange = onInput,
                 singleLine = true,
                 textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 15.sp),
-                cursorBrush = SolidColor(colors.accent),
+                cursorBrush = SolidColor(colors.water),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { onSend() }),
+                keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
                 modifier = Modifier.fillMaxWidth().testTag("composer"),
             )
         }
@@ -646,13 +714,28 @@ private fun Composer(
             )
         }
         val label = if (busy) "stop" else "send"
+        val enabled = if (busy) true else canSend
         Text(
             label,
-            color = colors.accent,
+            color = when {
+                busy -> colors.accent
+                enabled -> colors.water
+                else -> colors.faint
+            },
             fontFamily = Mono,
             fontSize = 14.sp,
             fontWeight = FontWeight.Medium,
-            modifier = Modifier.clickable { if (busy) onStop() else onSend() }.testTag(if (busy) "stop" else "send"),
+            modifier = Modifier
+                .graphicsLayer { scaleX = scale; scaleY = scale }
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(
+                    enabled = enabled,
+                    interactionSource = interaction,
+                    indication = LocalIndication.current,
+                    onClick = { if (busy) onStop() else onSend() },
+                )
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .testTag(if (busy) "stop" else "send"),
         )
     }
 }
