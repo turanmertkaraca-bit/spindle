@@ -2,7 +2,7 @@ package dev.lumen.app.ui
 
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -20,9 +20,9 @@ import org.robolectric.annotation.Config
 import kotlin.test.assertTrue
 
 /**
- * Behavioral tests for the rope screen, run on a plain JVM by Robolectric.
- * The canvas itself has no semantics, so we assert the parts that do: the
- * bloomed panel, the composer, and that only one step is bloomed at a time.
+ * Behavioral tests for the spine timeline, run on a plain JVM by Robolectric:
+ * only the focused node shows text, tool sub-rows surface, long bodies are
+ * shown in full, and the composer/error affordances stay reachable.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -131,8 +131,8 @@ class LumenChatScreenTest {
     }
 
     @Test
-    fun `a long focused body overflows and scrolls inside the panel`() {
-        val long = (1..200).joinToString("\n") { "line $it of a very long focused answer" }
+    fun `a long focused body is shown in full`() {
+        val long = (1..120).joinToString("\n") { "line $it of a very long focused answer" }
         compose.setContent {
             LumenChatScreen(
                 listOf(UiStep("a", StepKind.ASSISTANT, "ASSISTANT", "x", "long", long)),
@@ -140,10 +140,7 @@ class LumenChatScreenTest {
                 forceOpenIndex = 0,
             )
         }
-        val cfg = compose.onNodeWithTag("panel").fetchSemanticsNode().config
-        check(cfg.contains(SemanticsProperties.VerticalScrollAxisRange)) { "panel should be scrollable" }
-        val range = cfg[SemanticsProperties.VerticalScrollAxisRange]
-        check(range.maxValue() > 0f) { "a long body must overflow the capped panel (maxValue=${range.maxValue()})" }
+        compose.onNodeWithText(long).assertExists()
     }
 
     @Test

@@ -1,21 +1,15 @@
 package dev.lumen.app.ui
 
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationState
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDecay
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.exponentialDecay
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,49 +20,46 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.ScrollState
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -77,29 +68,22 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.UiStep
-import dev.spindle.core.ui.DropletShape
-import dev.spindle.core.ui.FocusPolicy
-import dev.spindle.core.ui.RopeCurve
-import dev.spindle.core.ui.RopeLayout
-import dev.spindle.core.ui.RopeTension
-import dev.spindle.core.ui.RopeWave
+import dev.spindle.core.ui.SpineLayout
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
-import kotlin.math.min
-import kotlin.math.roundToInt
 
 private val Mono = FontFamily.Monospace
 
 /** Fling friction: higher bleeds energy faster, so a flick never races away. */
-private const val FLING_FRICTION = 2.6f
+private const val FLING_FRICTION = 3.0f
 
-/** A calmer fling for the rope: it stops in a short, predictable glide. */
+/** A calmer fling for the timeline: it stops in a short, predictable glide. */
 private fun calmFling(friction: Float = FLING_FRICTION): FlingBehavior = object : FlingBehavior {
     override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
         if (abs(initialVelocity) < 1f) return initialVelocity
@@ -130,6 +114,7 @@ private fun LumenColors.danger(): Color = spectrumAt(0)
 /** Light / dark palettes. Dark is deliberately not pure black (see bg). */
 data class LumenColors(
     val bg: Color,
+    val surface: Color,
     val fg: Color,
     val dim: Color,
     val faint: Color,
@@ -139,8 +124,9 @@ data class LumenColors(
 ) {
     companion object {
         val Light = LumenColors(
-            bg = Color(0xFFFCFCFB), fg = Color(0xFF141414), dim = Color(0xFF747474),
-            faint = Color(0xFFB4B4B4), rule = Color(0xFFECECEC), accent = Color(0xFF3B82F6),
+            bg = Color(0xFFFCFCFB), surface = Color(0xFFF3F3F1), fg = Color(0xFF141414),
+            dim = Color(0xFF747474), faint = Color(0xFFB4B4B4), rule = Color(0xFFE7E7E4),
+            accent = Color(0xFF3B82F6),
             spectrum = listOf(
                 Color(0xFFFF4B4B), Color(0xFFFF9F1A), Color(0xFFF5D000),
                 Color(0xFF22C55E), Color(0xFF3B82F6), Color(0xFF8B5CF6),
@@ -149,21 +135,25 @@ data class LumenColors(
         val Dark = LumenColors(
             // Non-OLED-friendly: a touch of light so pixels never fully switch off,
             // but dark enough to read as "dark", not gray.
-            bg = Color(0xFF101014), fg = Color(0xFFF1F1F4), dim = Color(0xFF9A9AA4),
-            faint = Color(0xFF565660), rule = Color(0xFF26262D), accent = Color(0xFF6EA8FF),
+            bg = Color(0xFF101014), surface = Color(0xFF191920), fg = Color(0xFFF1F1F4),
+            dim = Color(0xFF9A9AA4), faint = Color(0xFF565660), rule = Color(0xFF26262D),
+            accent = Color(0xFF6EA8FF),
             spectrum = Light.spectrum,
         )
     }
 }
 
+/** A synthetic node shown while the model is working but has not spoken yet. */
+private val WorkingStep = UiStep(
+    id = "\u0000working", kind = StepKind.THINKING, label = "THINKING", tag = "",
+    summary = "…", body = "", running = true,
+)
+
 /**
- * The timeline is a rope of droplets. Each step is a droplet on a static
- * vertical channel; the droplet at the focus line (center) blooms into its
- * text. Scrolling is the only navigation; double-tapping the bloomed text
- * copies it, long-press selects it.
- *
- * All placement math lives in [RopeLayout] / [FocusPolicy] / [DropletShape] /
- * [RopeCurve] in :core, so it is unit-tested on a plain JVM.
+ * The timeline is a spine down the middle of the screen. Every step is a node on
+ * it: the node nearest the focus line (the vertical centre) expands into a
+ * capsule sized to its text; the rest collapse to dots. Scrolling is the only
+ * navigation; double-tapping a capsule copies its body, long-press selects it.
  */
 @Composable
 fun LumenChatScreen(
@@ -182,349 +172,126 @@ fun LumenChatScreen(
     ambient: Boolean = true,
 ) {
     val density = LocalDensity.current
-    val nodeSizePx = with(density) { 10.dp.toPx() }
-    val baseGapPx = with(density) { 26.dp.toPx() }
-    val focusExtraPx = with(density) { 96.dp.toPx() }
-    val gutterPx = with(density) { 24.dp.toPx() }
-    val bowPx = with(density) { 9.dp.toPx() }
-    val bowHalfPx = with(density) { 150.dp.toPx() }
-    // Calmer scrolling: one droplet per roughly the rendered near-focus spacing,
-    // so a swipe moves the rope about as far as it looks like it should.
-    val scrollStridePx = nodeSizePx + baseGapPx + focusExtraPx * 0.72f
-    val metrics = remember(nodeSizePx, baseGapPx, focusExtraPx) {
-        RopeLayout.Metrics(
-            nodeSize = nodeSizePx,
-            baseGap = baseGapPx,
-            focusGapExtra = focusExtraPx,
-            focusHalfWidth = 1.6f,
-            focusY = 0f,
-            scrollStride = scrollStridePx,
-        )
-    }
-    val stride = metrics.scrollStride
-
-    val scrollState = rememberScrollState()
+    val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
     val flingBehavior = remember { calmFling() }
-    val scrollValue = scrollState.value.toFloat()
 
-    val count = steps.size
-    val focusPos = if (count == 0) 0f else (scrollValue / stride).coerceIn(0f, (count - 1).toFloat())
-
-    // No bloom while the rope is being flung; it "clicks into place" at rest.
-    val scrolling = scrollState.isScrollInProgress
-    val mode = if (forceOpenIndex != null || !scrolling) FocusPolicy.Mode.FOCUSED else FocusPolicy.Mode.FREE
-    val focusedIndex = (forceOpenIndex ?: focusPos.roundToInt()).coerceIn(0, max(0, count - 1))
-    val bloom by animateFloatAsState(
-        targetValue = if (mode == FocusPolicy.Mode.FOCUSED) 1f else 0f,
-        animationSpec = spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMediumLow),
-        label = "bloom",
-    )
-
-    // The rope sprouts into place the first time it has something to hold.
-    val reveal by animateFloatAsState(
-        targetValue = if (count > 0) 1f else 0f,
-        animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessLow),
-        label = "reveal",
-    )
-
-    // Velocity of the rope (px/s), sampled only while the finger or fling moves
-    // it, so squash-stretch follows the real speed instead of a boolean.
-    var velocity by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(Unit) {
-        snapshotFlow { scrollState.isScrollInProgress }.collect { moving ->
-            if (!moving) {
-                velocity = 0f
-                return@collect
-            }
-            var prev = scrollState.value
-            var prevT = withFrameNanos { it }
-            var v = 0f
-            while (scrollState.isScrollInProgress) {
-                val t = withFrameNanos { it }
-                val cur = scrollState.value
-                val dt = ((t - prevT) / 1_000_000_000f).coerceAtLeast(1e-3f)
-                v += ((cur - prev) / dt - v) * 0.35f
-                velocity = v
-                prev = cur
-                prevT = t
-            }
-            velocity = 0f
-        }
-    }
-    val stretch = if (mode == FocusPolicy.Mode.FOCUSED) 1f
-        else DropletShape.stretchFor(abs(velocity), gain = 0.00022f)
-
-    // A slow breath on the focused droplet keeps the surface feeling alive.
-    // Ambient motion is switched off in tests so the frame clock can settle.
-    val breath = if (ambient) {
-        val transition = rememberInfiniteTransition(label = "breath")
-        transition.animateFloat(
-            initialValue = 0.97f,
-            targetValue = 1.04f,
-            animationSpec = infiniteRepeatable(tween(2400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-            label = "breath",
+    // Ambient motion (a slow pulse on the working node); off in tests so the
+    // Robolectric frame clock can settle.
+    val pulse = if (ambient) {
+        val t = rememberInfiniteTransition(label = "pulse")
+        t.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            label = "pulse",
         ).value
     } else {
         1f
     }
 
-    val nodes = remember(steps) {
-        steps.map { RopeLayout.Node(key = it.id, bodyHeight = 0f, merged = it.merged) }
-    }
-    val result = remember(nodes, scrollValue, metrics) {
-        RopeLayout.compute(nodes, scrollValue, metrics)
-    }
-
-    // Cold start lands on the newest droplet. Afterwards a freshly appended
-    // droplet is followed only when the reader was already at the tail — so a
-    // reader further up is never yanked away mid-read.
-    var lastCount by remember { mutableStateOf(0) }
-    LaunchedEffect(count, forceOpenIndex, scrollState.maxValue) {
-        if (count == 0) {
-            lastCount = 0
-            return@LaunchedEffect
-        }
-        if (scrollState.maxValue <= 0) return@LaunchedEffect // wait for layout
-        if (forceOpenIndex != null) {
-            scrollState.scrollTo((forceOpenIndex.coerceIn(0, count - 1) * stride).roundToInt())
-            lastCount = count
-            return@LaunchedEffect
-        }
-        val prev = lastCount
-        val atTail = prev == 0 ||
-            (scrollState.value.toFloat() / stride).roundToInt() >= prev - 1
-        if (count > prev && atTail) {
-            scrollState.scrollTo(((count - 1) * stride).roundToInt())
-        }
-        lastCount = count
-    }
-
-    // Appended droplets "turn and twist into place": a damped wave races along
-    // the rope for ~1.5s, then dies out.
-    val twist = remember { Animatable(1f) }
-    var waveCount by remember { mutableStateOf(0) }
-    LaunchedEffect(count) {
-        val appended = waveCount > 0 && count > waveCount && count - waveCount <= 2
-        waveCount = count
-        if (appended) {
-            twist.snapTo(0f)
-            twist.animateTo(1f, animationSpec = tween(1500, easing = LinearEasing))
-        }
-    }
-    val twistElapsed = twist.value * 1.5f
-
-    // click into place: on every settle, ease the nearest droplet onto the line.
-    // A long-lived flow (not keyed on the in-progress flag) is what stops the
-    // animation from cancelling itself and ping-ponging.
-    LaunchedEffect(count, forceOpenIndex) {
-        if (forceOpenIndex != null) return@LaunchedEffect
-        snapshotFlow { scrollState.isScrollInProgress }
-            .filter { !it }
-            .collect {
-                if (count > 1) {
-                    val idx = (scrollState.value.toFloat() / stride).roundToInt().coerceIn(0, count - 1)
-                    val target = idx * stride
-                    if (abs(scrollState.value - target) > 2f) {
-                        scrollState.animateScrollTo(target.roundToInt())
-                    }
-                }
-            }
-    }
-
-    val focusedStep = steps.getOrNull(focusedIndex)
-    val showPanel = focusedStep != null && (forceOpenIndex != null || bloom > 0.05f)
+    // While the loop is between turns, show a working node so the screen is
+    // never blank. It disappears as soon as real text arrives.
+    val pending = busy && steps.none { it.running } && (
+        steps.isEmpty() ||
+            steps.last().kind == StepKind.YOU ||
+            steps.last().kind == StepKind.TOOL ||
+            steps.last().kind == StepKind.SUBAGENT
+        )
+    val display = remember(steps, pending) { if (pending) steps + WorkingStep else steps }
+    val count = display.size
 
     Column(modifier.fillMaxSize().background(colors.bg).imePadding()) {
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-            val viewportHeightPx = constraints.maxHeight.toFloat()
-            val focusY = viewportHeightPx / 2f
-            val maxScrollPx = (count - 1).coerceAtLeast(0) * stride
-            val canvasHeightPx = viewportHeightPx + maxScrollPx
-            val panelLeftPx = gutterPx + with(density) { 50.dp.toPx() }
-            val panelMaxHeight = with(density) { (viewportHeightPx * 0.72f).toDp() }
+            val viewportPx = constraints.maxHeight.toFloat()
+            val viewportCenter = viewportPx / 2f
+            val verticalPad = with(density) { viewportCenter.toDp() }
+
+            val focusedIndex = if (forceOpenIndex != null) {
+                forceOpenIndex.coerceIn(0, max(0, count - 1))
+            } else {
+                SpineLayout.nearestCenter(
+                    listState.layoutInfo.visibleItemsInfo.map { it.index to (it.offset + it.size / 2f) },
+                    (listState.layoutInfo.viewportStartOffset + listState.layoutInfo.viewportEndOffset) / 2f,
+                )
+            }
+
+            // Cold start lands on the newest node; appends are followed only when
+            // the reader was already at the tail.
+            var lastCount by remember { mutableStateOf(0) }
+            LaunchedEffect(count, forceOpenIndex) {
+                if (count == 0) {
+                    lastCount = 0
+                    return@LaunchedEffect
+                }
+                if (forceOpenIndex != null) {
+                    listState.scrollToItem(forceOpenIndex.coerceIn(0, count - 1))
+                    lastCount = count
+                    return@LaunchedEffect
+                }
+                val prev = lastCount
+                if (prev == 0) {
+                    listState.scrollToItem(count - 1)
+                } else if (count > prev && focusedIndex >= prev - 1) {
+                    listState.animateScrollToItem(count - 1)
+                }
+                lastCount = count
+            }
+
+            // Click into place: on every settle, ease the nearest node onto the line.
+            LaunchedEffect(count, forceOpenIndex) {
+                if (forceOpenIndex != null) return@LaunchedEffect
+                snapshotFlow { listState.isScrollInProgress }
+                    .filter { !it }
+                    .collect {
+                        val info = listState.layoutInfo.visibleItemsInfo
+                        if (info.isEmpty()) return@collect
+                        val vc = (listState.layoutInfo.viewportStartOffset +
+                            listState.layoutInfo.viewportEndOffset) / 2f
+                        val nearest = info.minByOrNull { abs((it.offset + it.size / 2f) - vc) } ?: return@collect
+                        val delta = SpineLayout.centerDelta(nearest.offset + nearest.size / 2f, vc)
+                        if (abs(delta) > 1f) listState.animateScrollBy(delta)
+                    }
+            }
+
+            // The forced node (screenshots/tests) is centred once it is laid out.
+            LaunchedEffect(forceOpenIndex, count) {
+                if (forceOpenIndex == null || count == 0) return@LaunchedEffect
+                withFrameNanos { }
+                val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == forceOpenIndex }
+                if (info != null) {
+                    val vc = (listState.layoutInfo.viewportStartOffset +
+                        listState.layoutInfo.viewportEndOffset) / 2f
+                    listState.scrollBy(SpineLayout.centerDelta(info.offset + info.size / 2f, vc))
+                }
+            }
 
             Box(Modifier.fillMaxSize()) {
-                Box(
-                    Modifier.fillMaxSize()
-                        .verticalScroll(scrollState, flingBehavior = flingBehavior)
-                        .testTag("timeline"),
-                ) {
-                    Canvas(
-                        Modifier.fillMaxWidth().height(with(density) { canvasHeightPx.toDp() }),
+                if (count == 0) {
+                    EmptyState(colors, Modifier.align(Alignment.Center))
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        flingBehavior = flingBehavior,
+                        contentPadding = PaddingValues(vertical = verticalPad),
+                        modifier = Modifier.fillMaxSize().testTag("timeline"),
                     ) {
-                        val ropeX = gutterPx
-                        val ropeFocus = scrollValue + focusY
-                        val gapHalf = 20.dp.toPx() * bloom
-                        val step = 6.dp.toPx()
-
-                        // The rope reaches toward whichever side holds more
-                        // droplets, so an unbalanced list visibly tugs that way.
-                        val pull = RopeTension.pull(
-                            aboveCount = focusedIndex,
-                            belowCount = max(0, count - 1 - focusedIndex),
-                            viewport = viewportHeightPx,
-                            minReach = 46.dp.toPx(),
-                            halfFactor = 0.5f,
-                            saturation = 2.0f,
-                            lean = bowPx * 1.1f,
-                        )
-                        val reachAbove = pull.reachAbove * reveal
-                        val reachBelow = pull.reachBelow * reveal
-                        val waveAmp = 6.dp.toPx()
-                        val waveLen = 110.dp.toPx()
-                        val waveSpeed = 170.dp.toPx()
-                        val waveFade = 240.dp.toPx()
-                        val waveEnv = RopeWave.envelope(twistElapsed)
-
-                        fun ropeXAt(contentY: Float): Float {
-                            val dy = contentY - ropeFocus
-                            val bow = RopeCurve.offset(dy, bowPx, bowHalfPx)
-                            val tug = pull.leanBias * RopeCurve.offset(dy, 1f, bowHalfPx)
-                            val wave = RopeWave.displacement(dy, twistElapsed, waveAmp, waveLen, waveSpeed, waveFade)
-                            return ropeX + (bow + tug + wave) * reveal
-                        }
-
-                        val visibleTop = scrollValue - 60f
-                        val visibleBottom = scrollValue + viewportHeightPx + 60f
-
-                        fun drawRope(from: Float, to: Float) {
-                            if (to <= from) return
-                            val p = Path().apply { moveTo(ropeXAt(from), from) }
-                            var y = from + step
-                            while (y < to) { p.lineTo(ropeXAt(y), y); y += step }
-                            p.lineTo(ropeXAt(to), to)
-                            val a = 0.7f + 0.2f * waveEnv
-                            drawPath(
-                                p,
-                                brush = Brush.verticalGradient(
-                                    0f to Color.Transparent,
-                                    0.16f to colors.faint.copy(alpha = 0.7f * a),
-                                    0.5f to colors.faint.copy(alpha = a),
-                                    0.84f to colors.faint.copy(alpha = 0.7f * a),
-                                    1f to Color.Transparent,
-                                    startY = visibleTop,
-                                    endY = visibleBottom,
-                                ),
-                                style = Stroke(width = 1.2.dp.toPx()),
+                        itemsIndexed(display, key = { _, s -> s.id }) { index, step ->
+                            SpineNode(
+                                step = step,
+                                focused = index == focusedIndex,
+                                colors = colors,
+                                pulse = pulse,
+                                onGrow = { grew ->
+                                    if (!listState.isScrollInProgress) {
+                                        scope.launch {
+                                            listState.scrollBy(SpineLayout.growthRecenter(grew.toFloat()))
+                                        }
+                                    }
+                                },
                             )
                         }
-
-                        // the rope grows out of the focus; the notch is where the
-                        // focused droplet detaches from it
-                        drawRope(visibleTop.coerceAtLeast(ropeFocus - reachAbove), ropeFocus - gapHalf)
-                        drawRope(ropeFocus + gapHalf, visibleBottom.coerceAtMost(ropeFocus + reachBelow))
-
-
-                        for (p in result.placements) {
-                            val step0 = steps.getOrNull(p.index) ?: continue
-                            val contentY = focusY + p.arc
-                            val screenY = contentY - scrollValue
-                            if (screenY < -120f || screenY > viewportHeightPx + 120f) continue
-
-                            val focused = p.index == focusedIndex && bloom > 0.3f
-                            val isTool = step0.kind == StepKind.TOOL || step0.kind == StepKind.SUBAGENT
-                            val tint = if (isTool) colors.spectrumAt(4) else colors.accent
-                            val breathe = if (focused) breath else 1f
-                            val x = ropeXAt(contentY) + 0.4f * p.size + (if (focused) 6.dp.toPx() * bloom else 0f)
-                            val radius = (p.size * (0.42f + 0.36f * p.bloom) + 2.2.dp.toPx() * bloom) * breathe
-                            val rw = radius / stretch
-                            val rh = radius * stretch
-                            val topLeft = Offset(x - rw, contentY - rh)
-                            val oval = Size(2f * rw, 2f * rh)
-
-                            if (focused) {
-                                val glowR = 34.dp.toPx()
-                                drawCircle(
-                                    brush = Brush.radialGradient(
-                                        colors = listOf(tint.copy(alpha = 0.22f * bloom), Color.Transparent),
-                                        center = Offset(x, contentY),
-                                        radius = glowR,
-                                    ),
-                                    radius = glowR,
-                                    center = Offset(x, contentY),
-                                )
-                            }
-
-                            when {
-                                step0.failed -> drawOval(colors.danger(), topLeft, oval)
-                                step0.running -> {
-                                    // a calm ring with a breathing core while a tool runs
-                                    drawOval(
-                                        tint.copy(alpha = 0.14f * (if (focused) bloom.coerceAtLeast(0.5f) else 0.6f)),
-                                        Offset(topLeft.x - 4.dp.toPx(), topLeft.y - 4.dp.toPx()),
-                                        Size(oval.width + 8.dp.toPx(), oval.height + 8.dp.toPx()),
-                                    )
-                                    drawOval(colors.bg, topLeft, oval)
-                                    drawOval(tint, topLeft, oval, style = Stroke(1.6.dp.toPx()))
-                                    val ir = radius * 0.4f * breathe
-                                    drawOval(tint, Offset(x - ir, contentY - ir), Size(2f * ir, 2f * ir))
-                                }
-                                else -> {
-                                    drawOval(lerp(colors.faint, colors.fg, p.bloom), topLeft, oval)
-                                    if (focused) {
-                                        drawOval(
-                                            tint.copy(alpha = 0.6f * bloom),
-                                            topLeft,
-                                            oval,
-                                            style = Stroke(1.4.dp.toPx()),
-                                        )
-                                        // a quiet thread from the bloomed bead to its text
-                                        drawLine(
-                                            color = colors.faint.copy(alpha = 0.45f * bloom),
-                                            start = Offset(x + rw + 2.dp.toPx(), contentY),
-                                            end = Offset(panelLeftPx, contentY),
-                                            strokeWidth = 1.dp.toPx(),
-                                        )
-                                    }
-                                }
-                            }
-
-                            if (step0.merged > 1) {
-                                // a merged run keeps a tidy spectrum stack above the bead
-                                val dots = min(step0.merged, 3)
-                                val a = if (focused) bloom else 0.5f
-                                for (k in 0 until dots) {
-                                    drawCircle(
-                                        color = colors.spectrumAt(k).copy(alpha = a),
-                                        radius = (if (focused) 3.2f else 2f).dp.toPx(),
-                                        center = Offset(x, contentY - rh - 5.dp.toPx() - k * 4.dp.toPx()),
-                                    )
-                                }
-                            }
-
-                            // prism: a focused tool/subagent fans into the spectrum,
-                            // staying inside the gutter so it never crosses the text.
-                            if (focused && step0.merged == 1 && step0.rows.isNotEmpty()) {
-                                val n = min(step0.rows.size, 6)
-                                val spread = 44.dp.toPx()
-                                for (k in 0 until n) {
-                                    val t = if (n == 1) 0.5f else k / (n - 1).toFloat()
-                                    val endY = contentY + (t - 0.5f) * spread
-                                    drawLine(
-                                        color = colors.spectrumAt(k).copy(alpha = 0.5f * bloom),
-                                        start = Offset(x + rw * 0.4f, contentY),
-                                        end = Offset(panelLeftPx, endY),
-                                        strokeWidth = 1.2.dp.toPx(),
-                                    )
-                                }
-                            }
-                        }
                     }
-                }
-
-                if (showPanel && focusedStep != null) {
-                    FocusPanel(
-                        step = focusedStep,
-                        bloom = if (forceOpenIndex != null) 1f else bloom,
-                        colors = colors,
-                        startPadding = with(density) { panelLeftPx.toDp() },
-                        maxHeight = panelMaxHeight,
-                        modifier = Modifier.align(Alignment.CenterStart),
-                    )
-                }
-
-                if (count == 0) {
-                    EmptyRope(colors, Modifier.align(Alignment.Center))
                 }
             }
         }
@@ -537,9 +304,162 @@ fun LumenChatScreen(
     }
 }
 
-/** Shown before the first message: an intentional start, not an empty screen. */
+/**
+ * One node on the spine. A collapsed node is a dot; the focused one expands into
+ * a capsule sized to its text, so streaming tokens simply grow it.
+ */
 @Composable
-private fun EmptyRope(colors: LumenColors, modifier: Modifier = Modifier) {
+private fun SpineNode(
+    step: UiStep,
+    focused: Boolean,
+    colors: LumenColors,
+    pulse: Float,
+    onGrow: (Int) -> Unit,
+) {
+    val clipboard = LocalClipboardManager.current
+    var copied by remember(step.id) { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            kotlinx.coroutines.delay(1200)
+            copied = false
+        }
+    }
+
+    val isTool = step.kind == StepKind.TOOL || step.kind == StepKind.SUBAGENT
+    val tint = when {
+        step.failed -> colors.danger()
+        isTool -> colors.spectrumAt(4)
+        else -> colors.accent
+    }
+
+    var prevSize by remember(step.id) { mutableIntStateOf(0) }
+    var wasFocused by remember(step.id) { mutableStateOf(false) }
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                val cx = size.width / 2f
+                drawLine(
+                    color = colors.rule,
+                    start = Offset(cx, 0f),
+                    end = Offset(cx, size.height),
+                    strokeWidth = 1.dp.toPx(),
+                )
+            }
+            .onSizeChanged { s ->
+                val grew = s.height - prevSize
+                prevSize = s.height
+                if (focused && wasFocused && grew != 0) onGrow(grew)
+                wasFocused = focused
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (!focused) {
+            Box(Modifier.height(42.dp), contentAlignment = Alignment.Center) {
+                if (step.running) {
+                    Box(
+                        Modifier.size(13.dp).clip(CircleShape)
+                            .border(2.dp, tint.copy(alpha = 0.35f + 0.65f * pulse), CircleShape),
+                    )
+                } else {
+                    Box(
+                        Modifier.size(if (isTool) 7.dp else 9.dp).clip(CircleShape)
+                            .background(if (isTool) tint.copy(alpha = 0.85f) else colors.dim),
+                    )
+                }
+            }
+        } else {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp)
+                    .animateContentSize()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(colors.surface)
+                    .border(
+                        1.dp,
+                        if (step.failed) colors.danger().copy(alpha = 0.5f) else colors.rule,
+                        RoundedCornerShape(20.dp),
+                    )
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
+                    .pointerInput(step.id) {
+                        detectTapGestures(
+                            onTap = { /* single tap does nothing */ },
+                            onDoubleTap = {
+                                clipboard.setText(AnnotatedString(step.body))
+                                copied = true
+                            },
+                        )
+                    },
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier.size(7.dp).clip(CircleShape).background(
+                                if (step.running) tint.copy(alpha = 0.35f + 0.65f * pulse) else tint,
+                            ),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (step.merged > 1) "${step.label} ×${step.merged}" else step.label,
+                            color = colors.dim, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 1.5.sp,
+                        )
+                    }
+                    Text(
+                        when {
+                            copied -> "copied"
+                            step.running -> "running…"
+                            else -> step.tag
+                        },
+                        color = when {
+                            copied -> colors.accent
+                            step.running -> tint
+                            else -> colors.faint
+                        },
+                        fontFamily = Mono, fontSize = 11.sp,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                if (step.running && step.body.isBlank()) {
+                    Text("thinking…", color = tint.copy(alpha = 0.4f + 0.6f * pulse), fontFamily = Mono, fontSize = 15.sp)
+                } else {
+                    SelectionContainer {
+                        Text(
+                            step.body.ifBlank { step.summary },
+                            color = colors.fg, fontFamily = Mono, fontSize = 15.sp, lineHeight = 22.sp,
+                        )
+                    }
+                }
+                if (step.rows.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    for ((k, r) in step.rows.withIndex()) {
+                        Row(
+                            Modifier.padding(top = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("·", color = colors.spectrumAt(k), fontFamily = Mono, fontSize = 13.sp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(r.first, color = colors.spectrumAt(k), fontFamily = Mono, fontSize = 13.sp)
+                            if (r.second.isNotEmpty()) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(r.second, color = colors.dim, fontFamily = Mono, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Shown before the first message: an intentional start, not a blank screen. */
+@Composable
+private fun EmptyState(colors: LumenColors, modifier: Modifier = Modifier) {
     Column(
         modifier.padding(horizontal = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -594,104 +514,6 @@ private fun ErrorNotice(message: String, colors: LumenColors, onEditKey: (() -> 
 
 private fun oneLine(s: String): String =
     s.replace(Regex("\\s+"), " ").trim().let { if (it.length > 160) it.take(160) + "…" else it }
-
-/** The bloomed droplet's text, to the right of the rope at the focus line. */
-@Composable
-private fun FocusPanel(
-    step: UiStep,
-    bloom: Float,
-    colors: LumenColors,
-    startPadding: Dp,
-    maxHeight: Dp,
-    modifier: Modifier = Modifier,
-) {
-    val clipboard = LocalClipboardManager.current
-    var copied by remember(step.id) { mutableStateOf(false) }
-    val textScroll = remember(step.id) { ScrollState(0) }
-    LaunchedEffect(copied) {
-        if (copied) {
-            kotlinx.coroutines.delay(1200)
-            copied = false
-        }
-    }
-
-    Box(
-        modifier
-            .fillMaxWidth()
-            .padding(start = startPadding, end = 16.dp)
-            .background(colors.bg)
-            .alpha(bloom)
-            .heightIn(max = maxHeight)
-            .animateContentSize(),
-    ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .verticalScroll(textScroll)
-                .testTag("panel")
-                .pointerInput(step.id) {
-                    detectTapGestures(
-                        onTap = { /* single tap does nothing */ },
-                        onDoubleTap = {
-                            clipboard.setText(AnnotatedString(step.body))
-                            copied = true
-                        },
-                    )
-                },
-        ) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(
-                    step.label,
-                    color = colors.fg,
-                    fontFamily = Mono, fontSize = 11.sp, letterSpacing = 1.5.sp,
-                )
-                Text(
-                    if (copied) "copied" else step.tag,
-                    color = if (copied) colors.accent else colors.dim,
-                    fontFamily = Mono, fontSize = 11.sp,
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            SelectionContainer {
-                Text(
-                    text = step.body,
-                    color = colors.fg,
-                    fontFamily = Mono, fontSize = 14.sp, lineHeight = 20.sp,
-                )
-            }
-            if (step.rows.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                for ((k, r) in step.rows.withIndex()) {
-                    Row(
-                        Modifier.padding(start = 4.dp, top = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("·", color = colors.spectrumAt(k), fontFamily = Mono, fontSize = 13.sp)
-                        Spacer(Modifier.width(8.dp))
-                        Text(r.first, color = colors.spectrumAt(k), fontFamily = Mono, fontSize = 13.sp)
-                        if (r.second.isNotEmpty()) {
-                            Spacer(Modifier.width(8.dp))
-                            Text(r.second, color = colors.dim, fontFamily = Mono, fontSize = 13.sp)
-                        }
-                    }
-                }
-            }
-        }
-        if (textScroll.maxValue > 0 && textScroll.value < textScroll.maxValue) {
-            // a quiet cue that the text continues below the fold
-            Box(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(64.dp)
-                    .background(
-                        Brush.verticalGradient(
-                            0f to Color.Transparent,
-                            0.55f to colors.bg.copy(alpha = 0.72f),
-                            1f to colors.bg,
-                        ),
-                    ),
-            )
-        }
-    }
-}
 
 @Composable
 private fun Composer(

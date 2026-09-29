@@ -82,6 +82,7 @@ private fun animatedColors(dark: Boolean): LumenColors {
     val spec = tween<Color>(durationMillis = 420)
     return LumenColors(
         bg = animateColorAsState(target.bg, spec, label = "bg").value,
+        surface = animateColorAsState(target.surface, spec, label = "surface").value,
         fg = animateColorAsState(target.fg, spec, label = "fg").value,
         dim = animateColorAsState(target.dim, spec, label = "dim").value,
         faint = animateColorAsState(target.faint, spec, label = "faint").value,
