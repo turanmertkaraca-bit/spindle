@@ -43,4 +43,6 @@ data class UiStep(
     val childSteps: List<UiStep> = emptyList(),
     /** True while the child transcript is loading. */
     val childLoading: Boolean = false,
+    /** Tool names of the calls folded into this run, for the compact summary. */
+    val toolNames: List<String> = emptyList(),
 )

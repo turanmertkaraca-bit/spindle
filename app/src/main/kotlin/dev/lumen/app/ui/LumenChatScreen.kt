@@ -5,6 +5,8 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.AnimationState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -59,6 +61,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -71,8 +74,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -88,6 +94,7 @@ import dev.spindle.core.model.RunChanges
 import dev.spindle.core.model.Usage
 import java.util.Locale
 import kotlin.math.abs
+import kotlinx.coroutines.launch
 
 private val Mono = FontFamily.Monospace
 
@@ -129,7 +136,7 @@ data class LumenColors(
     val faint: Color,
     val rule: Color,
     val accent: Color,
-    /** Primary spectral hue (cyan); kept for the spine, cursor and focus glow. */
+    /** Primary spectral hue (cyan); used for cursor, marks and focus glow. */
     val water: Color,
     /** The iridescent stops: violet, azure, cyan, mint. */
     val spectrum: List<Color>,
@@ -171,10 +178,11 @@ private val WorkingStep = UiStep(
 )
 
 /**
- * A bubble chat with a spine down the left edge. Your turns sit right, the
- * agent's left, and each agent bubble carries a spectrum droplet on the spine.
- * Reasoning collapses into a pill; tool calls nest in a pocket inside the
- * bubble. This is the render layer only — the data model is unchanged.
+ * A bubble chat. Your turns sit right, the agent's left. Reasoning collapses
+ * into a pill; tool calls nest in a compact pocket inside the bubble. When the
+ * reader is at the tail, new content follows smoothly; when they have scrolled
+ * away, a "new" cue floats above the composer instead of yanking them down.
+ * This is the render layer only — the data model is unchanged.
  */
 @Composable
 fun LumenChatScreen(
@@ -198,9 +206,14 @@ fun LumenChatScreen(
     usage: Usage = Usage(),
     /** Structured file changes for this run; the card hides when empty. */
     changes: RunChanges = RunChanges.EMPTY,
+    /** Off in tests/CI so the "answer landed" haptic never fires there. */
+    haptics: Boolean = true,
 ) {
     val listState = rememberLazyListState()
     val flingBehavior = remember { calmFling() }
+    val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
+    val hapticsActive = haptics && !LocalInspectionMode.current
 
     // A slow spectrum breathe while something is running; off when idle or in tests.
     val running = busy || steps.any { it.running }
@@ -225,23 +238,48 @@ fun LumenChatScreen(
         (grouped.isEmpty() || grouped.last().kind == StepKind.YOU)
     val display = remember(grouped, pending) { if (pending) grouped + WorkingStep else grouped }
     val count = display.size
+    val last = display.lastOrNull()
 
     // Follow the tail while streaming, gently. We only re-anchor when content
     // actually grows and the reader is already at the bottom, so a bubble that
     // merely gains height (token, or think→answer) does not yank the list.
     var followTail by remember { mutableStateOf(true) }
+    var showNewCue by remember { mutableStateOf(false) }
+    var cueArmed by remember { mutableStateOf(false) }
+    var prevCount by remember { mutableStateOf(0) }
     LaunchedEffect(listState) {
         snapshotFlow {
             val info = listState.layoutInfo
-            val last = info.visibleItemsInfo.lastOrNull()
-            (info.totalItemsCount == 0) || (last != null && last.index >= info.totalItemsCount - 2)
-        }.collect { followTail = it }
+            val lastVisible = info.visibleItemsInfo.lastOrNull()
+            (info.totalItemsCount == 0) || (lastVisible != null && lastVisible.index >= info.totalItemsCount - 2)
+        }.collect {
+            followTail = it
+            if (it) showNewCue = false
+        }
     }
-    LaunchedEffect(count, display.lastOrNull()?.id) {
+    LaunchedEffect(count, last?.id) {
         if (count == 0 || !followTail) return@LaunchedEffect
         // animateScrollToItem eases to the newest bubble; harmless when already
         // there, so it never fights the streaming height changes above it.
         listState.animateScrollToItem(count - 1)
+    }
+    // A new bubble landed while the reader is up the transcript: show the "new"
+    // cue and give a light haptic. Keyed on the row id, not the body, so streaming
+    // tokens never fire it; the first composition is skipped so opening a session
+    // does not buzz. The haptic is disabled in tests.
+    LaunchedEffect(count, last?.id) {
+        val grew = count > prevCount
+        prevCount = count
+        if (!cueArmed) {
+            cueArmed = true
+            return@LaunchedEffect
+        }
+        if (!grew || count == 0 || followTail) return@LaunchedEffect
+        showNewCue = true
+        val kind = last?.kind
+        if (hapticsActive && kind != null && kind != StepKind.YOU && kind != StepKind.THINKING) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
     }
 
     Column(modifier.fillMaxSize().background(colors.bg).imePadding()) {
@@ -276,44 +314,38 @@ fun LumenChatScreen(
                     if (count == 0) {
                         EmptyState(colors, Modifier.align(Alignment.Center))
                     } else {
-                        // The spine: a continuous spectral rail down the left edge,
-                        // drawn behind the list so every droplet sits on it.
-                        Box(
-                            Modifier.fillMaxSize().drawBehind {
-                                val x = 17.dp.toPx()
-                                drawLine(
-                                    brush = Brush.verticalGradient(
-                                        listOf(
-                                            colors.bloomA.copy(alpha = 0f),
-                                            colors.bloomA.copy(alpha = 0.5f),
-                                            colors.bloomB.copy(alpha = 0.5f),
-                                            colors.bloomA.copy(alpha = 0f),
-                                        ),
-                                    ),
-                                    start = Offset(x, 0f),
-                                    end = Offset(x, size.height),
-                                    strokeWidth = 2.dp.toPx(),
-                                )
-                            },
+                        LazyColumn(
+                            state = listState,
+                            flingBehavior = flingBehavior,
+                            contentPadding = PaddingValues(start = 8.dp, end = 14.dp, top = 12.dp, bottom = 14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxSize().testTag("timeline"),
                         ) {
-                            LazyColumn(
-                                state = listState,
-                                flingBehavior = flingBehavior,
-                                contentPadding = PaddingValues(start = 8.dp, end = 14.dp, top = 12.dp, bottom = 14.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp),
-                                modifier = Modifier.fillMaxSize().testTag("timeline"),
-                            ) {
-                                itemsIndexed(display, key = { _, s -> s.id }) { index, step ->
-                                    MessageRow(
-                                        step = step,
-                                        colors = colors,
-                                        pulse = pulse,
-                                        open = forceOpenIndex == index,
-                                        onExpandSubagent = onExpandSubagent,
-                                        modifier = Modifier.animateItem(),
-                                    )
-                                }
+                            itemsIndexed(display, key = { _, s -> s.id }) { index, step ->
+                                MessageRow(
+                                    step = step,
+                                    colors = colors,
+                                    pulse = pulse,
+                                    open = forceOpenIndex == index,
+                                    onExpandSubagent = onExpandSubagent,
+                                    modifier = Modifier.animateItem(),
+                                )
                             }
+                        }
+                    }
+                    // "new content below" cue: floats above the composer and
+                    // scrolls to the newest bubble on tap; hides once at the tail.
+                    AnimatedVisibility(
+                        visible = showNewCue,
+                        enter = fadeIn() + slideInVertically { it / 2 },
+                        exit = fadeOut() + slideOutVertically { it / 2 },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 10.dp),
+                    ) {
+                        NewCue(colors) {
+                            showNewCue = false
+                            scope.launch { listState.animateScrollToItem((count - 1).coerceAtLeast(0)) }
                         }
                     }
                 }
@@ -357,9 +389,33 @@ private fun Bloom(colors: LumenColors, modifier: Modifier = Modifier) {
 }
 
 /**
- * One message as a bubble on the left spine. Your turns align right; the agent's
- * align left with a spectrum droplet on the spine and a spectral edge hairline.
- * Reasoning folds into a pill; tools nest in a pocket inside the agent bubble.
+ * A small pill that floats above the composer when new content lands off-screen.
+ * Tapping it eases to the newest bubble and dismisses the cue.
+ */
+@Composable
+private fun NewCue(colors: LumenColors, onClick: () -> Unit) {
+    val edge = colors.spectrum.getOrElse(2) { colors.water }
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(colors.surface)
+            .border(1.dp, edge.copy(alpha = 0.35f), RoundedCornerShape(50))
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .testTag("new-cue"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "\u2193 new",
+            color = colors.water, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 0.6.sp,
+        )
+    }
+}
+
+/**
+ * One message as a bubble. Your turns align right; the agent's align left with a
+ * spectral edge hairline. Reasoning folds into a pill; tools nest in a compact
+ * pocket inside the agent bubble.
  */
 @Composable
 private fun MessageRow(
@@ -385,21 +441,6 @@ private fun MessageRow(
         modifier.fillMaxWidth(),
         horizontalArrangement = if (isYou) Arrangement.End else Arrangement.Start,
     ) {
-        if (!isYou) {
-            // A fixed gutter whose centre sits on the spine rail (drawn behind
-            // the list), so the droplet reads as a marker on the spine.
-            Box(Modifier.width(26.dp), contentAlignment = Alignment.TopCenter) {
-                Spacer(Modifier.height(16.dp))
-                Droplet(
-                    modifier = Modifier.size(10.dp),
-                    brush = Brush.verticalGradient(listOf(colors.bloomA, colors.water)),
-                    ring = step.running,
-                    pulse = pulse,
-                    colors = colors,
-                )
-            }
-        }
-
         val bubbleShape = if (isYou) {
             RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp)
         } else {
@@ -476,7 +517,7 @@ private fun MessageRow(
                 if (step.kind == StepKind.SUBAGENT) {
                     SubagentBubble(step, colors, onExpandSubagent)
                 } else {
-                    ToolPocket(step, colors)
+                    ToolPocket(step, colors, pulse)
                 }
             }
         }
@@ -655,17 +696,38 @@ private fun Droplet(
     )
 }
 
-/** The tool calls for a message, as a pocket inside the bubble. */
+/**
+ * The tool calls for a message, as a compact pocket inside the bubble. Collapsed
+ * it is a single "▸ 3 tools · read, edit, bash" line; tapping expands the calls
+ * with tight padding and each output preview clamped to two lines.
+ */
 @Composable
-private fun ToolPocket(step: UiStep, colors: LumenColors) {
-    var expanded by remember(step.id) { mutableStateOf<Int?>(null) }
+private fun ToolPocket(step: UiStep, colors: LumenColors, pulse: Float) {
+    var expanded by remember(step.id) { mutableStateOf(false) }
+    val edge = colors.spectrum.getOrElse(2) { colors.water }
+    val count = step.merged.coerceAtLeast(1)
+    val names = remember(step.toolNames, step.rows, step.label) {
+        step.toolNames.ifEmpty { step.rows.map { it.first.lowercase() } }
+            .asSequence()
+            .map { it.lowercase() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .take(4)
+            .toList()
+            .ifEmpty { listOf(step.label.lowercase()) }
+    }
+    val summary = buildString {
+        append(if (expanded) "\u25be " else "\u25b8 ")
+        append(if (count > 1) "$count tools" else "1 tool")
+        if (names.isNotEmpty()) append(" · " + names.joinToString(", "))
+    }
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(top = 10.dp)
+            .padding(top = 8.dp)
             .drawBehind {
                 drawLine(
-                    color = colors.spectrum.getOrElse(2) { colors.water }.copy(alpha = 0.22f),
+                    color = edge.copy(alpha = 0.22f),
                     start = Offset(0f, 0f),
                     end = Offset(size.width, 0f),
                     strokeWidth = 1.dp.toPx(),
@@ -674,46 +736,91 @@ private fun ToolPocket(step: UiStep, colors: LumenColors) {
                     ),
                 )
             }
-            .padding(top = 9.dp),
+            .padding(top = 3.dp),
     ) {
-        Text(
-            if (step.merged > 1) "${step.label} ×${step.merged}" else step.label,
-            color = colors.water, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 1.sp,
-            modifier = Modifier.padding(bottom = 6.dp),
-        )
-        for ((k, r) in step.rows.withIndex()) {
-            val isOpen = expanded == k
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(colors.bg.copy(alpha = 0.4f))
-                    .border(1.dp, colors.rule, RoundedCornerShape(9.dp))
-                    .clickable { expanded = if (isOpen) null else k }
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("✓", color = colors.water, fontFamily = Mono, fontSize = 11.sp)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 30.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 9.dp, vertical = 4.dp)
+                .testTag("tools-toggle"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ToolStateMark(step.failed, step.running, pulse, colors)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                summary,
+                color = when {
+                    step.failed -> colors.danger()
+                    step.running -> colors.water.copy(alpha = 0.5f + 0.5f * pulse)
+                    else -> colors.water
+                },
+                fontFamily = Mono, fontSize = 11.sp, letterSpacing = 0.6.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).testTag("tools-summary"),
+            )
+            if (step.running) {
                 Spacer(Modifier.width(8.dp))
-                Text(r.first, color = colors.fg, fontFamily = Mono, fontSize = 12.sp)
-                if (r.second.isNotEmpty()) {
-                    Spacer(Modifier.weight(1f))
-                    Text(
-                        r.second, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 150.dp),
-                    )
-                }
+                Text("running", color = colors.faint, fontFamily = Mono, fontSize = 10.sp)
             }
-            if (isOpen && r.second.isNotEmpty()) {
-                Text(
-                    r.second,
-                    color = colors.dim, fontFamily = Mono, fontSize = 11.5.sp, lineHeight = 17.sp,
-                    modifier = Modifier.fillMaxWidth().padding(start = 10.dp, top = 6.dp, bottom = 4.dp),
-                )
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
+            exit = shrinkVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut(),
+        ) {
+            Column(Modifier.padding(top = 2.dp)) {
+                for ((k, r) in step.rows.withIndex()) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(colors.bg.copy(alpha = 0.35f))
+                            .padding(horizontal = 9.dp, vertical = 4.dp)
+                            .testTag("tool-row-$k"),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Text(
+                            if (step.failed) "\u00d7" else "\u2713",
+                            color = if (step.failed) colors.danger() else colors.water,
+                            fontFamily = Mono, fontSize = 10.5.sp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(r.first, color = colors.fg, fontFamily = Mono, fontSize = 11.5.sp)
+                            if (r.second.isNotEmpty()) {
+                                Text(
+                                    r.second, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
+                                    lineHeight = 15.sp,
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.testTag("tool-output-$k"),
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
+}
+
+/** A small state dot for a tool run: danger when failed, pulsing while running. */
+@Composable
+private fun ToolStateMark(failed: Boolean, running: Boolean, pulse: Float, colors: LumenColors) {
+    val shape = WaterShapes.droplet(tail = 0.55f)
+    Box(
+        Modifier
+            .size(9.dp)
+            .then(
+                when {
+                    failed -> Modifier.background(colors.danger(), shape)
+                    running -> Modifier.background(colors.water.copy(alpha = 0.35f + 0.5f * pulse), shape)
+                    else -> Modifier.background(colors.water.copy(alpha = 0.85f), shape)
+                },
+            ),
+    )
 }
 
 /**

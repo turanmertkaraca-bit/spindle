@@ -5,11 +5,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.dp
 import dev.lumen.app.ui.model.StepKind
@@ -25,9 +27,9 @@ import org.robolectric.annotation.Config
 import kotlin.test.assertTrue
 
 /**
- * Behavioral tests for the bubble-chat spine, run on a plain JVM by Robolectric:
- * every turn shows as a bubble, tools nest in a pocket, reasoning folds into a
- * pill, and the composer/error affordances stay reachable.
+ * Behavioral tests for the bubble chat, run on a plain JVM by Robolectric:
+ * every turn shows as a bubble, a tool run collapses to one line, reasoning
+ * folds into a pill, and the composer/error/cue affordances stay reachable.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -97,7 +99,7 @@ class LumenChatScreenTest {
     }
 
     @Test
-    fun `tool rows expose their sub-rows`() {
+    fun `a tool run is one compact line that expands to its calls`() {
         val s = listOf(
             UiStep(
                 "t", StepKind.TOOL, "READ", "x",
@@ -110,11 +112,51 @@ class LumenChatScreenTest {
         compose.setContent {
             LumenChatScreen(s, input = "", busy = false, error = null, modifier = viewport, ambient = false)
         }
-        check(compose.onAllNodesWithText("compile").fetchSemanticsNodes().isNotEmpty()) {
-            "tool pocket should expose its 'compile' sub-row"
+        // Collapsed: a single summary line naming the run and its calls.
+        compose.onNodeWithText("2 tools · compile, verify", substring = true).assertIsDisplayed()
+        check(compose.onAllNodesWithText("compile", substring = false).fetchSemanticsNodes().isEmpty()) {
+            "collapsed tool run should not render each sub-row as its own node"
         }
-        check(compose.onAllNodesWithText("verify").fetchSemanticsNodes().isNotEmpty()) {
-            "tool pocket should expose its 'verify' sub-row"
+        // Expanded: the calls become visible.
+        compose.onNodeWithTag("tools-toggle").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        compose.onNodeWithTag("tool-row-0").assertIsDisplayed()
+        compose.onNodeWithTag("tool-row-1").assertIsDisplayed()
+        compose.onNodeWithText("compile").assertIsDisplayed()
+        compose.onNodeWithText("verify").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a new step below the fold shows the cue until the reader returns`() {
+        val many = (0 until 12).map { i ->
+            UiStep("s$i", StepKind.ASSISTANT, "ASSISTANT", "t$i", "summary $i", "BODY $i full text")
+        }
+        val all = mutableStateOf(many)
+        compose.setContent {
+            LumenChatScreen(all.value, input = "", busy = false, error = null, modifier = viewport, ambient = false, haptics = false)
+        }
+        // At the tail: a new answer arrives with no cue, it just follows.
+        compose.runOnIdle {
+            all.value = all.value + UiStep("n0", StepKind.ASSISTANT, "ASSISTANT", "t0", "at bottom", "arrived while at the tail")
+        }
+        compose.waitForIdle()
+        check(compose.onAllNodesWithTag("new-cue").fetchSemanticsNodes().isEmpty()) {
+            "no cue should appear when the reader is already at the tail"
+        }
+        // Read from the top, away from the tail.
+        compose.onNodeWithTag("timeline").performScrollToIndex(0)
+        compose.waitForIdle()
+        // A new answer lands while the reader is up the transcript.
+        compose.runOnIdle {
+            all.value = all.value + UiStep("n1", StepKind.ASSISTANT, "ASSISTANT", "tn", "new summary", "the new answer")
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("new-cue").assertIsDisplayed()
+        // Tapping the cue returns to the newest content and dismisses it.
+        compose.onNodeWithTag("new-cue").performClick()
+        compose.waitForIdle()
+        check(compose.onAllNodesWithTag("new-cue").fetchSemanticsNodes().isEmpty()) {
+            "the new cue should hide once the reader is back at the tail"
         }
     }
 

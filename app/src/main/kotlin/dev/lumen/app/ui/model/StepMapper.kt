@@ -62,6 +62,7 @@ object StepMapper {
                                     summary = oneLine(p.result?.output ?: call.argumentsJson),
                                     body = toolBody(p),
                                     rows = rows,
+                                    toolNames = listOf(call.name.lowercase()),
                                     running = p.state == ToolState.RUNNING || p.state == ToolState.PENDING,
                                     failed = p.state == ToolState.ERROR,
                                     childId = if (isSub) p.result?.metadata?.get("sessionId") else null,
@@ -151,6 +152,7 @@ object StepMapper {
             summary = "$merged calls · ${b.summary}",
             body = a.body + "\n\n" + b.body,
             rows = a.rows + b.rows,
+            toolNames = a.toolNames + b.toolNames,
             running = a.running || b.running,
             failed = a.failed || b.failed,
         )
@@ -194,6 +196,7 @@ object StepMapper {
                 current + UiStep(
                     id = id, kind = StepKind.TOOL, label = event.name.uppercase(), tag = "",
                     summary = "calling…", body = "", running = true,
+                    toolNames = listOf(event.name.lowercase()),
                 )
             }
         }

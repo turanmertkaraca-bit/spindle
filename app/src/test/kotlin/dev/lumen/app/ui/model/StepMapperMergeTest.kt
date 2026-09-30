@@ -49,6 +49,19 @@ class StepMapperMergeTest {
     }
 
     @Test
+    fun `a merged run keeps each tool's name for the compact summary`() {
+        val merged = StepMapper.mergeAdjacent(
+            listOf(
+                step("a", StepKind.TOOL).copy(toolNames = listOf("read")),
+                step("b", StepKind.TOOL).copy(toolNames = listOf("edit")),
+                step("c", StepKind.TOOL).copy(toolNames = listOf("bash")),
+            ),
+        )
+        assertEquals(1, merged.size)
+        assertEquals(listOf("read", "edit", "bash"), merged[0].toolNames)
+    }
+
+    @Test
     fun `ordinary messages never merge`() {
         val merged = StepMapper.mergeAdjacent(
             listOf(step("a", StepKind.YOU), step("b", StepKind.ASSISTANT), step("c", StepKind.ASSISTANT)),
