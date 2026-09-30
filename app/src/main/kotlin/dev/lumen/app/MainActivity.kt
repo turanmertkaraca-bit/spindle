@@ -101,6 +101,8 @@ class MainActivity : ComponentActivity() {
                     onToggleTheme = toggleTheme,
                     onEditKey = { route = "settings" },
                     onExpandSubagent = viewModel::expandSubagent,
+                    usage = state.usage,
+                    changes = state.changes,
                 )
                 route == "settings" -> SettingsScreen(
                     colors = colors,

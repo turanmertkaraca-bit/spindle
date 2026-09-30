@@ -1,6 +1,7 @@
 package dev.lumen.app.ui
 
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -13,6 +14,9 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.dp
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.UiStep
+import dev.spindle.core.model.FileEdit
+import dev.spindle.core.model.RunChanges
+import dev.spindle.core.model.SessionId
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,6 +52,38 @@ class LumenChatScreenTest {
     private fun noNode(text: String) {
         val c = compose.onAllNodesWithText(text).fetchSemanticsNodes().size
         check(c == 0) { "expected no node with text '$text', found $c" }
+    }
+
+    /** Two files, +12/−3, matching the screenshot fixture. */
+    private fun sampleChanges(): RunChanges {
+        val sid = SessionId("ses1")
+        return RunChanges(
+            edits = listOf(
+                FileEdit(id = "e1", sessionId = sid, path = "RopeLayout.kt", added = 8, removed = 3),
+                FileEdit(id = "e2", sessionId = sid, path = "StepMapper.kt", added = 4, removed = 0),
+            ),
+        )
+    }
+
+    @Test
+    fun `changes summary appears only when there are edits`() {
+        val changes = mutableStateOf(RunChanges.EMPTY)
+        compose.setContent {
+            LumenChatScreen(
+                steps(2), input = "", busy = false, error = null, modifier = viewport, ambient = false,
+                changes = changes.value,
+            )
+        }
+        val summary = "2 files · 2 edits · +12 −3"
+        check(compose.onAllNodesWithText(summary, substring = true).fetchSemanticsNodes().isEmpty()) {
+            "changes summary should be absent with no edits"
+        }
+        compose.runOnIdle { changes.value = sampleChanges() }
+        compose.onNodeWithText(summary, substring = true).assertIsDisplayed()
+        compose.runOnIdle { changes.value = RunChanges.EMPTY }
+        check(compose.onAllNodesWithText(summary, substring = true).fetchSemanticsNodes().isEmpty()) {
+            "changes summary should disappear once edits are gone"
+        }
     }
 
     @Test

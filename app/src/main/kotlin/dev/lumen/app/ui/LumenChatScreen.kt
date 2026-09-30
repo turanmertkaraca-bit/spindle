@@ -84,6 +84,9 @@ import androidx.compose.ui.unit.sp
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
+import dev.spindle.core.model.RunChanges
+import dev.spindle.core.model.Usage
+import java.util.Locale
 import kotlin.math.abs
 
 private val Mono = FontFamily.Monospace
@@ -191,6 +194,10 @@ fun LumenChatScreen(
     onEditKey: (() -> Unit)? = null,
     onExpandSubagent: (UiStep) -> Unit = {},
     ambient: Boolean = true,
+    /** Rolled-up session token/cost totals; the meter hides until non-zero. */
+    usage: Usage = Usage(),
+    /** Structured file changes for this run; the card hides when empty. */
+    changes: RunChanges = RunChanges.EMPTY,
 ) {
     val listState = rememberLazyListState()
     val flingBehavior = remember { calmFling() }
@@ -316,6 +323,10 @@ fun LumenChatScreen(
         if (error != null) {
             ErrorNotice(error, colors, onEditKey)
         }
+        if (changes.editCount > 0) {
+            ChangesCard(changes, colors)
+        }
+        UsageMeter(usage, colors)
         Composer(input, busy, colors, onInput, onSend, onStop, onToggleTheme, onEditKey)
     }
 }
@@ -809,6 +820,133 @@ private fun ErrorNotice(message: String, colors: LumenColors, onEditKey: (() -> 
 
 private fun oneLine(s: String): String =
     s.replace(Regex("\\s+"), " ").trim().let { if (it.length > 160) it.take(160) + "…" else it }
+
+/**
+ * A compact summary of the files the agent changed this run, pinned above the
+ * composer. Collapsed to one prism-edged line; tapping opens the files, and
+ * each file opens to its unified diff in a monospace block.
+ */
+@Composable
+private fun ChangesCard(changes: RunChanges, colors: LumenColors) {
+    val clipboard = LocalClipboardManager.current
+    var expanded by remember { mutableStateOf(false) }
+    var openFile by remember { mutableStateOf<String?>(null) }
+    val edge = colors.spectrum.getOrElse(2) { colors.water }
+    val shape = RoundedCornerShape(12.dp)
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(shape)
+            .background(colors.surface)
+            .border(1.dp, edge.copy(alpha = 0.22f), shape),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 12.dp, vertical = 9.dp)
+                .testTag("changes-toggle"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(8.dp).clip(WaterShapes.droplet(tail = 0.55f)).background(edge))
+            Spacer(Modifier.width(9.dp))
+            Text(
+                "${if (expanded) "▾" else "▸"} ${changes.fileCount} files · " +
+                    "${changes.editCount} edits · +${changes.added} −${changes.removed}",
+                color = colors.fg, fontFamily = Mono, fontSize = 11.5.sp, letterSpacing = 0.4.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("changes-summary"),
+            )
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
+            exit = shrinkVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut(),
+        ) {
+            Column(
+                Modifier
+                    .heightIn(max = 260.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+            ) {
+                for ((path, edits) in changes.byFile()) {
+                    val added = edits.sumOf { it.added }
+                    val removed = edits.sumOf { it.removed }
+                    val fileOpen = openFile == path
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { openFile = if (fileOpen) null else path }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(if (fileOpen) "▾" else "▸", color = colors.dim, fontFamily = Mono, fontSize = 10.sp)
+                        Spacer(Modifier.width(7.dp))
+                        Text(
+                            path, color = colors.dim, fontFamily = Mono, fontSize = 11.5.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("+$added −$removed", color = colors.water, fontFamily = Mono, fontSize = 11.sp)
+                    }
+                    AnimatedVisibility(visible = fileOpen) {
+                        val diff = edits.joinToString("\n") { it.unifiedDiff }.trim()
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(9.dp))
+                                .background(colors.bg.copy(alpha = 0.4f))
+                                .border(1.dp, colors.rule, RoundedCornerShape(9.dp))
+                                .padding(horizontal = 10.dp, vertical = 8.dp)
+                                .testTag("changes-diff"),
+                        ) {
+                            Text(
+                                diff.ifEmpty { "(no diff)" },
+                                color = colors.dim, fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(2.dp))
+                }
+                val all = changes.byFile().values.flatten().joinToString("\n") { it.unifiedDiff }.trim()
+                if (all.isNotEmpty()) {
+                    Text(
+                        "copy diff",
+                        color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { clipboard.setText(AnnotatedString(all)) }
+                            .padding(horizontal = 6.dp, vertical = 5.dp)
+                            .testTag("copy-diff"),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A thin usage footer: rolled-up context tokens and, when known, cost. Hidden
+ * entirely until the session has spent tokens, so an idle chat stays clean.
+ */
+@Composable
+private fun UsageMeter(usage: Usage, colors: LumenColors) {
+    if (usage.totalTokens <= 0) return
+    val tokens = String.format(Locale.US, "%.1fk tok", usage.totalTokens / 1000.0)
+    val cost = if (usage.costUsd > 0.0) String.format(Locale.US, " · \$%.4f", usage.costUsd) else ""
+    Text(
+        tokens + cost,
+        color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.5.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 3.dp, bottom = 1.dp)
+            .testTag("usage-meter"),
+    )
+}
 
 @Composable
 private fun Composer(

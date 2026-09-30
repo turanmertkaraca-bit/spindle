@@ -7,6 +7,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.UiStep
+import dev.spindle.core.model.FileEdit
+import dev.spindle.core.model.RunChanges
+import dev.spindle.core.model.SessionId
+import dev.spindle.core.model.Usage
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -66,6 +70,32 @@ class ScreenshotTest {
             "Found it. The session cookie is set after res.redirect(), so the browser leaves before Set-Cookie is written. Writing the cookie first fixes the loop.",
         ),
     )
+
+    /** Two files, +12/−3, with real diff bodies so the card has something to open. */
+    private fun sampleChanges(): RunChanges {
+        val sid = SessionId("ses1")
+        return RunChanges(
+            edits = listOf(
+                FileEdit(
+                    id = "e1", sessionId = sid,
+                    path = "app/src/main/kotlin/dev/lumen/app/ui/RopeLayout.kt",
+                    startLine = 12, endLine = 19, added = 8, removed = 3,
+                    unifiedDiff = "@@ -12,7 +12,12 @@ class RopeLayout {\n" +
+                        "-    val open = false\n" +
+                        "+    val open = remember { mutableStateOf(true) }\n" +
+                        "+    DisposableEffect(open) { onDispose { /* noop */ } }",
+                ),
+                FileEdit(
+                    id = "e2", sessionId = sid,
+                    path = "app/src/main/kotlin/dev/lumen/app/ui/StepMapper.kt",
+                    added = 4, removed = 0, created = true,
+                    unifiedDiff = "@@ -30,3 +30,7 @@ object StepMapper {\n" +
+                        "+    // fold consecutive tool rows into one pocket\n" +
+                        "+    val folded = rows.reduceOrNull { a, b -> a }",
+                ),
+            ),
+        )
+    }
 
     private fun shoot(name: String, content: @Composable () -> Unit) {
         compose.setContent(content)
@@ -256,6 +286,40 @@ class ScreenshotTest {
             forceOpenIndex = 5,
             ambient = false,
             onToggleTheme = {},
+        )
+    }
+
+    @Test fun light_changes_and_usage() = shoot("light_changes.png") {
+        LumenChatScreen(
+            steps = sample(),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Light,
+            title = "make the timeline a spine",
+            onHome = {},
+            ambient = false,
+            onToggleTheme = {},
+            onEditKey = {},
+            usage = Usage(inputTokens = 7_400, outputTokens = 4_900, costUsd = 0.0450),
+            changes = sampleChanges(),
+        )
+    }
+
+    @Test fun dark_changes_and_usage() = shoot("dark_changes.png") {
+        LumenChatScreen(
+            steps = sample(),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Dark,
+            title = "make the timeline a spine",
+            onHome = {},
+            ambient = false,
+            onToggleTheme = {},
+            onEditKey = {},
+            usage = Usage(inputTokens = 7_400, outputTokens = 4_900, costUsd = 0.0450),
+            changes = sampleChanges(),
         )
     }
 
