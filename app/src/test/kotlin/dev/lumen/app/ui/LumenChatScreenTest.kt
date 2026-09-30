@@ -166,10 +166,15 @@ class LumenChatScreenTest {
         }
         compose.onNodeWithText("thinking · ${think.length} chars").assertIsDisplayed()
         noNode(think)
-        compose.onNodeWithTag("think-toggle").performClick()
+        val toggle = compose.onNodeWithTag("think-toggle")
+        toggle.assertIsDisplayed()
+        toggle.performClick()
         compose.waitForIdle()
+        // If the chevron flipped, the click registered; report which half failed.
+        val opened = compose.onAllNodesWithText("▾", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        check(opened) { "click did not register: the think pill is still collapsed" }
         check(compose.onAllNodesWithText(think, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) {
-            "expanded think body should be present after the tap"
+            "the pill opened but the body text did not render"
         }
     }
 }
