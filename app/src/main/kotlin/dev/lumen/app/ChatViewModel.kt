@@ -7,12 +7,15 @@ import dev.lumen.app.data.AndroidSessionStore
 import dev.lumen.app.data.AndroidSnapshotStore
 import dev.lumen.app.data.KeyStore
 import dev.lumen.app.data.ProviderCatalogue
+import dev.lumen.app.platform.AndroidShellExecutor
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
 import dev.spindle.core.model.RunChanges
 import dev.spindle.core.model.Usage
 import dev.spindle.core.store.SnapshotStore
+import dev.spindle.core.tool.ShellExecutor
+import dev.spindle.tool.HostShellExecutor
 import dev.spindle.core.agent.AgentConfig
 import dev.spindle.core.agent.AgentLoop
 import dev.spindle.core.agent.PermissionGate
@@ -76,6 +79,7 @@ class ChatViewModel(
     private val ownedStore: AutoCloseable? = null,
     private val snapshots: SnapshotStore? = null,
     private val ownedSnapshots: AutoCloseable? = null,
+    private val shell: ShellExecutor? = null,
 ) : ViewModel() {
 
     private val bus = EventBus()
@@ -337,7 +341,7 @@ class ChatViewModel(
             }
             val loop = AgentLoop(
                 providers = providersFor(keys.provider, key),
-                tools = DefaultTools.registry(),
+                tools = DefaultTools.registry(shell = shell ?: HostShellExecutor()),
                 store = store,
                 bus = bus,
                 permissions = PermissionGate { _, _, _ -> true },
@@ -381,6 +385,7 @@ class ChatViewModel(
                         ownedStore = store,
                         snapshots = snapshots,
                         ownedSnapshots = snapshots,
+                        shell = AndroidShellExecutor(context),
                     ) as T
                 }
             }

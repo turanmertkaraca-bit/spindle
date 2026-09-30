@@ -13,11 +13,20 @@ android {
 
     defaultConfig {
         applicationId = "dev.lumen.app"
-        minSdk = 26
-        targetSdk = 34
+        // targetSdk 28 is DELIBERATE: it is the W^X/SELinux exemption that lets
+        // the app exec the bundled proot/rootfs binaries out of app-private
+        // storage without root. Raising it breaks the on-device Linux userland.
+        // The app is sideloaded, so Play policy does not apply.
+        minSdk = 28
+        targetSdk = 28
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // Keep bundled sandbox binaries (.bin) uncompressed so exec sees a real ELF.
+    androidResources {
+        noCompress += listOf("bin")
     }
 
     buildTypes {
@@ -54,6 +63,7 @@ kotlin {
 
 dependencies {
     implementation(project(":core"))
+    implementation(project(":sandbox"))
     implementation(project(":tools"))
     implementation(project(":provider-openai"))
     implementation(project(":provider-anthropic"))
