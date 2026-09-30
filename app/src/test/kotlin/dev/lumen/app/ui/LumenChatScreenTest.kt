@@ -168,6 +168,8 @@ class LumenChatScreenTest {
         noNode(think)
         compose.onNodeWithTag("think-toggle").performClick()
         compose.waitForIdle()
-        compose.onNodeWithTag("think-body", useUnmergedTree = true).assertExists()
+        check(compose.onAllNodesWithText(think, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) {
+            "expanded think body should be present after the tap"
+        }
     }
 }
