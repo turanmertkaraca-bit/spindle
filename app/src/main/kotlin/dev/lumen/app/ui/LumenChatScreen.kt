@@ -1,5 +1,10 @@
 package dev.lumen.app.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.AnimationState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -32,6 +37,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -40,6 +46,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -51,6 +59,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -100,13 +109,14 @@ private fun calmFling(friction: Float = FLING_FRICTION): FlingBehavior = object 
 }
 
 /** The "failed" colour — an explicit red, independent of the spectrum. */
-private fun LumenColors.danger(): Color = if (dark) Color(0xFFFB7185) else Color(0xFFBE123C)
+private fun LumenColors.danger(): Color = if (dark) Color(0xFFF87171) else Color(0xFFBE123C)
 
 /**
- * The prism palette: near-black (or near-white) base with an iridescent
+ * The prism palette: true-black (AMOLED) or near-white base with an iridescent
  * violet→azure→cyan→mint spectrum used as light — bubble edges, droplets, the
- * send button — never as a flat fill. Contrast was checked against the base
- * (foreground >16:1, spectrum >7:1 dark / >5:1 light).
+ * send button — never as a flat fill. The dark spectrum is desaturated toward
+ * pastel so it reads calm rather than neon. Contrast was checked against the
+ * base (foreground >16:1, spectrum >9:1 dark / >5:1 light).
  */
 data class LumenColors(
     val bg: Color,
@@ -131,20 +141,20 @@ data class LumenColors(
         val Light = LumenColors(
             bg = Color(0xFFF7F6FB), surface = Color(0xFFFFFFFF), fg = Color(0xFF1A1730),
             dim = Color(0xFF6B6588), faint = Color(0xFFA9A4C0), rule = Color(0x1A140A32),
-            accent = Color(0xFF6D28D9),
-            water = Color(0xFF0E7490),
+            accent = Color(0xFF6D3FC9),
+            water = Color(0xFF16708A),
             spectrum = listOf(
-                Color(0xFF6D28D9), Color(0xFF1D4ED8), Color(0xFF0E7490), Color(0xFF047857),
+                Color(0xFF7147C4), Color(0xFF335FB4), Color(0xFF186F82), Color(0xFF107455),
             ),
             dark = false,
         )
         val Dark = LumenColors(
-            bg = Color(0xFF08070D), surface = Color(0xFF141221), fg = Color(0xFFF2EFFB),
+            bg = Color(0xFF000000), surface = Color(0xFF0A0A0C), fg = Color(0xFFF2EFFB),
             dim = Color(0xFFA49FC4), faint = Color(0xFF5B5675), rule = Color(0x17FFFFFF),
-            accent = Color(0xFFA78BFA),
-            water = Color(0xFF22D3EE),
+            accent = Color(0xFFB9A6F5),
+            water = Color(0xFF7FD8E8),
             spectrum = listOf(
-                Color(0xFFA78BFA), Color(0xFF60A5FA), Color(0xFF22D3EE), Color(0xFF34D399),
+                Color(0xFFB9A6F5), Color(0xFF8FB8F0), Color(0xFF7FD8E8), Color(0xFF8FDCC0),
             ),
             dark = true,
         )
@@ -179,6 +189,7 @@ fun LumenChatScreen(
     onStop: () -> Unit = {},
     onToggleTheme: (() -> Unit)? = null,
     onEditKey: (() -> Unit)? = null,
+    onExpandSubagent: (UiStep) -> Unit = {},
     ambient: Boolean = true,
 ) {
     val listState = rememberLazyListState()
@@ -288,6 +299,7 @@ fun LumenChatScreen(
                                         colors = colors,
                                         pulse = pulse,
                                         open = forceOpenIndex == index,
+                                        onExpandSubagent = onExpandSubagent,
                                         modifier = Modifier.animateItem(),
                                     )
                                 }
@@ -341,6 +353,7 @@ private fun MessageRow(
     colors: LumenColors,
     pulse: Float,
     open: Boolean,
+    onExpandSubagent: (UiStep) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
@@ -353,7 +366,6 @@ private fun MessageRow(
     }
 
     val isYou = step.kind == StepKind.YOU
-    val isTool = step.kind == StepKind.TOOL || step.kind == StepKind.SUBAGENT
 
     Row(
         modifier.fillMaxWidth(),
@@ -431,18 +443,177 @@ private fun MessageRow(
             if (step.running && step.body.isBlank()) {
                 Text("thinking…", color = colors.water.copy(alpha = 0.5f + 0.5f * pulse), fontFamily = Mono, fontSize = 14.sp)
             } else {
-                Text(
-                    step.body.ifBlank { step.summary },
-                    color = colors.fg, fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp,
-                )
+                val body = step.body.ifBlank { step.summary }
+                if (body.length > LONG_BODY_CHARS) {
+                    LongBody(
+                        body = body,
+                        header = step.label.lowercase(),
+                        colors = colors,
+                    )
+                } else {
+                    Text(
+                        body,
+                        color = colors.fg, fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp,
+                    )
+                }
             }
 
             if (step.rows.isNotEmpty()) {
-                ToolPocket(step, colors)
+                if (step.kind == StepKind.SUBAGENT) {
+                    SubagentBubble(step, colors, onExpandSubagent)
+                } else {
+                    ToolPocket(step, colors)
+                }
             }
+        }
+    }
+}
 
-            if (open && isTool && step.body.isNotBlank()) {
-                // (force-open path already shows the body above)
+/** Above this many characters, a message gets its own scroll with a pinned header. */
+private const val LONG_BODY_CHARS = 900
+
+/**
+ * A long message: its own scroll area with the label pinned to the top and the
+ * text fading out under it, so scrolling a wall of text feels anchored instead
+ * of pushing the whole timeline.
+ */
+@Composable
+private fun LongBody(body: String, header: String, colors: LumenColors) {
+    val scroll = rememberScrollState()
+    val atTop by remember { derivedStateOf { scroll.value <= 2 } }
+    val atBottom by remember {
+        derivedStateOf { scroll.value >= scroll.maxValue - 2 }
+    }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(max = 460.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(colors.bg.copy(alpha = 0.35f)),
+    ) {
+        Column(Modifier.verticalScroll(scroll)) {
+            // Pinned label; stays legible over the text as it scrolls under it.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(colors.bg.copy(alpha = 0.95f), colors.bg.copy(alpha = 0f)),
+                        ),
+                    )
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+            ) {
+                Text(header, color = colors.dim, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 1.2.sp)
+            }
+            Text(
+                body,
+                color = colors.fg, fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+        // Top fade: the text dissolves as it slides under the pinned label.
+        if (!atTop) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(34.dp)
+                    .align(Alignment.TopCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(colors.surface, colors.surface.copy(alpha = 0f)),
+                        ),
+                    ),
+            )
+        }
+        // Bottom fade: a gentle hint that more text is below.
+        if (!atBottom) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(28.dp)
+                    .align(Alignment.BottomCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(colors.surface.copy(alpha = 0f), colors.surface),
+                        ),
+                    ),
+            )
+        }
+    }
+}
+
+/**
+ * A subagent as its own card inside the message bubble: the task, a live status
+ * dot, and the child's steps. Tapping the header loads the full transcript on
+ * demand (the collapsed form only carries the first few steps).
+ */
+@Composable
+private fun SubagentBubble(step: UiStep, colors: LumenColors, onExpand: (UiStep) -> Unit) {
+    val loaded = step.childSteps.isNotEmpty()
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .animateContentSize(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow,
+                ),
+            )
+            .padding(top = 10.dp),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(colors.water.copy(alpha = 0.10f))
+                .border(1.dp, colors.water.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
+                .clickable(enabled = step.childId != null) { onExpand(step) }
+                .padding(horizontal = 11.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .clip(WaterShapes.droplet(tail = 0.55f))
+                    .background(
+                        when {
+                            step.failed -> colors.danger()
+                            else -> colors.water
+                        },
+                    ),
+            )
+            Spacer(Modifier.width(9.dp))
+            Text("subagent", color = colors.water, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 1.sp)
+            Spacer(Modifier.weight(1f))
+            Text(
+                when {
+                    step.childLoading -> "loading…"
+                    step.running -> "running…"
+                    else -> if (loaded) "collapse" else "open"
+                },
+                color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp,
+            )
+        }
+        val steps: List<UiStep> = if (loaded) step.childSteps else {
+            step.rows.map { (k, v) ->
+                UiStep(id = "kid:$k:$v", kind = StepKind.TOOL, label = k, tag = "", summary = v, body = v)
+            }
+        }
+        Column(Modifier.padding(start = 10.dp, top = 7.dp)) {
+            for (kid in steps) {
+                Row(Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(5.dp).clip(WaterShapes.droplet(tail = 0.5f)).background(colors.faint))
+                    Spacer(Modifier.width(9.dp))
+                    Text(kid.label, color = colors.dim, fontFamily = Mono, fontSize = 11.5.sp)
+                    if (kid.summary.isNotEmpty()) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            kid.summary, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
             }
         }
     }
@@ -561,13 +732,19 @@ private fun ThinkSection(think: String, colors: LumenColors) {
                 color = colors.dim, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 0.5.sp,
             )
         }
-        if (open) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                think,
-                color = colors.dim, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp,
-                modifier = Modifier.testTag("think-body"),
-            )
+        AnimatedVisibility(
+            visible = open,
+            enter = expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
+            exit = shrinkVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut(),
+        ) {
+            Column {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    think,
+                    color = colors.dim, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp,
+                    modifier = Modifier.testTag("think-body"),
+                )
+            }
         }
     }
 }

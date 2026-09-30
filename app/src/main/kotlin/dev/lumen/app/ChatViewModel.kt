@@ -224,11 +224,45 @@ class ChatViewModel(
         _state.value = _state.value.copy(steps = enrich(StepMapper.fromMessages(store.messages(sid))))
     }
 
-    /** Surface what a subagent actually did by inlining its child steps as rows. */
+    /**
+     * Surface what a subagent actually did by inlining its child steps. The
+     * collapsed preview is the first 8 rows; the full transcript is fetched on
+     * demand ([expandSubagent]) and cached, because [enrich] runs on every
+     * streaming rebuild and must not read every child session each time.
+     */
+    private val childCache = mutableMapOf<String, List<UiStep>>()
+
     private suspend fun enrich(steps: List<UiStep>): List<UiStep> = steps.map { step ->
         val child = step.childId ?: return@map step
-        val kids = runCatching { StepMapper.fromMessages(store.messages(SessionId(child))) }.getOrDefault(emptyList())
+        val kids = childCache.getOrPut(child) {
+            runCatching { StepMapper.fromMessages(store.messages(SessionId(child))) }.getOrDefault(emptyList())
+        }
         step.copy(rows = kids.take(8).map { it.label to it.summary })
+    }
+
+    /** Load a subagent's full transcript (on tap) and attach it to the row. */
+    fun expandSubagent(step: UiStep) {
+        val child = step.childId ?: return
+        if (step.childSteps.isNotEmpty()) {
+            // Already loaded — just toggle it closed.
+            _state.value = _state.value.copy(
+                steps = _state.value.steps.map { if (it.id == step.id) it.copy(childSteps = emptyList()) else it },
+            )
+            return
+        }
+        _state.value = _state.value.copy(
+            steps = _state.value.steps.map { if (it.id == step.id) it.copy(childLoading = true) else it },
+        )
+        viewModelScope.launch {
+            val kids = runCatching { StepMapper.fromMessages(store.messages(SessionId(child))) }
+                .getOrDefault(emptyList())
+            childCache[child] = kids
+            _state.value = _state.value.copy(
+                steps = _state.value.steps.map {
+                    if (it.id == step.id) it.copy(childSteps = kids, childLoading = false) else it
+                },
+            )
+        }
     }
 
     fun onInput(v: String) { _state.value = _state.value.copy(input = v) }

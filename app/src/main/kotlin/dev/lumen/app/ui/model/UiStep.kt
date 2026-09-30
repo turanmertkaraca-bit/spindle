@@ -17,6 +17,10 @@ enum class StepKind { YOU, THINKING, TOOL, SUBAGENT, QUESTION, ASSISTANT }
  * @param think reasoning folded into this block (see StepMapper.groupSteps);
  *        shown expanded while it is alone and collapsed once [body] exists
  * @param thinkTag the stable tag of the reasoning row, kept for tests/traceability
+ * @param childSteps full child transcript of a subagent, loaded on demand when
+ *        the user taps the subagent bubble (lazy, so a rebuild never reads every
+ *        child session)
+ * @param childLoading true while the child transcript is being read
  */
 data class UiStep(
     val id: String,
@@ -35,4 +39,8 @@ data class UiStep(
     val think: String? = null,
     /** Tag of the folded reasoning row. */
     val thinkTag: String? = null,
+    /** Full child transcript of a subagent, loaded on tap. */
+    val childSteps: List<UiStep> = emptyList(),
+    /** True while the child transcript is loading. */
+    val childLoading: Boolean = false,
 )

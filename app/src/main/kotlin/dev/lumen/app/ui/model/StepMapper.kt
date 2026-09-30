@@ -120,7 +120,14 @@ object StepMapper {
             }
             val host = if (s.kind == StepKind.ASSISTANT || isMergeable(s.kind)) pending else null
             if (host != null && s.body.isNotBlank()) {
-                out += s.copy(think = host.body, thinkTag = host.tag)
+                // Keep the THINKING row's identity so the LazyColumn key is stable
+                // across the think→answer transition: the item grows in place and
+                // the list never removes+re-inserts (which caused a scroll jump).
+                out += s.copy(
+                    id = host.id,
+                    think = host.body,
+                    thinkTag = host.tag,
+                )
                 pending = null
             } else {
                 if (pending != null) {
