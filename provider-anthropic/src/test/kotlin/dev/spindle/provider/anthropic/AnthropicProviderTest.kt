@@ -6,6 +6,7 @@ import dev.spindle.core.model.Usage
 import dev.spindle.core.provider.ChatRequest
 import dev.spindle.core.provider.ProviderEvent
 import dev.spindle.core.provider.ToolSpec
+import dev.spindle.core.provider.WireImage
 import dev.spindle.core.provider.WireMessage
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
@@ -132,5 +133,48 @@ class AnthropicProviderTest {
         assertEquals("tool_result", blocks[1].jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("text", blocks[2].jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("continue", blocks[2].jsonObject["text"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `sends base64 image block for user messages with images`() = runTest {
+        server.enqueue(MockResponse().setChunkedBody("data: {\"type\":\"message_stop\"}\n\n", 5))
+
+        val req = request().copy(
+            messages = listOf(
+                WireMessage(
+                    role = "user",
+                    text = "what is this?",
+                    images = listOf(WireImage("image/jpeg", "QUJD")),
+                ),
+            ),
+        )
+        provider().stream(req).toList()
+
+        val blocks = Json.parseToJsonElement(server.takeRequest().body.readUtf8())
+            .jsonObject["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray
+
+        assertEquals("text", blocks[0].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("what is this?", blocks[0].jsonObject["text"]!!.jsonPrimitive.content)
+
+        val image = blocks[1].jsonObject
+        assertEquals("image", image["type"]!!.jsonPrimitive.content)
+        val source = image["source"]!!.jsonObject
+        assertEquals("base64", source["type"]!!.jsonPrimitive.content)
+        assertEquals("image/jpeg", source["media_type"]!!.jsonPrimitive.content)
+        assertEquals("QUJD", source["data"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `keeps single text block when there are no images`() = runTest {
+        server.enqueue(MockResponse().setChunkedBody("data: {\"type\":\"message_stop\"}\n\n", 5))
+
+        provider().stream(request()).toList()
+
+        val blocks = Json.parseToJsonElement(server.takeRequest().body.readUtf8())
+            .jsonObject["messages"]!!.jsonArray[0].jsonObject["content"]!!.jsonArray
+
+        assertEquals(1, blocks.size)
+        assertEquals("text", blocks[0].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("hi", blocks[0].jsonObject["text"]!!.jsonPrimitive.content)
     }
 }

@@ -6,6 +6,8 @@ import dev.spindle.core.model.TodoItem
 import dev.spindle.core.model.TodoStatus
 import dev.spindle.core.store.InMemorySnapshotStore
 import dev.spindle.core.store.SnapshotStore
+import dev.spindle.core.tool.ShellExecutor
+import dev.spindle.core.tool.ShellResult
 import dev.spindle.core.tool.SubagentResult
 import dev.spindle.core.tool.SubagentSpec
 import dev.spindle.core.tool.ToolContext
@@ -80,6 +82,30 @@ private class FakeToolContext(
     override suspend fun subagent(spec: SubagentSpec): SubagentResult {
         lastSubagentSpec = spec
         return scriptedSubagent
+    }
+}
+
+/** Scripted [ShellExecutor] so BashTool formatting can be asserted without a process. */
+private class FakeShell(
+    private val result: ShellResult,
+) : ShellExecutor {
+    override val id = "fake"
+    var calls: Int = 0
+    var lastCommand: String? = null
+    var lastCwd: Path? = null
+    var lastTimeoutMs: Long? = null
+
+    override suspend fun run(
+        command: String,
+        cwd: Path,
+        timeoutMs: Long,
+        env: Map<String, String>,
+    ): ShellResult {
+        calls++
+        lastCommand = command
+        lastCwd = cwd
+        lastTimeoutMs = timeoutMs
+        return result
     }
 }
 
@@ -325,6 +351,65 @@ class ToolsTest {
             assertTrue(outcome.isError, outcome.output)
             assertTrue(outcome.output.contains("timed out", ignoreCase = true), outcome.output)
             assertEquals("true", outcome.metadata["timeout"])
+        }
+    }
+
+    @Test
+    fun bashDelegatesToInjectedShell() = runTest {
+        withTempDir { dir ->
+            val ctx = FakeToolContext(dir)
+            val shell = FakeShell(ShellResult(exitCode = 0, output = "ok\n"))
+            val outcome = BashTool(shell).run(obj("""{"command":"echo ok","timeoutMs":1234}"""), ctx)
+
+            assertFalse(outcome.isError, outcome.output)
+            assertEquals(1, shell.calls)
+            assertEquals("echo ok", shell.lastCommand)
+            assertEquals(dir.toAbsolutePath().normalize(), shell.lastCwd?.toAbsolutePath()?.normalize())
+            assertEquals(1234L, shell.lastTimeoutMs)
+            assertEquals("[exit 0]\nok\n", outcome.output)
+        }
+    }
+
+    @Test
+    fun bashFormatsTruncationMarker() = runTest {
+        withTempDir { dir ->
+            val ctx = FakeToolContext(dir)
+            val shell = FakeShell(ShellResult(exitCode = 0, output = "body", truncated = true))
+            val outcome = BashTool(shell).run(obj("""{"command":"emit"}"""), ctx)
+
+            assertEquals(
+                "[exit 0]\nbody\n…[output truncated at ${Limits.BASH_MAX_OUTPUT_CHARS} chars]",
+                outcome.output,
+            )
+            assertEquals("true", outcome.metadata["truncated"])
+        }
+    }
+
+    @Test
+    fun bashFormatsTimeoutFromExecutor() = runTest {
+        withTempDir { dir ->
+            val ctx = FakeToolContext(dir)
+            val shell = FakeShell(ShellResult(exitCode = -1, output = "partial", timedOut = true))
+            val outcome = BashTool(shell).run(obj("""{"command":"sleep","timeoutMs":50}"""), ctx)
+
+            assertTrue(outcome.isError, outcome.output)
+            assertEquals("[timeout]\nCommand timed out after 50ms\npartial", outcome.output)
+            assertEquals("true", outcome.metadata["timeout"])
+            assertEquals("50", outcome.metadata["timeoutMs"])
+        }
+    }
+
+    @Test
+    fun bashDeniedPermissionSkipsExecutor() = runTest {
+        withTempDir { dir ->
+            val ctx = FakeToolContext(dir)
+            ctx.permissionAllowed = false
+            val shell = FakeShell(ShellResult(exitCode = 0, output = "never"))
+            val outcome = BashTool(shell).run(obj("""{"command":"echo hi"}"""), ctx)
+
+            assertTrue(outcome.isError, outcome.output)
+            assertTrue(outcome.output.contains("denied", ignoreCase = true), outcome.output)
+            assertEquals(0, shell.calls)
         }
     }
 

@@ -7,9 +7,15 @@ import dev.spindle.core.provider.ChatRequest
 import dev.spindle.core.provider.ModelInfo
 import dev.spindle.core.provider.ProviderEvent
 import dev.spindle.core.provider.ToolSpec
+import dev.spindle.core.provider.WireImage
 import dev.spindle.core.provider.WireMessage
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import kotlin.test.AfterTest
@@ -130,5 +136,51 @@ class OpenAiProviderTest {
         server.enqueue(MockResponse().setResponseCode(500))
         val fallback = listOf(ModelInfo(providerId = "openai", id = "fallback"))
         assertEquals(fallback, provider(defaults = fallback).models())
+    }
+
+    @Test
+    fun `sends image content array for user messages with images`() = runTest {
+        server.enqueue(MockResponse().setBody("data: [DONE]\n\n"))
+
+        val req = request().copy(
+            messages = listOf(
+                WireMessage(
+                    role = "user",
+                    text = "what is this?",
+                    images = listOf(WireImage("image/png", "QUJD")),
+                ),
+            ),
+        )
+        provider().stream(req).toList()
+
+        val messages = Json.parseToJsonElement(server.takeRequest().body.readUtf8())
+            .jsonObject["messages"]!!.jsonArray
+        val content = messages.first { it.jsonObject["role"]!!.jsonPrimitive.content == "user" }
+            .jsonObject["content"]!!.jsonArray
+
+        val text = content[0].jsonObject
+        assertEquals("text", text["type"]!!.jsonPrimitive.content)
+        assertEquals("what is this?", text["text"]!!.jsonPrimitive.content)
+
+        val image = content[1].jsonObject
+        assertEquals("image_url", image["type"]!!.jsonPrimitive.content)
+        assertEquals(
+            "data:image/png;base64,QUJD",
+            image["image_url"]!!.jsonObject["url"]!!.jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `keeps plain string content when there are no images`() = runTest {
+        server.enqueue(MockResponse().setBody("data: [DONE]\n\n"))
+
+        provider().stream(request()).toList()
+
+        val messages = Json.parseToJsonElement(server.takeRequest().body.readUtf8())
+            .jsonObject["messages"]!!.jsonArray
+        val user = messages.first { it.jsonObject["role"]!!.jsonPrimitive.content == "user" }.jsonObject
+
+        assertTrue(user["content"] is JsonPrimitive, "no-image content must stay a plain string")
+        assertEquals("hi", user["content"]!!.jsonPrimitive.content)
     }
 }

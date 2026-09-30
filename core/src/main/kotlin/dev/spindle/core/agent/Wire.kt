@@ -3,6 +3,7 @@ package dev.spindle.core.agent
 import dev.spindle.core.model.Usage
 import dev.spindle.core.provider.ChatRequest
 import dev.spindle.core.provider.ModelInfo
+import dev.spindle.core.provider.WireImage
 import dev.spindle.core.provider.WireMessage
 import dev.spindle.core.model.Message
 import dev.spindle.core.model.Part
@@ -27,7 +28,9 @@ object Wire {
         for (m in messages) {
             when (m.role) {
                 Role.SYSTEM -> out.add(WireMessage(role = "system", text = m.parts.text()))
-                Role.USER -> out.add(WireMessage(role = "user", text = m.parts.text()))
+                Role.USER -> out.add(
+                    WireMessage(role = "user", text = m.parts.text(), images = m.parts.images()),
+                )
                 Role.ASSISTANT -> {
                     val text = m.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
                     val reasoning = m.parts.filterIsInstance<Part.Reasoning>().joinToString("") { it.text }
@@ -62,6 +65,15 @@ object Wire {
 
     private fun List<Part>.text(): String =
         filterIsInstance<Part.Text>().joinToString("") { it.text }
+
+    /** Inline base64 image parts (mime starting with image/) become wire images, in order. */
+    private fun List<Part>.images(): List<WireImage> =
+        filterIsInstance<Part.File>().mapNotNull { f ->
+            val base64 = f.dataBase64 ?: return@mapNotNull null
+            val mime = f.mime ?: return@mapNotNull null
+            if (!mime.startsWith("image/")) return@mapNotNull null
+            WireImage(mime = mime, base64 = base64)
+        }
 
     fun request(
         model: String,

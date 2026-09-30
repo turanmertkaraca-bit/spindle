@@ -68,7 +68,12 @@ sealed interface Part {
     ) : Part
 
     @Serializable
-    data class File(override val id: PartId, val path: String, val mime: String? = null) : Part
+    data class File(
+        override val id: PartId,
+        val path: String,
+        val mime: String? = null,
+        val dataBase64: String? = null,
+    ) : Part
 
     @Serializable
     data class Step(override val id: PartId, val index: Int) : Part

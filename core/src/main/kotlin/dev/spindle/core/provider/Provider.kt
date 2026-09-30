@@ -26,6 +26,12 @@ data class ModelInfo(
     val cacheWriteCostPerM: Double = 0.0,
 )
 
+/** An inline image travelling as base64; adapters render it per provider shape. */
+data class WireImage(
+    val mime: String,
+    val base64: String,
+)
+
 /** Provider-neutral message handed to an adapter. */
 data class WireMessage(
     val role: String, // system | user | assistant | tool
@@ -34,6 +40,7 @@ data class WireMessage(
     val toolCalls: List<ToolCall> = emptyList(),
     val toolCallId: String? = null,
     val toolName: String? = null,
+    val images: List<WireImage> = emptyList(),
 )
 
 data class ToolSpec(

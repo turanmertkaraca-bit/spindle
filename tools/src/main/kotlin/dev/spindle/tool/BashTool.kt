@@ -1,18 +1,22 @@
 package dev.spindle.tool
 
 import dev.spindle.core.provider.ToolSpec
+import dev.spindle.core.tool.ShellExecutor
 import dev.spindle.core.tool.Tool
 import dev.spindle.core.tool.ToolContext
 import dev.spindle.core.tool.ToolOutcome
 import dev.spindle.core.tool.ToolProgress
 import kotlinx.serialization.json.JsonObject
-import java.util.concurrent.TimeUnit
 
 /**
- * Run a shell command through `/bin/sh -c`. Output is merged, time-bounded and
- * capped, and every invocation is gated behind a permission request.
+ * Run a shell command through the [ShellExecutor] SPI. Output is merged,
+ * time-bounded and capped, and every invocation is gated behind a permission
+ * request. The default executor is the host `/bin/sh`; device builds inject the
+ * Debian proot sandbox instead.
  */
-class BashTool : Tool {
+class BashTool(
+    private val shell: ShellExecutor = HostShellExecutor(),
+) : Tool {
     override val spec = ToolSpec(
         name = "bash",
         description = "Run a shell command with /bin/sh. Standard error is merged into " +
@@ -57,77 +61,32 @@ class BashTool : Tool {
 
         ctx.emit(ToolProgress("Running: $command"))
 
-        val process = try {
-            ProcessBuilder(listOf("/bin/sh", "-c", command))
-                .directory(directory)
-                .redirectErrorStream(true)
-                .apply {
-                    environment()["TERM"] = "dumb"
-                    environment().remove("JAVA_TOOL_OPTIONS")
-                    environment().remove("_JAVA_OPTIONS")
-                }
-                .start()
+        val result = try {
+            shell.run(command, directory.toPath(), timeoutMs.toLong())
         } catch (e: Exception) {
             return ToolOutcome("Failed to start command: ${e.message}", isError = true)
         }
 
-        val collected = StringBuilder()
-        val truncated = booleanArrayOf(false)
-        val reader = Thread {
-            try {
-                process.inputStream.bufferedReader().use { stream ->
-                    val buffer = CharArray(8192)
-                    while (true) {
-                        val read = stream.read(buffer)
-                        if (read < 0) break
-                        synchronized(collected) {
-                            val room = Limits.BASH_MAX_OUTPUT_CHARS - collected.length
-                            if (room <= 0) {
-                                truncated[0] = true
-                            } else {
-                                val take = minOf(room, read)
-                                collected.append(buffer, 0, take)
-                                if (take < read) truncated[0] = true
-                            }
-                        }
-                    }
-                }
-            } catch (_: Exception) {
-            }
-        }
-        reader.isDaemon = true
-        reader.start()
-
-        val finished = process.waitFor(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
-        if (!finished) {
-            process.destroyForcibly()
-            process.waitFor(1, TimeUnit.SECONDS)
-            reader.join(500)
-            val partial = synchronized(collected) { collected.toString() }
+        if (result.timedOut) {
             val message = "Command timed out after ${timeoutMs}ms"
             return ToolOutcome(
-                output = "[timeout]\n$message" + if (partial.isBlank()) "" else "\n$partial",
+                output = "[timeout]\n$message" + if (result.output.isBlank()) "" else "\n${result.output}",
                 isError = true,
                 metadata = mapOf("timeout" to "true", "timeoutMs" to timeoutMs.toString()),
             )
         }
 
-        process.waitFor()
-        reader.join(2000)
-
-        val exit = process.exitValue()
-        val body = synchronized(collected) { collected.toString() }
         val output = buildString {
-            append("[exit ").append(exit).append("]\n")
-            append(body)
-            if (truncated[0]) append("\n…[output truncated at ${Limits.BASH_MAX_OUTPUT_CHARS} chars]")
+            append("[exit ").append(result.exitCode).append("]\n")
+            append(result.output)
+            if (result.truncated) append("\n…[output truncated at ${Limits.BASH_MAX_OUTPUT_CHARS} chars]")
         }
         return ToolOutcome(
             output = output,
-            isError = exit != 0,
+            isError = result.exitCode != 0,
             metadata = mapOf(
-                "exitCode" to exit.toString(),
-                "truncated" to truncated[0].toString(),
+                "exitCode" to result.exitCode.toString(),
+                "truncated" to result.truncated.toString(),
                 "timeoutMs" to timeoutMs.toString(),
             ),
         )

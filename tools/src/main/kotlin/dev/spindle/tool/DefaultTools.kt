@@ -1,15 +1,16 @@
 package dev.spindle.tool
 
+import dev.spindle.core.tool.ShellExecutor
 import dev.spindle.core.tool.ToolRegistry
 
 /** The built-in tool set wired into the agent loop. */
 object DefaultTools {
-    fun registry(): ToolRegistry = ToolRegistry(
+    fun registry(shell: ShellExecutor = HostShellExecutor()): ToolRegistry = ToolRegistry(
         listOf(
             ReadTool(),
             WriteTool(),
             EditTool(),
-            BashTool(),
+            BashTool(shell),
             ApplyPatchTool(),
             GlobTool(),
             GrepTool(),

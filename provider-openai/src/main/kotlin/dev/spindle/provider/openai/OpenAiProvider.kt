@@ -167,7 +167,26 @@ class OpenAiProvider(
                 })
                 "user" -> add(buildJsonObject {
                     put("role", "user")
-                    put("content", m.text ?: "")
+                    if (m.images.isEmpty()) {
+                        put("content", m.text ?: "")
+                    } else {
+                        put("content", buildJsonArray {
+                            m.text?.takeIf { it.isNotEmpty() }?.let {
+                                add(buildJsonObject {
+                                    put("type", "text")
+                                    put("text", it)
+                                })
+                            }
+                            m.images.forEach { img ->
+                                add(buildJsonObject {
+                                    put("type", "image_url")
+                                    put("image_url", buildJsonObject {
+                                        put("url", "data:${img.mime};base64,${img.base64}")
+                                    })
+                                })
+                            }
+                        })
+                    }
                 })
                 "assistant" -> add(buildJsonObject {
                     put("role", "assistant")

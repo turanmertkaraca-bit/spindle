@@ -262,13 +262,32 @@ class AnthropicProvider(
                         put("content", m.text ?: "")
                     }),
                 )
-                else -> push(
-                    "user",
-                    listOf(buildJsonObject {
-                        put("type", "text")
-                        put("text", m.text ?: "")
-                    }),
-                )
+                else -> {
+                    val blocks = ArrayList<JsonElement>()
+                    m.text?.takeIf { it.isNotEmpty() }?.let {
+                        blocks.add(buildJsonObject {
+                            put("type", "text")
+                            put("text", it)
+                        })
+                    }
+                    m.images.forEach { img ->
+                        blocks.add(buildJsonObject {
+                            put("type", "image")
+                            put("source", buildJsonObject {
+                                put("type", "base64")
+                                put("media_type", img.mime)
+                                put("data", img.base64)
+                            })
+                        })
+                    }
+                    if (blocks.isEmpty()) {
+                        blocks.add(buildJsonObject {
+                            put("type", "text")
+                            put("text", m.text ?: "")
+                        })
+                    }
+                    push("user", blocks)
+                }
             }
         }
 
