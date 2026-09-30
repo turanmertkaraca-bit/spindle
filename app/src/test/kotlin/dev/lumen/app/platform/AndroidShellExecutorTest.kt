@@ -27,21 +27,25 @@ class AndroidShellExecutorTest {
     private val shell = AndroidShellExecutor(context)
 
     @Test
-    fun `fallback runs echo and returns a ShellResult`() = runBlocking {
-        val cwd = Files.createTempDirectory("lumen-shell").toFile()
-        val result = shell.run("echo hi", cwd.toPath(), 30_000)
+    fun `fallback runs echo and returns a ShellResult`() {
+        runBlocking {
+            val cwd = Files.createTempDirectory("lumen-shell").toFile()
+            val result = shell.run("echo hi", cwd.toPath(), 30_000)
 
-        assertEquals("alpine", shell.id)
-        assertEquals(0, result.exitCode)
-        assertEquals("hi", result.output.trim())
-        assertFalse(result.timedOut)
-        assertFalse(result.truncated)
+            assertEquals("alpine", shell.id)
+            assertEquals(0, result.exitCode)
+            assertEquals("hi", result.output.trim())
+            assertFalse(result.timedOut)
+            assertFalse(result.truncated)
+        }
     }
 
     @Test
-    fun `never throws when the working directory is bogus`() = runBlocking {
-        val bogus = File("/definitely/not/here/lumen")
-        val result = shell.run("echo hi", bogus.toPath(), 5_000)
-        assertNotNull(result)
+    fun `never throws when the working directory is bogus`() {
+        runBlocking {
+            val bogus = File("/definitely/not/here/lumen")
+            val result = shell.run("echo hi", bogus.toPath(), 5_000)
+            assertNotNull(result)
+        }
     }
 }
