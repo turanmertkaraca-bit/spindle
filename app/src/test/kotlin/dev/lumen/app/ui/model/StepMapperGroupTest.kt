@@ -33,6 +33,27 @@ class StepMapperGroupTest {
     }
 
     @Test
+    fun `the merged row keeps the thinking row's id so the list key never churns`() {
+        // Mid-stream: only reasoning exists yet.
+        val thinkingOnly = StepMapper.groupSteps(
+            listOf(step("u", StepKind.YOU), step("t", StepKind.THINKING, "reasoning")),
+        )
+        assertEquals("t", thinkingOnly[1].id)
+
+        // A moment later the first answer token arrives and folds in.
+        val answered = StepMapper.groupSteps(
+            listOf(
+                step("u", StepKind.YOU),
+                step("t", StepKind.THINKING, "reasoning"),
+                step("a", StepKind.ASSISTANT, "the answer"),
+            ),
+        )
+        // Same key as the thinking-only frame: the LazyColumn item grows in place
+        // instead of being removed and re-inserted (which caused a scroll jump).
+        assertEquals("t", answered[1].id)
+    }
+
+    @Test
     fun `thinking folds into a following tool call`() {
         val out = StepMapper.groupSteps(
             listOf(step("t", StepKind.THINKING, "let me check"), step("k", StepKind.TOOL, "read file")),

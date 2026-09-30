@@ -33,8 +33,8 @@ class ScreenshotTest {
     private fun sample(): List<UiStep> = listOf(
         UiStep(
             "u1", StepKind.YOU, "YOU", "a1b2c3",
-            "make the timeline feel like a rope",
-            "make the timeline feel like a rope with droplets on it, and make it smooth",
+            "fix the login redirect bug",
+            "the /login redirect is broken — after signing in it bounces straight back to /login",
         ),
         UiStep(
             "t1", StepKind.THINKING, "THINKING", "c3d4e5",
@@ -62,8 +62,8 @@ class ScreenshotTest {
         ),
         UiStep(
             "a1", StepKind.ASSISTANT, "ASSISTANT", "d1e2f3",
-            "the rope now blooms at the focus",
-            "the rope now blooms at the focus line, leans like a droplet, and collapses back to a dot as you scroll. the prism splits it into a spectrum when it is a tool.",
+            "found the redirect loop",
+            "Found it. The session cookie is set after res.redirect(), so the browser leaves before Set-Cookie is written. Writing the cookie first fixes the loop.",
         ),
     )
 

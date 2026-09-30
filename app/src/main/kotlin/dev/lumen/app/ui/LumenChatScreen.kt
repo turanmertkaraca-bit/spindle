@@ -219,19 +219,22 @@ fun LumenChatScreen(
     val display = remember(grouped, pending) { if (pending) grouped + WorkingStep else grouped }
     val count = display.size
 
-    // Follow the tail while streaming; stop if the reader scrolled up.
+    // Follow the tail while streaming, gently. We only re-anchor when content
+    // actually grows and the reader is already at the bottom, so a bubble that
+    // merely gains height (token, or think→answer) does not yank the list.
     var followTail by remember { mutableStateOf(true) }
-    LaunchedEffect(count, display.lastOrNull()?.id) {
-        if (count == 0) return@LaunchedEffect
-        if (followTail) listState.animateScrollToItem(count - 1)
-    }
     LaunchedEffect(listState) {
-        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
-            .collect {
-                val info = listState.layoutInfo
-                val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-                followTail = last >= count - 2
-            }
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull()
+            (info.totalItemsCount == 0) || (last != null && last.index >= info.totalItemsCount - 2)
+        }.collect { followTail = it }
+    }
+    LaunchedEffect(count, display.lastOrNull()?.id) {
+        if (count == 0 || !followTail) return@LaunchedEffect
+        // animateScrollToItem eases to the newest bubble; harmless when already
+        // there, so it never fights the streaming height changes above it.
+        listState.animateScrollToItem(count - 1)
     }
 
     Column(modifier.fillMaxSize().background(colors.bg).imePadding()) {
