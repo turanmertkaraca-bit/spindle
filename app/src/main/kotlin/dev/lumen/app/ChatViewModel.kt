@@ -9,6 +9,9 @@ import dev.lumen.app.data.ProviderCatalogue
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
+import dev.spindle.core.model.RunChanges
+import dev.spindle.core.model.Usage
+import dev.spindle.core.store.SnapshotStore
 import dev.spindle.core.agent.AgentConfig
 import dev.spindle.core.agent.AgentLoop
 import dev.spindle.core.agent.PermissionGate
@@ -54,6 +57,10 @@ data class ChatState(
     val currentSessionId: String? = null,
     /** "system" | "light" | "dark". */
     val theme: String = "system",
+    /** Running session token/cost totals, rolled up from each message. */
+    val usage: Usage = Usage(),
+    /** Structured file changes the agent made in this session. */
+    val changes: RunChanges = RunChanges.EMPTY,
 )
 
 /**
@@ -66,6 +73,8 @@ class ChatViewModel(
     private val keys: KeyStore,
     private val store: SessionStore,
     private val ownedStore: AutoCloseable? = null,
+    private val snapshots: SnapshotStore? = null,
+    private val ownedSnapshots: AutoCloseable? = null,
 ) : ViewModel() {
 
     private val bus = EventBus()
@@ -146,7 +155,14 @@ class ChatViewModel(
                     providerId = keys.model.substringBefore('/', "opencode-go"),
                 ),
             )
-            _state.value = _state.value.copy(currentSessionId = id.value, steps = emptyList(), input = "", error = null)
+            _state.value = _state.value.copy(
+                currentSessionId = id.value,
+                steps = emptyList(),
+                input = "",
+                error = null,
+                usage = Usage(),
+                changes = RunChanges.EMPTY,
+            )
             refreshSessions()
         }
     }
@@ -154,19 +170,29 @@ class ChatViewModel(
     fun openSession(id: String) {
         viewModelScope.launch {
             val sid = SessionId(id)
+            val messages = store.messages(sid)
             _state.value = _state.value.copy(
                 currentSessionId = id,
-                steps = enrich(StepMapper.fromMessages(store.messages(sid))),
+                steps = enrich(StepMapper.fromMessages(messages)),
                 input = "",
                 error = null,
                 busy = false,
+                usage = messages.fold(Usage()) { acc, m -> acc + m.usage },
+                changes = RunChanges.EMPTY,
             )
         }
     }
 
     fun closeChat() {
         runJob?.cancel()
-        _state.value = _state.value.copy(currentSessionId = null, steps = emptyList(), busy = false, error = null)
+        _state.value = _state.value.copy(
+            currentSessionId = null,
+            steps = emptyList(),
+            busy = false,
+            error = null,
+            usage = Usage(),
+            changes = RunChanges.EMPTY,
+        )
     }
 
     fun deleteSession(id: String) {
@@ -209,6 +235,9 @@ class ChatViewModel(
                 is AgentEvent.ToolCallStarted, is AgentEvent.Progress -> {
                     _state.value = _state.value.copy(steps = StepMapper.applyEvent(_state.value.steps, e))
                 }
+                is AgentEvent.UsageUpdated -> _state.value = _state.value.copy(usage = e.usage)
+                is AgentEvent.FileEdited -> _state.value =
+                    _state.value.copy(changes = _state.value.changes + e.edit)
                 is AgentEvent.StateChanged -> {
                     val busy = e.state == dev.spindle.core.model.SessionState.RUNNING
                     _state.value = _state.value.copy(busy = busy)
@@ -312,6 +341,7 @@ class ChatViewModel(
                 bus = bus,
                 permissions = PermissionGate { _, _, _ -> true },
                 questions = QuestionGate { _, _, options, _ -> listOf(options.firstOrNull() ?: "ok") },
+                snapshots = snapshots,
             )
             try {
                 loop.prompt(sid, text, keys.model, AgentConfig(maxSteps = 12))
@@ -330,6 +360,7 @@ class ChatViewModel(
     override fun onCleared() {
         super.onCleared()
         runCatching { ownedStore?.close() }
+        runCatching { ownedSnapshots?.close() }
     }
 
     private fun oneLine(s: String, max: Int): String =
@@ -341,11 +372,14 @@ class ChatViewModel(
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
                     val store = AndroidSessionStore(context)
+                    val snapshots = AndroidSnapshotStore(context)
                     return ChatViewModel(
                         workspace = workspace.toPath(),
                         keys = KeyStore(context),
                         store = store,
                         ownedStore = store,
+                        snapshots = snapshots,
+                        ownedSnapshots = snapshots,
                     ) as T
                 }
             }
