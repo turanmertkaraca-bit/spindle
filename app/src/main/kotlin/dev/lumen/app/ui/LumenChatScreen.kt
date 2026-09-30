@@ -335,17 +335,16 @@ fun LumenChatScreen(
                     }
                     // "new content below" cue: floats above the composer and
                     // scrolls to the newest bubble on tap; hides once at the tail.
-                    AnimatedVisibility(
-                        visible = showNewCue,
-                        enter = fadeIn() + slideInVertically { it / 2 },
-                        exit = fadeOut() + slideOutVertically { it / 2 },
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 10.dp),
-                    ) {
-                        NewCue(colors) {
-                            showNewCue = false
-                            scope.launch { listState.animateScrollToItem((count - 1).coerceAtLeast(0)) }
+                    if (showNewCue) {
+                        Box(
+                            Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 10.dp),
+                        ) {
+                            NewCue(colors) {
+                                showNewCue = false
+                                scope.launch { listState.animateScrollToItem((count - 1).coerceAtLeast(0)) }
+                            }
                         }
                     }
                 }
