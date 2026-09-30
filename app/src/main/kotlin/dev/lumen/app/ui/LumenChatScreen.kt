@@ -44,7 +44,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -417,18 +416,16 @@ private fun MessageRow(
             if (step.running && step.body.isBlank()) {
                 Text("thinking…", color = colors.water.copy(alpha = 0.5f + 0.5f * pulse), fontFamily = Mono, fontSize = 14.sp)
             } else {
-                SelectionContainer {
-                    Text(
-                        step.body.ifBlank { step.summary },
-                        color = colors.fg, fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp,
-                        modifier = Modifier.pointerInput(step.id) {
-                            detectTapGestures(onDoubleTap = {
-                                clipboard.setText(AnnotatedString(step.body))
-                                copied = true
-                            })
-                        },
-                    )
-                }
+                Text(
+                    step.body.ifBlank { step.summary },
+                    color = colors.fg, fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp,
+                    modifier = Modifier.pointerInput(step.id) {
+                        detectTapGestures(onDoubleTap = {
+                            clipboard.setText(AnnotatedString(step.body))
+                            copied = true
+                        })
+                    },
+                )
             }
 
             if (step.rows.isNotEmpty()) {
@@ -551,13 +548,11 @@ private fun ThinkSection(think: String, colors: LumenColors) {
         }
         if (open) {
             Spacer(Modifier.height(6.dp))
-            SelectionContainer {
-                Text(
-                    think,
-                    color = colors.dim, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp,
-                    modifier = Modifier.testTag("think-body"),
-                )
-            }
+            Text(
+                think,
+                color = colors.dim, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp,
+                modifier = Modifier.testTag("think-body"),
+            )
         }
     }
 }
