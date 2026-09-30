@@ -360,12 +360,6 @@ private fun MessageRow(
         Column(
             Modifier
                 .widthIn(max = 300.dp)
-                .animateContentSize(
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMediumLow,
-                    ),
-                )
                 .clip(bubbleShape)
                 .then(
                     if (isYou) {
@@ -538,6 +532,12 @@ private fun ThinkSection(think: String, colors: LumenColors) {
             .background(colors.water.copy(alpha = 0.10f))
             .clickable { open = !open }
             .padding(horizontal = 10.dp, vertical = 7.dp)
+            .animateContentSize(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow,
+                ),
+            )
             .testTag("think-toggle"),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
