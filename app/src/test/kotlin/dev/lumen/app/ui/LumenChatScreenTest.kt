@@ -19,9 +19,9 @@ import org.robolectric.annotation.Config
 import kotlin.test.assertTrue
 
 /**
- * Behavioral tests for the spine timeline, run on a plain JVM by Robolectric:
- * only the focused node shows text, tool sub-rows surface, long bodies are
- * shown in full, and the composer/error affordances stay reachable.
+ * Behavioral tests for the bubble-chat spine, run on a plain JVM by Robolectric:
+ * every turn shows as a bubble, tools nest in a pocket, reasoning folds into a
+ * pill, and the composer/error affordances stay reachable.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -35,7 +35,7 @@ class LumenChatScreenTest {
     private fun steps(n: Int): List<UiStep> = (0 until n).map { i ->
         UiStep(
             id = "s$i",
-            kind = if (i % 5 == 4) StepKind.SUBAGENT else StepKind.YOU,
+            kind = if (i % 5 == 4) StepKind.SUBAGENT else if (i % 2 == 0) StepKind.YOU else StepKind.ASSISTANT,
             label = "STEP $i",
             tag = "tag$i",
             summary = "summary $i",
@@ -49,50 +49,41 @@ class LumenChatScreenTest {
     }
 
     @Test
-    fun `renders the focused step and the composer`() {
+    fun `renders messages and the composer`() {
         compose.setContent {
-            LumenChatScreen(steps(4), input = "", busy = false, error = null, modifier = viewport, ambient = false, forceOpenIndex = 0)
+            LumenChatScreen(steps(4), input = "", busy = false, error = null, modifier = viewport, ambient = false)
         }
-        compose.onNodeWithText("STEP 0").assertIsDisplayed()
         compose.onNodeWithText("BODY 0 full text").assertIsDisplayed()
+        compose.onNodeWithText("BODY 3 full text").assertIsDisplayed()
         compose.onNodeWithTag("composer").assertIsDisplayed()
     }
 
     @Test
-    fun `only the focused step is bloomed`() {
-        compose.setContent {
-            LumenChatScreen(steps(6), input = "", busy = false, error = null, modifier = viewport, ambient = false, forceOpenIndex = 0)
-        }
-        compose.onNodeWithText("BODY 0 full text").assertIsDisplayed()
-        noNode("BODY 1 full text")
-        noNode("BODY 5 full text")
-    }
-
-    @Test
-    fun `tool rows expose their sub-rows while bloomed`() {
+    fun `tool rows expose their sub-rows`() {
         val s = listOf(
             UiStep(
-                "t", StepKind.TOOL, "1 RUN TESTS", "x",
+                "t", StepKind.TOOL, "READ", "x",
                 summary = "571 tests - 0 failed",
                 body = "gradle testDebugUnitTest",
                 rows = listOf("compile" to "assembleDebug", "verify" to "re-render"),
+                merged = 2,
             ),
         )
         compose.setContent {
-            LumenChatScreen(s, input = "", busy = false, error = null, modifier = viewport, ambient = false, forceOpenIndex = 0)
+            LumenChatScreen(s, input = "", busy = false, error = null, modifier = viewport, ambient = false)
         }
-        check(compose.onAllNodesWithText("compile", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) {
-            "bloomed tool row should expose its 'compile' sub-row"
+        check(compose.onAllNodesWithText("compile").fetchSemanticsNodes().isNotEmpty()) {
+            "tool pocket should expose its 'compile' sub-row"
         }
-        check(compose.onAllNodesWithText("verify", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) {
-            "bloomed tool row should expose its 'verify' sub-row"
+        check(compose.onAllNodesWithText("verify").fetchSemanticsNodes().isNotEmpty()) {
+            "tool pocket should expose its 'verify' sub-row"
         }
     }
 
     @Test
     fun `send button is present and reflects busy state`() {
         compose.setContent {
-            LumenChatScreen(steps(2), input = "hi", busy = false, error = null, modifier = viewport, ambient = false, forceOpenIndex = 1)
+            LumenChatScreen(steps(2), input = "hi", busy = false, error = null, modifier = viewport, ambient = false)
         }
         compose.onNodeWithTag("send").assertIsDisplayed()
     }
@@ -100,7 +91,7 @@ class LumenChatScreenTest {
     @Test
     fun `stop replaces send while busy`() {
         compose.setContent {
-            LumenChatScreen(steps(2), input = "", busy = true, error = null, modifier = viewport, ambient = false, forceOpenIndex = 1)
+            LumenChatScreen(steps(2), input = "", busy = true, error = null, modifier = viewport, ambient = false)
         }
         compose.onNodeWithTag("stop").assertIsDisplayed()
     }
@@ -130,13 +121,12 @@ class LumenChatScreenTest {
     }
 
     @Test
-    fun `a long focused body is shown in full`() {
-        val long = (1..120).joinToString("\n") { "line $it of a very long focused answer" }
+    fun `a long body is shown in full, not clamped`() {
+        val long = (1..120).joinToString("\n") { "line $it of a very long answer" }
         compose.setContent {
             LumenChatScreen(
                 listOf(UiStep("a", StepKind.ASSISTANT, "ASSISTANT", "x", "long", long)),
                 input = "", busy = false, error = null, modifier = viewport, ambient = false,
-                forceOpenIndex = 0,
             )
         }
         compose.onNodeWithText(long).assertExists()
@@ -145,7 +135,7 @@ class LumenChatScreenTest {
     @Test
     fun `theme toggle is available`() {
         compose.setContent {
-            LumenChatScreen(steps(2), input = "", busy = false, error = null, modifier = viewport, ambient = false, forceOpenIndex = 0, onToggleTheme = {})
+            LumenChatScreen(steps(2), input = "", busy = false, error = null, modifier = viewport, ambient = false, onToggleTheme = {})
         }
         compose.onNodeWithTag("theme").assertIsDisplayed()
     }
@@ -155,14 +145,14 @@ class LumenChatScreenTest {
         compose.setContent {
             LumenChatScreen(
                 listOf(UiStep("t", StepKind.THINKING, "THINKING", "x", "reasoning", "the full reasoning text")),
-                input = "", busy = true, error = null, modifier = viewport, ambient = false, forceOpenIndex = 0,
+                input = "", busy = true, error = null, modifier = viewport, ambient = false,
             )
         }
         compose.onNodeWithText("the full reasoning text").assertIsDisplayed()
     }
 
     @Test
-    fun `an answered think collapses to a header and expands on tap`() {
+    fun `an answered think collapses to a pill and expands on tap`() {
         val think = "weigh the options carefully"
         compose.setContent {
             LumenChatScreen(
@@ -171,7 +161,7 @@ class LumenChatScreenTest {
                     UiStep("t", StepKind.THINKING, "THINKING", "x", "reasoning", think),
                     UiStep("a", StepKind.ASSISTANT, "ASSISTANT", "x", "answer", "the answer"),
                 ),
-                input = "", busy = false, error = null, modifier = viewport, ambient = false, forceOpenIndex = 1,
+                input = "", busy = false, error = null, modifier = viewport, ambient = false,
             )
         }
         compose.onNodeWithText("thinking · ${think.length} chars").assertIsDisplayed()

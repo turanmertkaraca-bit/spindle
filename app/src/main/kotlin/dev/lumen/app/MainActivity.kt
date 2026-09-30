@@ -154,5 +154,6 @@ private fun animatedColors(dark: Boolean): LumenColors {
         spectrum = target.spectrum.mapIndexed { i, c ->
             animateColorAsState(c, spec, label = "spectrum$i").value
         },
+        dark = dark,
     )
 }

@@ -1,7 +1,6 @@
 package dev.lumen.app.ui
 
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -26,7 +25,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -38,6 +36,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -55,7 +54,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,11 +62,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -104,18 +100,15 @@ private fun calmFling(friction: Float = FLING_FRICTION): FlingBehavior = object 
     }
 }
 
-/** Safe spectral colour: never throws, whatever palette is supplied. */
-private fun LumenColors.spectrumAt(index: Int): Color {
-    val s = spectrum
-    if (s.isEmpty()) return accent
-    val i = ((index % s.size) + s.size) % s.size
-    return s[i]
-}
+/** The "failed" colour — an explicit red, independent of the spectrum. */
+private fun LumenColors.danger(): Color = if (dark) Color(0xFFFB7185) else Color(0xFFBE123C)
 
-/** The "failed" colour — an explicit red, independent of the water spectrum. */
-private fun LumenColors.danger(): Color = Color(0xFFE5484D)
-
-/** Light / dark palettes. Dark is deliberately not pure black (see bg). */
+/**
+ * The prism palette: near-black (or near-white) base with an iridescent
+ * violet→azure→cyan→mint spectrum used as light — bubble edges, droplets, the
+ * send button — never as a flat fill. Contrast was checked against the base
+ * (foreground >16:1, spectrum >7:1 dark / >5:1 light).
+ */
 data class LumenColors(
     val bg: Color,
     val surface: Color,
@@ -124,27 +117,37 @@ data class LumenColors(
     val faint: Color,
     val rule: Color,
     val accent: Color,
-    /** The core water hue: cyan-teal. Used for the spine, ripples and send. */
+    /** Primary spectral hue (cyan); kept for the spine, cursor and focus glow. */
     val water: Color,
+    /** The iridescent stops: violet, azure, cyan, mint. */
     val spectrum: List<Color>,
+    val dark: Boolean = false,
 ) {
+    /** A soft wash of colour for the top of the screen (prism bloom). */
+    val bloomA: Color get() = spectrum.getOrElse(0) { accent }
+    val bloomB: Color get() = spectrum.getOrElse(2) { accent }
+    val bloomC: Color get() = spectrum.getOrElse(1) { accent }
+
     companion object {
         val Light = LumenColors(
-            bg = Color(0xFFF7FBFC), surface = Color(0xFFEDF5F8), fg = Color(0xFF0C2530),
-            dim = Color(0xFF557785), faint = Color(0xFFA6C0CB), rule = Color(0xFFDBE9EF),
-            accent = Color(0xFF0E7490), water = Color(0xFF0EA5C9),
+            bg = Color(0xFFF7F6FB), surface = Color(0xFFFFFFFF), fg = Color(0xFF1A1730),
+            dim = Color(0xFF6B6588), faint = Color(0xFFA9A4C0), rule = Color(0x1A140A32),
+            accent = Color(0xFF6D28D9),
+            water = Color(0xFF0E7490),
             spectrum = listOf(
-                Color(0xFFFF4B4B), Color(0xFF0EA5C9), Color(0xFF14B8A6),
-                Color(0xFF22C55E), Color(0xFF3B82F6), Color(0xFF6366F1),
+                Color(0xFF6D28D9), Color(0xFF1D4ED8), Color(0xFF0E7490), Color(0xFF047857),
             ),
+            dark = false,
         )
         val Dark = LumenColors(
-            // Non-OLED-friendly: a touch of light so pixels never fully switch off,
-            // but dark enough to read as "dark", not gray.
-            bg = Color(0xFF07161F), surface = Color(0xFF0E2230), fg = Color(0xFFE8F4F8),
-            dim = Color(0xFF8FB0BE), faint = Color(0xFF4A6673), rule = Color(0xFF173340),
-            accent = Color(0xFF38BDF8), water = Color(0xFF22D3EE),
-            spectrum = Light.spectrum,
+            bg = Color(0xFF08070D), surface = Color(0xFF141221), fg = Color(0xFFF2EFFB),
+            dim = Color(0xFFA49FC4), faint = Color(0xFF5B5675), rule = Color(0x17FFFFFF),
+            accent = Color(0xFFA78BFA),
+            water = Color(0xFF22D3EE),
+            spectrum = listOf(
+                Color(0xFFA78BFA), Color(0xFF60A5FA), Color(0xFF22D3EE), Color(0xFF34D399),
+            ),
+            dark = true,
         )
     }
 }
@@ -156,10 +159,10 @@ private val WorkingStep = UiStep(
 )
 
 /**
- * The timeline is a spine down the middle of the screen. Every step is a node on
- * it: the node nearest the focus line (the vertical centre) expands into a
- * capsule sized to its text; the rest collapse to dots. Scrolling is the only
- * navigation; double-tapping a capsule copies its body, long-press selects it.
+ * A bubble chat with a spine down the left edge. Your turns sit right, the
+ * agent's left, and each agent bubble carries a spectrum droplet on the spine.
+ * Reasoning collapses into a pill; tool calls nest in a pocket inside the
+ * bubble. This is the render layer only — the data model is unchanged.
  */
 @Composable
 fun LumenChatScreen(
@@ -179,12 +182,10 @@ fun LumenChatScreen(
     onEditKey: (() -> Unit)? = null,
     ambient: Boolean = true,
 ) {
-    val density = LocalDensity.current
     val listState = rememberLazyListState()
     val flingBehavior = remember { calmFling() }
 
-    // Ambient motion (a slow water breathe on running nodes). It only runs while
-    // something is actually running, so an idle timeline costs no frames.
+    // A slow spectrum breathe while something is running; off when idle or in tests.
     val running = busy || steps.any { it.running }
     val pulse = if (ambient && running) {
         val t = rememberInfiniteTransition(label = "pulse")
@@ -198,143 +199,79 @@ fun LumenChatScreen(
         1f
     }
 
-    // Fold each think block into the answer/tool that follows, so it can
-    // auto-collapse once the block has a real body. The raw rows stay intact
-    // upstream, so streaming deltas still find their part id.
+    // Fold each think block into the answer/tool that follows, so it collapses
+    // once the block has a real body. The raw rows stay intact upstream.
     val grouped = remember(steps) { StepMapper.groupSteps(steps) }
 
-    // While the loop is between turns, show a working node so the screen is
-    // never blank. It disappears as soon as real text arrives.
-    val pending = busy && grouped.none { it.running } && (
-        grouped.isEmpty() ||
-            grouped.last().kind == StepKind.YOU ||
-            grouped.last().kind == StepKind.TOOL ||
-            grouped.last().kind == StepKind.SUBAGENT
-        )
+    // A working bubble between turns so the screen is never blank.
+    val pending = busy && grouped.none { it.running } &&
+        (grouped.isEmpty() || grouped.last().kind == StepKind.YOU)
     val display = remember(grouped, pending) { if (pending) grouped + WorkingStep else grouped }
     val count = display.size
 
-    // The expanded node is sticky: it follows the reader's scroll, or the tail
-    // while following. It is never recomputed from live geometry while a node
-    // grows — that flip-flop was the bulk of the old timeline's glitch.
-    var focusedId by remember { mutableStateOf<String?>(null) }
-    val firstId = display.firstOrNull()?.id
+    // Follow the tail while streaming; stop if the reader scrolled up.
+    var followTail by remember { mutableStateOf(true) }
+    LaunchedEffect(count, display.lastOrNull()?.id) {
+        if (count == 0) return@LaunchedEffect
+        if (followTail) listState.animateScrollToItem(count - 1)
+    }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+            .collect {
+                val info = listState.layoutInfo
+                val last = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+                followTail = last >= count - 2
+            }
+    }
 
     Column(modifier.fillMaxSize().background(colors.bg).imePadding()) {
-        if (onHome != null) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 10.dp, end = 16.dp, top = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "‹",
-                    color = colors.dim, fontFamily = Mono, fontSize = 20.sp,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .clickable { onHome() }
-                        .padding(horizontal = 8.dp, vertical = 2.dp)
-                        .testTag("home"),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    title.ifBlank { "chat" },
-                    color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        }
-        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-            val viewportPx = constraints.maxHeight.toFloat()
-            val viewportCenter = viewportPx / 2f
-            val verticalPad = with(density) { viewportCenter.toDp() }
-
-            val focusedIndex = forceOpenIndex?.let { clampIndex(it, count) }
-                ?: display.indexOfFirst { it.id == focusedId }.takeIf { it >= 0 }
-                ?: clampIndex(count - 1, count)
-
-            // A new session (or an emptied one) clears the anchor, so focus
-            // falls back to the tail again.
-            LaunchedEffect(firstId) { focusedId = null }
-
-            // One owner for scroll. It:
-            //  * lands on the newest node at cold start,
-            //  * follows appends only when the reader was at the tail,
-            //  * anchors the focused node to the focus line while it grows,
-            //  * re-picks the focused node only from a settled scroll (never
-            //    mid-growth), so a streaming answer cannot flip the capsule.
-            // Keeping all of it in one loop is what removed the jitter: the old
-            // code had three effects each recomputing geometry every frame.
-            LaunchedEffect(count, firstId, forceOpenIndex) {
-                if (count == 0) return@LaunchedEffect
-                if (forceOpenIndex != null) {
-                    // Screenshots/tests: put the requested node on the line.
-                    withFrameNanos { }
-                    val vp = TimelineViewport.read(listState, clampIndex(forceOpenIndex, count))
-                    vp.centerDelta()?.let { listState.scrollBy(it) }
-                    return@LaunchedEffect
-                }
-
-                // Cold start: no scroll history yet, so land on the newest node.
-                var lastCount = 0
-                if (listState.firstVisibleItemIndex == 0 && listState.layoutInfo.totalItemsCount == 0) {
-                    listState.scrollToItem(clampIndex(count - 1, count))
-                    lastCount = count
-                }
-
-                snapshotFlow {
-                    val vp = TimelineViewport.read(listState, focusedIndex)
-                    // Only react to settled frames; while a gesture/fling runs we
-                    // leave the reader alone.
-                    if (listState.isScrollInProgress) vp.copy(focusedTop = null) else vp
-                }.collect { vp ->
-                    if (!vp.hasFocus) return@collect
-
-                    // Re-anchor the expanded node from a settled scroll only.
-                    // Growth never triggers this: the node's own height change is
-                    // handled by the top anchor below, not by re-picking focus.
-                    val nearestId = display.getOrNull(vp.firstVisibleIndex)?.id
-                    val nearest = listState.layoutInfo.visibleItemsInfo
-                        .minByOrNull { abs((it.offset + it.size / 2f) - vp.center) }
-                    val nearestFocused = nearest?.index == focusedIndex
-                    if (!nearestFocused && nearest != null && nearestId != null) {
-                        val id = display.getOrNull(nearest.index)?.id
-                        if (id != null && id != focusedId) focusedId = id
-                        return@collect
-                    }
-
-                    // Keep the focused node's TOP on the line so added text grows
-                    // downward; this is the only scroll we do while streaming.
-                    vp.topDelta()?.let { delta ->
-                        if (abs(delta) > 1f) listState.scrollBy(delta)
-                    }
-
-                    // Follow appends when the reader is at the tail.
-                    if (count > lastCount && vp.lastVisibleIndex >= count - 2) {
-                        listState.animateScrollToItem(clampIndex(count - 1, count))
-                    }
-                    lastCount = count
-                }
-            }
-
-            Box(Modifier.fillMaxSize()) {
-                if (count == 0) {
-                    EmptyState(colors, Modifier.align(Alignment.Center))
-                } else {
-                    LazyColumn(
-                        state = listState,
-                        flingBehavior = flingBehavior,
-                        contentPadding = PaddingValues(vertical = verticalPad),
-                        modifier = Modifier.fillMaxSize().testTag("timeline"),
+        // Prism bloom: soft iridescent washes rather than a flat page.
+        Box(Modifier.fillMaxWidth().weight(1f)) {
+            Bloom(colors, Modifier.matchParentSize())
+            Column(Modifier.fillMaxSize()) {
+                if (onHome != null) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(start = 10.dp, end = 16.dp, top = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        itemsIndexed(display, key = { _, s -> s.id }) { index, step ->
-                            SpineNode(
-                                step = step,
-                                focused = index == focusedIndex,
-                                colors = colors,
-                                pulse = pulse,
-                                modifier = Modifier.animateItem(),
-                            )
+                        Text(
+                            "‹",
+                            color = colors.dim, fontFamily = Mono, fontSize = 20.sp,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { onHome() }
+                                .padding(horizontal = 8.dp, vertical = 2.dp)
+                                .testTag("home"),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            title.ifBlank { "chat" },
+                            color = colors.fg, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    if (count == 0) {
+                        EmptyState(colors, Modifier.align(Alignment.Center))
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            flingBehavior = flingBehavior,
+                            contentPadding = PaddingValues(start = 10.dp, end = 14.dp, top = 10.dp, bottom = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                            modifier = Modifier.fillMaxSize().testTag("timeline"),
+                        ) {
+                            itemsIndexed(display, key = { _, s -> s.id }) { index, step ->
+                                MessageRow(
+                                    step = step,
+                                    colors = colors,
+                                    pulse = pulse,
+                                    open = forceOpenIndex == index,
+                                    modifier = Modifier.animateItem(),
+                                )
+                            }
                         }
                     }
                 }
@@ -344,21 +281,46 @@ fun LumenChatScreen(
         if (error != null) {
             ErrorNotice(error, colors, onEditKey)
         }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.rule))
         Composer(input, busy, colors, onInput, onSend, onStop, onToggleTheme, onEditKey)
     }
 }
 
+/** Three soft spectral blooms so the page reads as an iridescent surface. */
+@Composable
+private fun Bloom(colors: LumenColors, modifier: Modifier = Modifier) {
+    Box(
+        modifier.drawBehind {
+            val w = size.width
+            val h = size.height
+            drawRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(colors.bloomA.copy(alpha = if (colors.dark) 0.22f else 0.14f), Color.Transparent),
+                    center = Offset(w * 0.12f, -h * 0.02f),
+                    radius = w * 0.9f,
+                ),
+            )
+            drawRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(colors.bloomB.copy(alpha = if (colors.dark) 0.16f else 0.10f), Color.Transparent),
+                    center = Offset(w * 0.9f, h * 0.0f),
+                    radius = w * 0.8f,
+                ),
+            )
+        },
+    )
+}
+
 /**
- * One node on the spine. A collapsed node is a dot; the focused one expands into
- * a capsule sized to its text, so streaming tokens simply grow it.
+ * One message as a bubble on the left spine. Your turns align right; the agent's
+ * align left with a spectrum droplet on the spine and a spectral edge hairline.
+ * Reasoning folds into a pill; tools nest in a pocket inside the agent bubble.
  */
 @Composable
-private fun SpineNode(
+private fun MessageRow(
     step: UiStep,
-    focused: Boolean,
     colors: LumenColors,
     pulse: Float,
+    open: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
@@ -370,195 +332,196 @@ private fun SpineNode(
         }
     }
 
+    val isYou = step.kind == StepKind.YOU
     val isTool = step.kind == StepKind.TOOL || step.kind == StepKind.SUBAGENT
-    val tint = when {
-        step.failed -> colors.danger()
-        isTool -> colors.water
-        step.kind == StepKind.YOU -> colors.dim
-        else -> colors.accent
-    }
 
-    // A one-shot ripple when a node becomes the focused one: draw-only, so it
-    // never re-lays-out the list. This is the "water moves" feedback on send.
-    val ripple = remember(step.id) { Animatable(0f) }
-    LaunchedEffect(focused, step.id) {
-        if (focused) {
-            ripple.snapTo(0f)
-            ripple.animateTo(1f, tween(durationMillis = 900, easing = FastOutSlowInEasing))
+    Row(
+        modifier.fillMaxWidth().padding(vertical = 3.dp),
+        horizontalArrangement = if (isYou) Arrangement.End else Arrangement.Start,
+    ) {
+        if (!isYou) {
+            // The spine droplet: a spectrum teardrop at the bubble's leading edge.
+            Spacer(Modifier.width(14.dp))
+            Droplet(
+                modifier = Modifier.padding(top = 14.dp).size(9.dp),
+                brush = Brush.verticalGradient(listOf(colors.bloomA, colors.water)),
+                ring = step.running,
+                pulse = pulse,
+                colors = colors,
+            )
+            Spacer(Modifier.width(9.dp))
         }
-    }
 
-    Box(
-        modifier
-            .fillMaxWidth()
-            .drawBehind {
-                val cx = size.width / 2f
-                // The spine is water, not a wire: a soft vertical gradient with a
-                // ripple at the focused node.
-                drawLine(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            colors.rule.copy(alpha = 0.0f),
-                            colors.rule,
-                            colors.rule.copy(alpha = 0.0f),
-                        ),
+        val bubbleShape = if (isYou) {
+            RoundedCornerShape(20.dp, 20.dp, 7.dp, 20.dp)
+        } else {
+            RoundedCornerShape(20.dp, 20.dp, 20.dp, 7.dp)
+        }
+
+        Column(
+            Modifier
+                .widthIn(max = 300.dp)
+                .animateContentSize(
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMediumLow,
                     ),
-                    start = Offset(cx, 0f),
-                    end = Offset(cx, size.height),
-                    strokeWidth = 1.5.dp.toPx(),
                 )
-                if (focused) {
-                    // A ripple ring that expands once and dissipates.
-                    val p = ripple.value
-                    if (p > 0f && p < 1f) {
-                        val grow = 0.18f + 0.5f * p
-                        drawCircle(
-                            color = colors.water.copy(alpha = (1f - p) * 0.5f),
-                            radius = size.height * grow,
-                            center = Offset(cx, size.height / 2f),
-                            style = Stroke(width = (1f + 1.5f * p).dp.toPx()),
+                .clip(bubbleShape)
+                .then(
+                    if (isYou) {
+                        Modifier
+                            .background(colors.surface, bubbleShape)
+                            .border(1.dp, colors.rule, bubbleShape)
+                    } else {
+                        Modifier
+                            .background(colors.surface, bubbleShape)
+                            .border(1.dp, colors.spectrum.getOrElse(2) { colors.water }.copy(alpha = 0.22f), bubbleShape)
+                            // A spectral hairline down the leading edge — the prism.
+                            .drawBehind {
+                                drawRect(
+                                    brush = Brush.verticalGradient(
+                                        listOf(colors.bloomA, colors.bloomB, colors.bloomC),
+                                    ),
+                                    topLeft = Offset(0f, 12.dp.toPx()),
+                                    size = androidx.compose.ui.geometry.Size(2.dp.toPx(), size.height - 24.dp.toPx()),
+                                )
+                            }
+                    },
+                )
+                .padding(start = if (isYou) 14.dp else 16.dp, end = 14.dp, top = 11.dp, bottom = 11.dp)
+                .pointerInput(step.id) {
+                    detectTapGestures(onDoubleTap = {
+                        clipboard.setText(AnnotatedString(step.body))
+                        copied = true
+                    })
+                },
+        ) {
+            // role stamp for agent turns
+            if (!isYou) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (copied) "copied" else step.label.lowercase(),
+                        color = if (copied) colors.water else colors.dim,
+                        fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 1.2.sp,
+                    )
+                    if (step.tag.isNotEmpty() && !copied) {
+                        Text(
+                            "  ${step.tag}",
+                            color = colors.faint, fontFamily = Mono, fontSize = 10.sp,
                         )
                     }
-                    // A steady waterline ring so the focus always reads as "wet".
-                    drawCircle(
-                        color = colors.water.copy(alpha = 0.14f + 0.08f * pulse),
-                        radius = size.height * 0.22f,
-                        center = Offset(cx, size.height / 2f),
-                        style = Stroke(width = 1.dp.toPx()),
-                    )
                 }
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        if (!focused) {
-            Box(Modifier.height(42.dp), contentAlignment = Alignment.Center) {
-                if (step.running) {
-                    WaterDot(
-                        size = 13.dp,
-                        color = tint.copy(alpha = 0.35f + 0.65f * pulse),
-                        ring = true,
-                    )
-                } else {
-                    WaterDot(
-                        size = if (isTool) 7.dp else 9.dp,
-                        color = if (isTool) tint.copy(alpha = 0.9f) else colors.faint,
+                Spacer(Modifier.height(6.dp))
+            }
+
+            if (step.think != null) {
+                ThinkSection(step.think, colors)
+                Spacer(Modifier.height(8.dp))
+            }
+
+            if (step.running && step.body.isBlank()) {
+                Text("thinking…", color = colors.water.copy(alpha = 0.5f + 0.5f * pulse), fontFamily = Mono, fontSize = 14.sp)
+            } else {
+                SelectionContainer {
+                    Text(
+                        step.body.ifBlank { step.summary },
+                        color = colors.fg, fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp,
                     )
                 }
             }
-        } else {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp)
-                    .animateContentSize(
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioLowBouncy,
-                            stiffness = Spring.StiffnessMediumLow,
-                        ),
-                    )
-                    .clip(RoundedCornerShape(26.dp))
-                    .background(
-                        Brush.verticalGradient(
-                            0f to colors.surface,
-                            1f to colors.surface.copy(alpha = 0.92f),
-                        ),
-                    )
-                    .border(
-                        1.dp,
-                        if (step.failed) colors.danger().copy(alpha = 0.5f) else tint.copy(alpha = 0.22f),
-                        RoundedCornerShape(26.dp),
-                    )
-                    .padding(horizontal = 16.dp, vertical = 14.dp)
-                    .pointerInput(step.id) {
-                        detectTapGestures(
-                            onTap = { /* single tap does nothing */ },
-                            onDoubleTap = {
-                                clipboard.setText(AnnotatedString(step.body))
-                                copied = true
-                            },
-                        )
-                    },
-            ) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        WaterDot(
-                            size = 8.dp,
-                            color = if (step.running) tint.copy(alpha = 0.35f + 0.65f * pulse) else tint,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            if (step.merged > 1) "${step.label} ×${step.merged}" else step.label,
-                            color = colors.dim, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 1.5.sp,
-                        )
-                    }
-                    Text(
-                        when {
-                            copied -> "copied"
-                            step.running -> "running…"
-                            else -> step.tag
-                        },
-                        color = when {
-                            copied -> colors.water
-                            step.running -> tint
-                            else -> colors.faint
-                        },
-                        fontFamily = Mono, fontSize = 11.sp,
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                if (step.think != null) {
-                    ThinkSection(step.think, colors)
-                    Spacer(Modifier.height(8.dp))
-                }
-                if (step.running && step.body.isBlank()) {
-                    Text("thinking…", color = tint.copy(alpha = 0.4f + 0.6f * pulse), fontFamily = Mono, fontSize = 15.sp)
-                } else {
-                    SelectionContainer {
-                        Text(
-                            step.body.ifBlank { step.summary },
-                            color = colors.fg, fontFamily = Mono, fontSize = 15.sp, lineHeight = 22.sp,
-                        )
-                    }
-                }
-                if (step.rows.isNotEmpty()) {
-                    Spacer(Modifier.height(10.dp))
-                    for ((k, r) in step.rows.withIndex()) {
-                        Row(
-                            Modifier.padding(top = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            WaterDot(size = 4.dp, color = colors.spectrumAt(k))
-                            Spacer(Modifier.width(8.dp))
-                            Text(r.first, color = colors.spectrumAt(k), fontFamily = Mono, fontSize = 13.sp)
-                            if (r.second.isNotEmpty()) {
-                                Spacer(Modifier.width(8.dp))
-                                Text(r.second, color = colors.dim, fontFamily = Mono, fontSize = 13.sp)
-                            }
-                        }
-                    }
-                }
+
+            if (step.rows.isNotEmpty()) {
+                ToolPocket(step, colors)
+            }
+
+            if (open && isTool && step.body.isNotBlank()) {
+                // (force-open path already shows the body above)
             }
         }
     }
 }
 
-/** A water droplet node: a teardrop silhouette, optionally a ring. */
+/** A spectrum teardrop mark; a ring when [ring]. */
 @Composable
-private fun WaterDot(size: androidx.compose.ui.unit.Dp, color: Color, ring: Boolean = false) {
-    if (ring) {
-        Box(
-            Modifier.size(size)
-                .border(2.dp, color, WaterShapes.droplet(tail = 0.5f)),
+private fun Droplet(
+    modifier: Modifier,
+    brush: Brush,
+    ring: Boolean,
+    pulse: Float,
+    colors: LumenColors,
+) {
+    val shape = WaterShapes.droplet(tail = 0.55f)
+    Box(
+        modifier
+            .then(
+                if (ring) {
+                    Modifier.border(2.dp, colors.water.copy(alpha = 0.35f + 0.65f * pulse), shape)
+                } else {
+                    Modifier.background(brush, shape)
+                },
+            ),
+    )
+}
+
+/** The tool calls for a message, as a pocket inside the bubble. */
+@Composable
+private fun ToolPocket(step: UiStep, colors: LumenColors) {
+    var expanded by remember(step.id) { mutableStateOf<Int?>(null) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+            .drawBehind {
+                drawLine(
+                    color = colors.spectrum.getOrElse(2) { colors.water }.copy(alpha = 0.22f),
+                    start = Offset(0f, 0f),
+                    end = Offset(size.width, 0f),
+                    strokeWidth = 1.dp.toPx(),
+                    pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
+                        floatArrayOf(4.dp.toPx(), 4.dp.toPx()),
+                    ),
+                )
+            }
+            .padding(top = 9.dp),
+    ) {
+        Text(
+            if (step.merged > 1) "${step.label} ×${step.merged}" else step.label,
+            color = colors.water, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 1.sp,
+            modifier = Modifier.padding(bottom = 6.dp),
         )
-    } else {
-        Box(
-            Modifier.size(size)
-                .background(color, WaterShapes.droplet(tail = 0.55f)),
-        )
+        for ((k, r) in step.rows.withIndex()) {
+            val isOpen = expanded == k
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(9.dp))
+                    .background(colors.bg.copy(alpha = 0.4f))
+                    .border(1.dp, colors.rule, RoundedCornerShape(9.dp))
+                    .clickable { expanded = if (isOpen) null else k }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("✓", color = colors.water, fontFamily = Mono, fontSize = 11.sp)
+                Spacer(Modifier.width(8.dp))
+                Text(r.first, color = colors.fg, fontFamily = Mono, fontSize = 12.sp)
+                if (r.second.isNotEmpty()) {
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        r.second, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 150.dp),
+                    )
+                }
+            }
+            if (isOpen && r.second.isNotEmpty()) {
+                Text(
+                    r.second,
+                    color = colors.dim, fontFamily = Mono, fontSize = 11.5.sp, lineHeight = 17.sp,
+                    modifier = Modifier.fillMaxWidth().padding(start = 10.dp, top = 6.dp, bottom = 4.dp),
+                )
+            }
+        }
     }
 }
 
@@ -606,7 +569,7 @@ private fun EmptyState(colors: LumenColors, modifier: Modifier = Modifier) {
         modifier.padding(horizontal = 32.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        WaterDot(size = 10.dp, color = colors.faint)
+        Droplet(Modifier.size(11.dp), Brush.verticalGradient(listOf(colors.bloomA, colors.bloomB, colors.bloomC)), ring = false, pulse = 1f, colors = colors)
         Spacer(Modifier.height(16.dp))
         Text("lumen", color = colors.dim, fontFamily = Mono, fontSize = 15.sp, letterSpacing = 7.sp)
         Spacer(Modifier.height(8.dp))
@@ -631,7 +594,7 @@ private fun ErrorNotice(message: String, colors: LumenColors, onEditKey: (() -> 
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        WaterDot(size = 7.dp, color = colors.danger())
+        Box(Modifier.size(9.dp).clip(WaterShapes.droplet(tail = 0.55f)).background(colors.danger()))
         Spacer(Modifier.width(10.dp))
         Text(
             text = if (auth) "Authentication failed — check your API key." else oneLine(message),
@@ -668,85 +631,91 @@ private fun Composer(
     onToggleTheme: (() -> Unit)?,
     onEditKey: (() -> Unit)?,
 ) {
-    val canSend = input.isNotBlank() && !busy
+    val canSend = input.isNotBlank()
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    // The button gives itself back to the finger: it sinks a little on press.
     val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.86f else 1f,
+        targetValue = if (pressed) 0.9f else 1f,
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh),
         label = "send-scale",
     )
-    Row(
-        Modifier.fillMaxWidth().background(colors.bg)
-            .padding(start = 16.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(">", color = colors.faint, fontFamily = Mono, fontSize = 15.sp)
-        Spacer(Modifier.width(10.dp))
-        Box(Modifier.weight(1f)) {
-            if (input.isEmpty()) {
-                Text("ask the agent…", color = colors.faint, fontFamily = Mono, fontSize = 15.sp)
-            }
-            BasicTextField(
-                value = input,
-                onValueChange = onInput,
-                singleLine = true,
-                textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 15.sp),
-                cursorBrush = SolidColor(colors.water),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
-                modifier = Modifier.fillMaxWidth().testTag("composer"),
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        if (onEditKey != null) {
-            Text(
-                "key",
-                color = colors.faint,
-                fontFamily = Mono,
-                fontSize = 12.sp,
-                modifier = Modifier
-                    .clickable { onEditKey() }
-                    .padding(horizontal = 6.dp)
-                    .testTag("key"),
-            )
-        }
-        if (onToggleTheme != null) {
-            Text(
-                "◐",
-                color = colors.faint,
-                fontFamily = Mono,
-                fontSize = 15.sp,
-                modifier = Modifier
-                    .clickable { onToggleTheme() }
-                    .padding(horizontal = 6.dp)
-                    .testTag("theme"),
-            )
-        }
-        val label = if (busy) "stop" else "send"
-        val enabled = if (busy) true else canSend
-        Text(
-            label,
-            color = when {
-                busy -> colors.accent
-                enabled -> colors.water
-                else -> colors.faint
-            },
-            fontFamily = Mono,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier
-                .graphicsLayer { scaleX = scale; scaleY = scale }
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(
-                    enabled = enabled,
-                    interactionSource = interaction,
-                    indication = LocalIndication.current,
-                    onClick = { if (busy) onStop() else onSend() },
+    Column {
+        Box(
+            Modifier.fillMaxWidth().height(1.dp).drawBehind {
+                drawRect(
+                    brush = Brush.horizontalGradient(
+                        listOf(Color.Transparent, colors.bloomA.copy(alpha = 0.5f), colors.bloomB.copy(alpha = 0.5f), Color.Transparent),
+                    ),
                 )
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-                .testTag(if (busy) "stop" else "send"),
+            },
         )
+        Row(
+            Modifier.fillMaxWidth().background(colors.bg)
+                .padding(start = 16.dp, end = 14.dp, top = 10.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.weight(1f)
+                    .clip(RoundedCornerShape(50))
+                    .background(colors.surface)
+                    .border(1.dp, colors.rule, RoundedCornerShape(50))
+                    .padding(horizontal = 16.dp, vertical = 11.dp),
+            ) {
+                if (input.isEmpty()) {
+                    Text("ask the agent…", color = colors.faint, fontFamily = Mono, fontSize = 14.sp)
+                }
+                BasicTextField(
+                    value = input,
+                    onValueChange = onInput,
+                    singleLine = true,
+                    textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 14.sp),
+                    cursorBrush = SolidColor(colors.water),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
+                    modifier = Modifier.fillMaxWidth().testTag("composer"),
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            if (onEditKey != null) {
+                Text(
+                    "key", color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
+                    modifier = Modifier.clickable { onEditKey() }.padding(horizontal = 6.dp).testTag("key"),
+                )
+            }
+            if (onToggleTheme != null) {
+                Text(
+                    "◐", color = colors.faint, fontFamily = Mono, fontSize = 15.sp,
+                    modifier = Modifier.clickable { onToggleTheme() }.padding(horizontal = 6.dp).testTag("theme"),
+                )
+            }
+            Box(
+                Modifier
+                    .graphicsLayer { scaleX = scale; scaleY = scale }
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(
+                        when {
+                            busy -> Brush.linearGradient(listOf(colors.danger(), colors.danger()))
+                            canSend -> Brush.linearGradient(listOf(colors.bloomA, colors.bloomB, colors.bloomC))
+                            else -> Brush.linearGradient(listOf(colors.surface, colors.surface))
+                        },
+                    )
+                    .then(if (!busy && !canSend) Modifier.border(1.dp, colors.rule, RoundedCornerShape(50)) else Modifier)
+                    .clickable(
+                        enabled = busy || canSend,
+                        interactionSource = interaction,
+                        indication = LocalIndication.current,
+                        onClick = { if (busy) onStop() else onSend() },
+                    )
+                    .testTag(if (busy) "stop" else "send"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (busy) "■" else "↑",
+                    color = if (busy || canSend) colors.bg else colors.faint,
+                    fontFamily = Mono, fontSize = if (busy) 13.sp else 18.sp, fontWeight = FontWeight.Bold,
+                )
+            }
+        }
     }
 }
