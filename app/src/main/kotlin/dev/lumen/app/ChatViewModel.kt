@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.lumen.app.data.AndroidSessionStore
+import dev.lumen.app.data.AndroidSnapshotStore
 import dev.lumen.app.data.KeyStore
 import dev.lumen.app.data.ProviderCatalogue
 import dev.lumen.app.ui.model.StepKind
