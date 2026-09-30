@@ -389,13 +389,7 @@ private fun MessageRow(
                             }
                     },
                 )
-                .padding(start = if (isYou) 14.dp else 16.dp, end = 14.dp, top = 11.dp, bottom = 11.dp)
-                .pointerInput(step.id) {
-                    detectTapGestures(onDoubleTap = {
-                        clipboard.setText(AnnotatedString(step.body))
-                        copied = true
-                    })
-                },
+                .padding(start = if (isYou) 14.dp else 16.dp, end = 14.dp, top = 11.dp, bottom = 11.dp),
         ) {
             // role stamp for agent turns
             if (!isYou) {
@@ -427,6 +421,12 @@ private fun MessageRow(
                     Text(
                         step.body.ifBlank { step.summary },
                         color = colors.fg, fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp,
+                        modifier = Modifier.pointerInput(step.id) {
+                            detectTapGestures(onDoubleTap = {
+                                clipboard.setText(AnnotatedString(step.body))
+                                copied = true
+                            })
+                        },
                     )
                 }
             }
