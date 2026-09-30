@@ -390,9 +390,17 @@ private fun MessageRow(
                 )
                 .padding(start = if (isYou) 14.dp else 16.dp, end = 14.dp, top = 11.dp, bottom = 11.dp),
         ) {
-            // role stamp for agent turns
+            // role stamp for agent turns (double-tap it to copy the body)
             if (!isYou) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier.pointerInput(step.id) {
+                        detectTapGestures(onDoubleTap = {
+                            clipboard.setText(AnnotatedString(step.body))
+                            copied = true
+                        })
+                    },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Text(
                         if (copied) "copied" else step.label.lowercase(),
                         color = if (copied) colors.water else colors.dim,
@@ -419,12 +427,6 @@ private fun MessageRow(
                 Text(
                     step.body.ifBlank { step.summary },
                     color = colors.fg, fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp,
-                    modifier = Modifier.pointerInput(step.id) {
-                        detectTapGestures(onDoubleTap = {
-                            clipboard.setText(AnnotatedString(step.body))
-                            copied = true
-                        })
-                    },
                 )
             }
 
