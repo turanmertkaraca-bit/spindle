@@ -1,18 +1,26 @@
 package dev.spindle.store.sqlite
 
 import dev.spindle.core.model.FinishReason
+import dev.spindle.core.model.Ids
 import dev.spindle.core.model.Message
 import dev.spindle.core.model.MessageId
 import dev.spindle.core.model.Part
 import dev.spindle.core.model.Role
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
+import dev.spindle.core.model.SessionState
 import dev.spindle.core.model.TodoItem
 import dev.spindle.core.model.TodoStatus
 import dev.spindle.core.model.Usage
+import dev.spindle.core.store.SearchHit
+import dev.spindle.core.store.SessionSearch
 import dev.spindle.core.store.SessionStore
+import dev.spindle.core.store.messageSearchText
+import dev.spindle.core.store.withNewId
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.polymorphic
@@ -23,10 +31,11 @@ import java.sql.Connection
 import java.sql.DriverManager
 import java.sql.ResultSet
 
-class SqliteSessionStore(private val path: Path) : SessionStore, AutoCloseable {
+class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, AutoCloseable {
 
     private val mutex = Mutex()
     private val connection: Connection
+    private val tagsSerializer = ListSerializer(String.serializer())
 
     private val json = Json {
         encodeDefaults = true
@@ -50,6 +59,7 @@ class SqliteSessionStore(private val path: Path) : SessionStore, AutoCloseable {
             st.execute("PRAGMA foreign_keys=ON")
         }
         migrate()
+        backfillSearchIndex()
     }
 
     private fun migrate() {
@@ -90,11 +100,12 @@ class SqliteSessionStore(private val path: Path) : SessionStore, AutoCloseable {
 
     private fun upsertSession(session: Session) {
         connection.prepareStatement(
-            "INSERT INTO sessions(id, title, cwd, created_at, updated_at, model, provider_id, agent, parent_id) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+            "INSERT INTO sessions(id, title, cwd, created_at, updated_at, model, provider_id, agent, parent_id, " +
+                "state, pinned, archived, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
                 "ON CONFLICT(id) DO UPDATE SET title=excluded.title, cwd=excluded.cwd, " +
                 "created_at=excluded.created_at, updated_at=excluded.updated_at, model=excluded.model, " +
-                "provider_id=excluded.provider_id, agent=excluded.agent, parent_id=excluded.parent_id",
+                "provider_id=excluded.provider_id, agent=excluded.agent, parent_id=excluded.parent_id, " +
+                "state=excluded.state, pinned=excluded.pinned, archived=excluded.archived, tags=excluded.tags",
         ).use { st ->
             st.setString(1, session.id.value)
             st.setString(2, session.title)
@@ -105,21 +116,28 @@ class SqliteSessionStore(private val path: Path) : SessionStore, AutoCloseable {
             st.setString(7, session.providerId)
             st.setString(8, session.agent)
             st.setString(9, session.parentId?.value)
+            st.setString(10, session.state.name)
+            st.setInt(11, if (session.pinned) 1 else 0)
+            st.setInt(12, if (session.archived) 1 else 0)
+            st.setString(13, json.encodeToString(tagsSerializer, session.tags))
             st.executeUpdate()
         }
     }
 
-    override suspend fun session(id: SessionId): Session? = mutex.withLock {
-        connection.prepareStatement("SELECT * FROM sessions WHERE id = ?").use { st ->
-            st.setString(1, id.value)
-            st.executeQuery().use { rs -> if (rs.next()) readSession(rs) else null }
-        }
-    }
+    override suspend fun session(id: SessionId): Session? = mutex.withLock { readSessionRow(id.value) }
 
-    override suspend fun sessions(limit: Int, includeChildren: Boolean): List<Session> = mutex.withLock {
+    override suspend fun sessions(
+        limit: Int,
+        includeChildren: Boolean,
+        includeArchived: Boolean,
+    ): List<Session> = mutex.withLock {
+        val where = buildList {
+            if (!includeChildren) add("parent_id IS NULL")
+            if (!includeArchived) add("(archived IS NULL OR archived = 0)")
+        }
         val sql = buildString {
             append("SELECT * FROM sessions")
-            if (!includeChildren) append(" WHERE parent_id IS NULL")
+            if (where.isNotEmpty()) append(" WHERE ").append(where.joinToString(" AND "))
             append(" ORDER BY updated_at DESC LIMIT ?")
         }
         connection.prepareStatement(sql).use { st ->
@@ -135,6 +153,7 @@ class SqliteSessionStore(private val path: Path) : SessionStore, AutoCloseable {
     }
 
     private fun deleteSessionRows(sessionId: String) {
+        deleteFtsSession(sessionId)
         connection.prepareStatement("DELETE FROM parts WHERE session_id = ?").use {
             it.setString(1, sessionId); it.executeUpdate()
         }
@@ -147,6 +166,86 @@ class SqliteSessionStore(private val path: Path) : SessionStore, AutoCloseable {
         connection.prepareStatement("DELETE FROM sessions WHERE id = ?").use {
             it.setString(1, sessionId); it.executeUpdate()
         }
+    }
+
+    override suspend fun forkSession(
+        sourceId: SessionId,
+        atMessageId: MessageId?,
+        newId: SessionId,
+    ): Session? = mutex.withLock {
+        val source = readSessionRow(sourceId.value) ?: return@withLock null
+        val sourceMessages = readMessagesForSession(sourceId.value)
+        val upTo = if (atMessageId == null) {
+            sourceMessages
+        } else {
+            val index = sourceMessages.indexOfFirst { it.id == atMessageId }
+            if (index < 0) return@withLock null
+            sourceMessages.subList(0, index + 1)
+        }
+        val now = System.currentTimeMillis()
+        val fork = source.copy(
+            id = newId,
+            parentId = sourceId,
+            createdAt = now,
+            updatedAt = now,
+            archived = false,
+        )
+        connection.autoCommit = false
+        try {
+            upsertSession(fork)
+            for (message in upTo) {
+                val copy = message.copy(
+                    id = MessageId(Ids.new("msg")),
+                    sessionId = newId,
+                    parts = message.parts.map { it.withNewId() },
+                )
+                insertMessage(copy, nextSeq(newId.value))
+            }
+            connection.commit()
+        } catch (t: Throwable) {
+            connection.rollback()
+            throw t
+        } finally {
+            connection.autoCommit = true
+        }
+        fork
+    }
+
+    override suspend fun rewind(sessionId: SessionId, toMessageId: MessageId): Int = mutex.withLock {
+        val seq = connection.prepareStatement(
+            "SELECT seq FROM messages WHERE session_id = ? AND id = ?",
+        ).use { st ->
+            st.setString(1, sessionId.value)
+            st.setString(2, toMessageId.value)
+            st.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else null }
+        } ?: return@withLock 0
+        val dropped = connection.prepareStatement(
+            "SELECT id FROM messages WHERE session_id = ? AND seq > ?",
+        ).use { st ->
+            st.setString(1, sessionId.value)
+            st.setInt(2, seq)
+            st.executeQuery().use { rs -> buildList { while (rs.next()) add(rs.getString(1)) } }
+        }
+        if (dropped.isEmpty()) return@withLock 0
+        connection.autoCommit = false
+        try {
+            for (messageId in dropped) {
+                deleteParts(messageId)
+                deleteFtsMessage(messageId)
+            }
+            connection.prepareStatement("DELETE FROM messages WHERE session_id = ? AND seq > ?").use {
+                it.setString(1, sessionId.value)
+                it.setInt(2, seq)
+                it.executeUpdate()
+            }
+            connection.commit()
+        } catch (t: Throwable) {
+            connection.rollback()
+            throw t
+        } finally {
+            connection.autoCommit = true
+        }
+        dropped.size
     }
 
     override suspend fun appendMessage(message: Message) {
@@ -178,49 +277,59 @@ class SqliteSessionStore(private val path: Path) : SessionStore, AutoCloseable {
             } else {
                 deleteParts(message.id.value)
                 insertParts(message)
+                deleteFtsMessage(message.id.value)
+                insertFts(message)
             }
         }
     }
 
     override suspend fun message(sessionId: SessionId, id: MessageId): Message? = mutex.withLock {
-        connection.prepareStatement("SELECT * FROM messages WHERE session_id = ? AND id = ?").use { st ->
-            st.setString(1, sessionId.value)
-            st.setString(2, id.value)
-            st.executeQuery().use { rs ->
-                if (!rs.next()) return@withLock null
-                val message = readMessage(rs)
-                message.copy(parts = readPartsForMessage(message.id.value))
-            }
-        }
+        readMessageRow(sessionId.value, id.value)
     }
 
     override suspend fun messages(sessionId: SessionId): List<Message> = mutex.withLock {
-        val partsByMessage = readPartsForSession(sessionId.value)
-        connection.prepareStatement(
-            "SELECT * FROM messages WHERE session_id = ? ORDER BY seq ASC",
-        ).use { st ->
-            st.setString(1, sessionId.value)
-            st.executeQuery().use { rs ->
-                buildList {
-                    while (rs.next()) {
-                        val message = readMessage(rs)
-                        add(message.copy(parts = partsByMessage[message.id.value].orEmpty()))
-                    }
-                }
-            }
-        }
+        readMessagesForSession(sessionId.value)
     }
 
     override suspend fun latestMessage(sessionId: SessionId): Message? = mutex.withLock {
-        connection.prepareStatement(
-            "SELECT * FROM messages WHERE session_id = ? ORDER BY seq DESC LIMIT 1",
+        val id = connection.prepareStatement(
+            "SELECT id FROM messages WHERE session_id = ? ORDER BY seq DESC LIMIT 1",
         ).use { st ->
             st.setString(1, sessionId.value)
-            st.executeQuery().use { rs ->
-                if (!rs.next()) return@withLock null
-                val message = readMessage(rs)
-                message.copy(parts = readPartsForMessage(message.id.value))
+            st.executeQuery().use { rs -> if (rs.next()) rs.getString(1) else null }
+        } ?: return@withLock null
+        readMessageRow(sessionId.value, id)
+    }
+
+    override suspend fun search(query: String, limit: Int): List<SearchHit> = mutex.withLock {
+        val match = ftsQuery(query) ?: return@withLock emptyList()
+        val sql = "SELECT message_fts.message_id AS message_id, message_fts.session_id AS session_id, " +
+            "message_fts.role AS role, snippet(message_fts, 3, '[', ']', '…', 12) AS snippet, " +
+            "m.created_at AS created_at FROM message_fts " +
+            "JOIN messages m ON m.id = message_fts.message_id " +
+            "WHERE message_fts MATCH ? ORDER BY bm25(message_fts) LIMIT ?"
+        try {
+            connection.prepareStatement(sql).use { st ->
+                st.setString(1, match)
+                st.setInt(2, limit)
+                st.executeQuery().use { rs ->
+                    buildList {
+                        while (rs.next()) {
+                            add(
+                                SearchHit(
+                                    sessionId = SessionId(rs.getString("session_id")),
+                                    messageId = rs.getString("message_id"),
+                                    role = rs.getString("role"),
+                                    snippet = rs.getString("snippet") ?: "",
+                                    at = rs.getLong("created_at"),
+                                ),
+                            )
+                        }
+                    }
+                }
             }
+        } catch (t: Throwable) {
+            emptyList()
         }
     }
 
@@ -288,6 +397,7 @@ class SqliteSessionStore(private val path: Path) : SessionStore, AutoCloseable {
             removed += deleteCount("DELETE FROM messages WHERE session_id = ?", id)
             removed += deleteCount("DELETE FROM todos WHERE session_id = ?", id)
             removed += deleteCount("DELETE FROM sessions WHERE id = ?", id)
+            deleteFtsSession(id)
         }
         removed
     }
@@ -322,6 +432,7 @@ class SqliteSessionStore(private val path: Path) : SessionStore, AutoCloseable {
             st.executeUpdate()
         }
         insertParts(message)
+        insertFts(message)
     }
 
     private fun insertParts(message: Message) {
@@ -343,6 +454,98 @@ class SqliteSessionStore(private val path: Path) : SessionStore, AutoCloseable {
     private fun deleteParts(messageId: String) {
         connection.prepareStatement("DELETE FROM parts WHERE message_id = ?").use {
             it.setString(1, messageId); it.executeUpdate()
+        }
+    }
+
+    private fun insertFts(message: Message) {
+        val body = messageSearchText(message)
+        if (body.isBlank()) return
+        connection.prepareStatement(
+            "INSERT INTO message_fts(message_id, session_id, role, body) VALUES (?, ?, ?, ?)",
+        ).use { st ->
+            st.setString(1, message.id.value)
+            st.setString(2, message.sessionId.value)
+            st.setString(3, message.role.name)
+            st.setString(4, body)
+            st.executeUpdate()
+        }
+    }
+
+    private fun deleteFtsMessage(messageId: String) {
+        connection.prepareStatement("DELETE FROM message_fts WHERE message_id = ?").use {
+            it.setString(1, messageId); it.executeUpdate()
+        }
+    }
+
+    private fun deleteFtsSession(sessionId: String) {
+        connection.prepareStatement("DELETE FROM message_fts WHERE session_id = ?").use {
+            it.setString(1, sessionId); it.executeUpdate()
+        }
+    }
+
+    private fun backfillSearchIndex() {
+        val existing = connection.createStatement().use { st ->
+            st.executeQuery("SELECT COUNT(*) FROM message_fts").use { rs -> if (rs.next()) rs.getInt(1) else 0 }
+        }
+        if (existing > 0) return
+        val ids = connection.createStatement().use { st ->
+            st.executeQuery("SELECT id FROM messages").use { rs ->
+                buildList { while (rs.next()) add(rs.getString(1)) }
+            }
+        }
+        for (id in ids) readMessageById(id)?.let { insertFts(it) }
+    }
+
+    private fun ftsQuery(query: String): String? {
+        val tokens = query.lowercase()
+            .split(Regex("[^\\p{L}\\p{N}_]+"))
+            .filter { it.isNotBlank() }
+        if (tokens.isEmpty()) return null
+        return tokens.joinToString(" ") { "$it*" }
+    }
+
+    private fun readSessionRow(id: String): Session? =
+        connection.prepareStatement("SELECT * FROM sessions WHERE id = ?").use { st ->
+            st.setString(1, id)
+            st.executeQuery().use { rs -> if (rs.next()) readSession(rs) else null }
+        }
+
+    private fun readMessageRow(sessionId: String, id: String): Message? =
+        connection.prepareStatement("SELECT * FROM messages WHERE session_id = ? AND id = ?").use { st ->
+            st.setString(1, sessionId)
+            st.setString(2, id)
+            st.executeQuery().use { rs ->
+                if (!rs.next()) null
+                else withParts(readMessage(rs))
+            }
+        }
+
+    private fun readMessageById(id: String): Message? =
+        connection.prepareStatement("SELECT * FROM messages WHERE id = ?").use { st ->
+            st.setString(1, id)
+            st.executeQuery().use { rs ->
+                if (!rs.next()) null
+                else withParts(readMessage(rs))
+            }
+        }
+
+    private fun withParts(message: Message): Message =
+        message.copy(parts = readPartsForMessage(message.id.value))
+
+    private fun readMessagesForSession(sessionId: String): List<Message> {
+        val partsByMessage = readPartsForSession(sessionId)
+        return connection.prepareStatement(
+            "SELECT * FROM messages WHERE session_id = ? ORDER BY seq ASC",
+        ).use { st ->
+            st.setString(1, sessionId)
+            st.executeQuery().use { rs ->
+                buildList {
+                    while (rs.next()) {
+                        val message = readMessage(rs)
+                        add(message.copy(parts = partsByMessage[message.id.value].orEmpty()))
+                    }
+                }
+            }
         }
     }
 
@@ -382,6 +585,13 @@ class SqliteSessionStore(private val path: Path) : SessionStore, AutoCloseable {
         providerId = rs.getString("provider_id"),
         agent = rs.getString("agent") ?: "build",
         parentId = rs.getString("parent_id")?.let { SessionId(it) },
+        state = rs.getString("state")?.let { runCatching { SessionState.valueOf(it) }.getOrNull() }
+            ?: SessionState.IDLE,
+        pinned = rs.getInt("pinned") != 0,
+        archived = rs.getInt("archived") != 0,
+        tags = rs.getString("tags")?.let {
+            runCatching { json.decodeFromString(tagsSerializer, it) }.getOrNull()
+        } ?: emptyList(),
     )
 
     private fun readMessage(rs: ResultSet) = Message(
@@ -458,6 +668,18 @@ private val MIGRATIONS = listOf(
                     "status TEXT)",
             )
             st.execute("CREATE INDEX IF NOT EXISTS idx_todos_session_ord ON todos(session_id, ord)")
+        }
+    },
+    Migration(2) { connection ->
+        connection.createStatement().use { st ->
+            st.execute("ALTER TABLE sessions ADD COLUMN state TEXT NOT NULL DEFAULT 'IDLE'")
+            st.execute("ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+            st.execute("ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+            st.execute("ALTER TABLE sessions ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
+            st.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(" +
+                    "message_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, body)",
+            )
         }
     },
 )

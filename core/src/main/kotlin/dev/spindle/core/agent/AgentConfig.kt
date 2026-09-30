@@ -72,5 +72,26 @@ data class AgentConfig(
             systemPrompt = GENERAL_SYSTEM,
             allowSubagents = false,
         )
+
+        val BUILD = AgentConfig(name = "build")
+
+        /** Read-only planner: may inspect, must not mutate. */
+        val PLAN = AgentConfig(
+            name = "plan",
+            systemPrompt = PLAN_SYSTEM,
+            denyTools = setOf("write", "edit", "apply_patch", "bash"),
+            allowSubagents = false,
+        )
+
+        /** The selectable primary agents, keyed by name. */
+        val PRIMARY: Map<String, AgentConfig> = linkedMapOf(
+            "build" to BUILD,
+            "plan" to PLAN,
+            "explore" to explore(),
+            "general" to general(),
+        )
+
+        /** Resolve a primary-agent name; unknown names fall back to build. */
+        fun byName(name: String?): AgentConfig = PRIMARY[name?.lowercase()] ?: BUILD
     }
 }

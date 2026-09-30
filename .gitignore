@@ -30,3 +30,6 @@ secrets.properties
 **/test-results/
 **/reports/
 fixtures/live/
+
+# read-only parity reference clone (opencode-android)
+.ref/

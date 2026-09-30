@@ -60,6 +60,36 @@ sealed interface WireEvent {
     @Serializable
     data class Permission(override val sessionId: String, val tool: String, val detail: String) : WireEvent
 
+    @Serializable
+    data class Usage(
+        override val sessionId: String,
+        val input: Int,
+        val output: Int,
+        val costUsd: Double,
+    ) : WireEvent
+
+    @Serializable
+    data class Title(override val sessionId: String, val title: String) : WireEvent
+
+    @Serializable
+    data class FileEdited(
+        override val sessionId: String,
+        val path: String,
+        val added: Int,
+        val removed: Int,
+        val diff: String,
+    ) : WireEvent
+
+    @Serializable
+    data class Snapshot(override val sessionId: String, val snapshotId: String, val path: String) : WireEvent
+
+    @Serializable
+    data class SubagentState(
+        override val sessionId: String,
+        val childSessionId: String,
+        val state: String,
+    ) : WireEvent
+
     companion object {
         fun of(e: AgentEvent): WireEvent = when (e) {
             is AgentEvent.StateChanged -> State(e.sessionId.value, e.state.name)
@@ -77,6 +107,17 @@ sealed interface WireEvent {
             is AgentEvent.Error -> Error(e.sessionId.value, e.message)
             is AgentEvent.QuestionAsked -> Question(e.sessionId.value, e.question, e.options, e.multiple)
             is AgentEvent.PermissionRequested -> Permission(e.sessionId.value, e.tool, e.detail)
+            is AgentEvent.UsageUpdated -> Usage(
+                e.sessionId.value, e.usage.inputTokens, e.usage.outputTokens, e.usage.costUsd,
+            )
+            is AgentEvent.TitleUpdated -> Title(e.sessionId.value, e.title)
+            is AgentEvent.FileEdited -> FileEdited(
+                e.sessionId.value, e.edit.path, e.edit.added, e.edit.removed, e.edit.unifiedDiff,
+            )
+            is AgentEvent.SnapshotCreated -> Snapshot(e.sessionId.value, e.snapshotId, e.path)
+            is AgentEvent.SubagentStateChanged -> SubagentState(
+                e.sessionId.value, e.childSessionId.value, e.state.name,
+            )
         }
     }
 }

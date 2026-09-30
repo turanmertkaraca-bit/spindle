@@ -110,4 +110,8 @@ data class Session(
     val providerId: String? = null,
     val agent: String = "build",
     val parentId: SessionId? = null,
+    val state: SessionState = SessionState.IDLE,
+    val pinned: Boolean = false,
+    val archived: Boolean = false,
+    val tags: List<String> = emptyList(),
 )

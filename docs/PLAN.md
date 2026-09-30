@@ -2,7 +2,8 @@
 
 Milestones for the v1 backend. `:core` is the foundation; everything else is an
 adapter or a harness around it. See `SPEC.md` for the contracts each milestone
-must satisfy.
+must satisfy, and `CAPABILITIES.md` for the merged native-app capability model
+(the m11–m15 track below).
 
 Legend: `[x]` done · `[~]` partial · `[ ]` todo · `[—]` deliberately deferred.
 
@@ -100,6 +101,60 @@ Legend: `[x]` done · `[~]` partial · `[ ]` todo · `[—]` deliberately deferr
 
 The UI is intentionally last. `:core` stays Android-free so the backend can be
 completed and verified on the JVM first.
+
+## Merge track — native Lumen app — `[~]` IN PROGRESS
+
+The merged app: opencode-android's feature surface on spindle's native engine,
+fully native, function-first. `opencode-android` is frozen as the parity
+reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
+
+### m11 — Capability spec — `[x]` DONE
+
+- [x] `CAPABILITIES.md`: domains, parity checklist, new SPIs, non-goals.
+- [x] `PLAN.md` merge track (this section).
+
+### m12 — Core gaps (Android-free, JVM-tested)
+
+- [ ] Runtime agent selection (build/plan/explore/general).
+- [ ] Rules / AGENTS.md injection.
+- [ ] Session token + cost totals + budget warnings as events.
+- [ ] New events: `UsageUpdated`, `TitleUpdated`, `RunStateChanged`,
+      `SubagentStateChanged`, `FileEdited`, `SnapshotCreated`.
+- [ ] Provider routing parity: Zen/Go `/responses` + `/messages` per model.
+- [ ] `ApprovalPolicy` (allow/ask/deny per tool + path/command glob, persisted).
+- [ ] Store: full-text search, fork/branch, rewind, persisted run state,
+      pin/archive/tags/rename.
+- [ ] `SnapshotStore` + snapshot-before-write.
+- [ ] Structured `FileEdit` emission from `write`/`edit`/`apply_patch`.
+
+### m13 — Android platform adapters
+
+- [ ] `ShellExecutor`: host `/bin/sh` (dev) + Debian proot + PTY (device);
+      port `Debian.java` / `Sandbox.java`.
+- [ ] `FileSystemService` + external-change watcher (port `DirWatcher`).
+- [ ] `EnvironmentManager`: rootfs install/curate/prune, apt, storage report.
+- [ ] Foreground `RunService` + notifications + wake lock; resumable runs.
+- [ ] SQLite FTS index; key store (port `AuthStore`); models.dev catalogue.
+
+### m14 — Feature verticals
+
+- [ ] **Changes**: `RunChanges` aggregate, diff viewer, revert (port/rework
+      `EditPulse`).
+- [ ] **References**: typed resolver, touched-vs-mentioned, backlinks,
+      `@`-completion (port `Mentions` shape rules).
+- [ ] Transparency: step timeline, subagent call tree, tool inspector, todo board.
+- [ ] Canvas + RenderServer port; Vision (image parts, `supportsVision`).
+- [ ] `websearch` tool (properly: result ranking, clipping, citation).
+- [ ] Session/file full-text search + navigation history.
+
+### m15 — UI + hardening
+
+- [ ] Compose shell consuming the contracts (deck, chat with think-merge + tool
+      + subagent + permission/question surfaces, changes rail, files, terminal,
+      canvas, settings, keys/models, diagnostics, storage).
+- [ ] Adaptive two-pane (tablet/foldable).
+- [ ] Crash guards, on-device performance, battery, ANR avoidance.
+- [ ] CI green gate + screenshot/animation evidence; APK update-in-place.
 
 ## Risks
 

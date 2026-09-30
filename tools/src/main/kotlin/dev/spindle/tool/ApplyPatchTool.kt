@@ -1,8 +1,11 @@
 package dev.spindle.tool
 
+import dev.spindle.core.model.FileEdit
+import dev.spindle.core.model.Ids
 import dev.spindle.core.provider.ToolSpec
 import dev.spindle.core.tool.Tool
 import dev.spindle.core.tool.ToolContext
+import dev.spindle.core.tool.ToolEdit
 import dev.spindle.core.tool.ToolOutcome
 import kotlinx.serialization.json.JsonObject
 import java.nio.charset.StandardCharsets
@@ -65,6 +68,7 @@ class ApplyPatchTool : Tool {
         val pending = LinkedHashMap<Path, String?>()
         val diff = StringBuilder()
         val summary = ArrayList<String>()
+        val specs = ArrayList<EditSpec>()
 
         for (segment in segments) {
             val rawPath = segment.path
@@ -83,7 +87,21 @@ class ApplyPatchTool : Tool {
                     val content = render(segment.lines)
                     pending[path] = content
                     summary.add("A $rel")
-                    appendDiff(diff, "/dev/null", "b/$rel", segment.lines.map { "+$it" })
+                    val segmentDiff = StringBuilder()
+                    appendDiff(segmentDiff, "/dev/null", "b/$rel", segment.lines.map { "+$it" })
+                    diff.append(segmentDiff)
+                    specs.add(
+                        EditSpec(
+                            editPath = rel,
+                            sourcePath = null,
+                            created = true,
+                            added = segment.lines.size,
+                            removed = 0,
+                            startLine = if (segment.lines.isEmpty()) null else 1,
+                            endLine = if (segment.lines.isEmpty()) null else segment.lines.size,
+                            diff = segmentDiff.toString().trimEnd('\n'),
+                        ),
+                    )
                 }
 
                 is DeleteFile -> {
@@ -91,9 +109,23 @@ class ApplyPatchTool : Tool {
                         ?: return ToolOutcome("Cannot delete missing file: $rawPath", isError = true)
                     pending[path] = null
                     summary.add("D $rel")
+                    val segmentDiff = StringBuilder()
                     appendDiff(
-                        diff, "a/$rel", "/dev/null",
+                        segmentDiff, "a/$rel", "/dev/null",
                         existing.split("\n").map { "-$it" },
+                    )
+                    diff.append(segmentDiff)
+                    specs.add(
+                        EditSpec(
+                            editPath = rel,
+                            sourcePath = path,
+                            created = false,
+                            added = 0,
+                            removed = splitLines(existing).size,
+                            startLine = null,
+                            endLine = null,
+                            diff = segmentDiff.toString().trimEnd('\n'),
+                        ),
                     )
                 }
 
@@ -103,6 +135,10 @@ class ApplyPatchTool : Tool {
                     val hadTrailingNewline = content.endsWith("\n")
                     val lines = content.removeSuffix("\n").split("\n").toMutableList()
                     val diffBody = StringBuilder()
+                    var added = 0
+                    var removed = 0
+                    var startLine: Int? = null
+                    var endLine: Int? = null
 
                     for (hunk in segment.hunks) {
                         val oldBlock = ArrayList<String>()
@@ -138,6 +174,18 @@ class ApplyPatchTool : Tool {
                         repeat(oldBlock.size) { lines.removeAt(index) }
                         lines.addAll(index, newBlock)
 
+                        for (raw in hunk.lines) {
+                            when {
+                                raw.startsWith("+") -> added++
+                                raw.startsWith("-") -> removed++
+                                else -> Unit
+                            }
+                        }
+                        parseHunkStart(hunk.header)?.let { (newStart, newCount) ->
+                            if (startLine == null) startLine = newStart
+                            endLine = if (newCount <= 0) newStart else newStart + newCount - 1
+                        }
+
                         diffBody.append(hunk.header).append('\n')
                         oldBlock.forEach { diffBody.append('-').append(it).append('\n') }
                         newBlock.forEach { diffBody.append('+').append(it).append('\n') }
@@ -154,23 +202,63 @@ class ApplyPatchTool : Tool {
                             return ToolOutcome(e.message ?: "Invalid path: $target", isError = true)
                         }
                         val targetRel = targetPath.displayPath(ctx.cwd)
+                        val targetExisted = currentContent(pending, targetPath) != null
                         pending[path] = null
                         pending[targetPath] = content
                         summary.add("M $rel -> $targetRel")
+                        val segmentDiff = StringBuilder()
                         appendDiff(
-                            diff, "a/$rel", "b/$targetRel",
+                            segmentDiff, "a/$rel", "b/$targetRel",
                             diffBody.toString().trimEnd('\n').split("\n"),
+                        )
+                        diff.append(segmentDiff)
+                        specs.add(
+                            EditSpec(
+                                editPath = targetRel,
+                                sourcePath = path,
+                                created = !targetExisted,
+                                added = added,
+                                removed = removed,
+                                startLine = startLine,
+                                endLine = endLine,
+                                diff = segmentDiff.toString().trimEnd('\n'),
+                            ),
                         )
                     } else {
                         pending[path] = content
                         summary.add("M $rel")
+                        val segmentDiff = StringBuilder()
                         appendDiff(
-                            diff, "a/$rel", "b/$rel",
+                            segmentDiff, "a/$rel", "b/$rel",
                             diffBody.toString().trimEnd('\n').split("\n"),
+                        )
+                        diff.append(segmentDiff)
+                        specs.add(
+                            EditSpec(
+                                editPath = rel,
+                                sourcePath = path,
+                                created = false,
+                                added = added,
+                                removed = removed,
+                                startLine = startLine,
+                                endLine = endLine,
+                                diff = segmentDiff.toString().trimEnd('\n'),
+                            ),
                         )
                     }
                 }
             }
+        }
+
+        val snapshotIds = ArrayList<String?>(specs.size)
+        for (spec in specs) {
+            snapshotIds.add(
+                if (spec.created || spec.sourcePath == null) {
+                    null
+                } else {
+                    recordSnapshot(ctx, spec.sourcePath, spec.sourcePath.displayPath(ctx.cwd))
+                },
+            )
         }
 
         try {
@@ -186,6 +274,26 @@ class ApplyPatchTool : Tool {
             return ToolOutcome("Patch failed while writing: ${e.message}", isError = true)
         }
 
+        val now = System.currentTimeMillis()
+        val toolEdits = specs.mapIndexed { index, spec ->
+            ToolEdit(
+                edit = FileEdit(
+                    id = Ids.new("edit"),
+                    sessionId = ctx.sessionId,
+                    path = spec.editPath,
+                    startLine = spec.startLine,
+                    endLine = spec.endLine,
+                    added = spec.added,
+                    removed = spec.removed,
+                    unifiedDiff = spec.diff,
+                    created = spec.created,
+                    at = now,
+                ),
+                snapshotId = snapshotIds[index],
+                snapshotPath = spec.sourcePath?.displayPath(ctx.cwd),
+            )
+        }
+
         val output = buildString {
             append("Applied patch:\n")
             summary.forEach { append("  ").append(it).append('\n') }
@@ -195,6 +303,9 @@ class ApplyPatchTool : Tool {
             output = output,
             diff = diff.toString().trimEnd('\n'),
             metadata = mapOf("files" to summary.size.toString()),
+            edit = if (toolEdits.size == 1) toolEdits.single().edit else null,
+            snapshotId = if (toolEdits.size == 1) toolEdits.single().snapshotId else null,
+            edits = toolEdits,
         )
     }
 
@@ -216,6 +327,14 @@ class ApplyPatchTool : Tool {
         builder.append("--- ").append(from).append('\n')
         builder.append("+++ ").append(to).append('\n')
         body.forEach { builder.append(it).append('\n') }
+    }
+
+    /** New-file start line and count from an `@@ -a,b +c,d @@` header, when present. */
+    private fun parseHunkStart(header: String): Pair<Int, Int>? {
+        val match = HUNK_START.find(header) ?: return null
+        val start = match.groupValues[1].toIntOrNull() ?: return null
+        val count = match.groupValues[2].toIntOrNull() ?: 1
+        return start to count
     }
 
     private fun findBlock(haystack: List<String>, needle: List<String>): Int {
@@ -308,6 +427,18 @@ class ApplyPatchTool : Tool {
 
     private class PatchException(message: String) : Exception(message)
 
+    /** A validated change, resolved into a [ToolEdit] once snapshots are recorded. */
+    private class EditSpec(
+        val editPath: String,
+        val sourcePath: Path?,
+        val created: Boolean,
+        val added: Int,
+        val removed: Int,
+        val startLine: Int?,
+        val endLine: Int?,
+        val diff: String,
+    )
+
     private sealed interface Segment {
         val path: String
     }
@@ -331,5 +462,6 @@ class ApplyPatchTool : Tool {
         const val DELETE = "*** Delete File"
         const val UPDATE = "*** Update File"
         const val MOVE = "*** Move to"
+        val HUNK_START = Regex("""@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@""")
     }
 }

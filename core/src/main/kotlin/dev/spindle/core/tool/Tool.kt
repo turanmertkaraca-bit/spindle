@@ -1,8 +1,10 @@
 package dev.spindle.core.tool
 
+import dev.spindle.core.model.FileEdit
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.model.TodoItem
+import dev.spindle.core.store.SnapshotStore
 import kotlinx.serialization.json.JsonObject
 
 /** Everything a tool needs that the loop owns. */
@@ -12,6 +14,12 @@ interface ToolContext {
     val cwd: java.nio.file.Path
     /** The owning session (for cwd/model/agent defaults). */
     val session: Session
+    /**
+     * Pre-edit snapshot store. Null disables snapshots (the default, so tools
+     * stay usable against lightweight contexts); when present, mutating tools
+     * record a copy before they change a file.
+     */
+    val snapshots: SnapshotStore? get() = null
     /** Returns true if the user approved this invocation. */
     suspend fun requestPermission(tool: String, detail: String, pattern: String? = null): Boolean
     /** Ask the user a question and suspend until they answer. */
@@ -57,6 +65,20 @@ data class ToolOutcome(
     val isError: Boolean = false,
     val diff: String? = null,
     val metadata: Map<String, String> = emptyMap(),
+    /** Structured change for single-file tools; the loop emits it as `FileEdited`. */
+    val edit: FileEdit? = null,
+    /** Snapshot recorded before [edit] was applied, when the file existed. */
+    val snapshotId: String? = null,
+    /** Structured changes for multi-file tools (e.g. `apply_patch`); supersedes [edit]. */
+    val edits: List<ToolEdit> = emptyList(),
+)
+
+/** One structured change plus the snapshot that can restore the pre-edit file. */
+data class ToolEdit(
+    val edit: FileEdit,
+    val snapshotId: String? = null,
+    /** Path the snapshot belongs to when it differs from [FileEdit.path] (moves). */
+    val snapshotPath: String? = null,
 )
 
 interface Tool {

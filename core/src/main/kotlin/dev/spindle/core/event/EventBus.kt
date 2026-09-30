@@ -1,10 +1,12 @@
 package dev.spindle.core.event
 
+import dev.spindle.core.model.FileEdit
 import dev.spindle.core.model.Part
 import dev.spindle.core.model.PartId
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.model.SessionState
 import dev.spindle.core.model.ToolResult
+import dev.spindle.core.model.Usage
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -69,6 +71,29 @@ sealed interface AgentEvent {
         override val sessionId: SessionId,
         val message: String,
         val fraction: Double? = null,
+    ) : AgentEvent
+
+    /** Running token/cost totals for the session, rolled up from each message. */
+    data class UsageUpdated(override val sessionId: SessionId, val usage: Usage) : AgentEvent
+
+    /** A session's title was set or auto-generated. */
+    data class TitleUpdated(override val sessionId: SessionId, val title: String) : AgentEvent
+
+    /** A mutating tool changed a file; carries the structured edit for the Changes view. */
+    data class FileEdited(override val sessionId: SessionId, val edit: FileEdit) : AgentEvent
+
+    /** A pre-edit snapshot was recorded and can be used to revert [path]. */
+    data class SnapshotCreated(
+        override val sessionId: SessionId,
+        val snapshotId: String,
+        val path: String,
+    ) : AgentEvent
+
+    /** A child (subagent) session changed run state; children are filtered from StateChanged. */
+    data class SubagentStateChanged(
+        override val sessionId: SessionId,
+        val childSessionId: SessionId,
+        val state: SessionState,
     ) : AgentEvent
 }
 

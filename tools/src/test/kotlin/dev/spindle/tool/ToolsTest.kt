@@ -4,6 +4,8 @@ import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.model.TodoItem
 import dev.spindle.core.model.TodoStatus
+import dev.spindle.core.store.InMemorySnapshotStore
+import dev.spindle.core.store.SnapshotStore
 import dev.spindle.core.tool.SubagentResult
 import dev.spindle.core.tool.SubagentSpec
 import dev.spindle.core.tool.ToolContext
@@ -28,8 +30,10 @@ private class FakeToolContext(
     override val cwd: Path,
     private val scriptedAnswer: List<String> = emptyList(),
     private val scriptedSubagent: SubagentResult = SubagentResult(SessionId("child-session"), "ok", true),
+    private val snapshotStore: SnapshotStore? = null,
 ) : ToolContext {
     override val sessionId = SessionId("test-session")
+    override val snapshots: SnapshotStore? get() = snapshotStore
     override val session = Session(
         id = sessionId,
         cwd = cwd.toString(),
@@ -119,6 +123,52 @@ class ToolsTest {
             assertTrue(outcome.diff!!.contains("-two"), outcome.diff!!)
             assertTrue(outcome.diff!!.contains("+TWO"), outcome.diff!!)
             assertEquals("one\nTWO\nthree\n", Files.readString(dir.resolve("a.txt")))
+        }
+    }
+
+    @Test
+    fun editReturnsStructuredFileEditAndRecordsSnapshot() = runTest {
+        withTempDir { dir ->
+            val snapshots = InMemorySnapshotStore()
+            val ctx = FakeToolContext(dir, snapshotStore = snapshots)
+            val seed = WriteTool().run(obj("""{"path":"a.txt","content":"one\ntwo\nthree\n"}"""), ctx)
+            assertNotNull(seed.edit)
+            assertTrue(seed.edit!!.created, "a new file must be marked created")
+            assertEquals(null, seed.snapshotId, "a creation has nothing to snapshot")
+
+            val outcome = EditTool().run(obj("""{"path":"a.txt","oldString":"two","newString":"TWO"}"""), ctx)
+            assertFalse(outcome.isError)
+            val edit = assertNotNull(outcome.edit)
+            assertEquals("a.txt", edit.path)
+            assertEquals(1, edit.added)
+            assertEquals(1, edit.removed)
+            assertEquals(false, edit.created)
+            assertEquals(2, edit.startLine)
+            assertEquals(2, edit.endLine)
+            assertTrue(edit.unifiedDiff.contains("+TWO"), edit.unifiedDiff)
+
+            val snapshotId = assertNotNull(outcome.snapshotId)
+            val snapshot = assertNotNull(snapshots.latest(ctx.sessionId, "a.txt"))
+            assertEquals(snapshotId, snapshot.id)
+            assertEquals("one\ntwo\nthree\n", snapshot.content)
+        }
+    }
+
+    @Test
+    fun writeOverwriteRecordsSnapshotAndCountsLines() = runTest {
+        withTempDir { dir ->
+            val snapshots = InMemorySnapshotStore()
+            val ctx = FakeToolContext(dir, snapshotStore = snapshots)
+            WriteTool().run(obj("""{"path":"b.txt","content":"alpha\nbeta\ngamma\n"}"""), ctx)
+
+            val outcome = WriteTool().run(obj("""{"path":"b.txt","content":"alpha\nBETA\n"}"""), ctx)
+            assertFalse(outcome.isError)
+            val edit = assertNotNull(outcome.edit)
+            assertEquals(2, edit.added)
+            assertEquals(3, edit.removed)
+            assertEquals(false, edit.created)
+            assertNotNull(outcome.snapshotId)
+            assertEquals("alpha\nbeta\ngamma\n", snapshots.latest(ctx.sessionId, "b.txt")?.content)
         }
     }
 

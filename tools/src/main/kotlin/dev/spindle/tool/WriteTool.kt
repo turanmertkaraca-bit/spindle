@@ -1,5 +1,7 @@
 package dev.spindle.tool
 
+import dev.spindle.core.model.FileEdit
+import dev.spindle.core.model.Ids
 import dev.spindle.core.provider.ToolSpec
 import dev.spindle.core.tool.Tool
 import dev.spindle.core.tool.ToolContext
@@ -40,16 +42,41 @@ class WriteTool : Tool {
             return ToolOutcome("Path is a directory: $raw", isError = true)
         }
 
+        val existed = Files.isRegularFile(path)
+        val original = if (existed) {
+            runCatching { Files.readString(path, StandardCharsets.UTF_8) }.getOrDefault("")
+        } else {
+            ""
+        }
+        val rel = path.displayPath(ctx.cwd)
+        val snapshotId = if (existed) recordSnapshot(ctx, path, rel) else null
+
         return try {
             path.parent?.let { Files.createDirectories(it) }
             val bytes = content.toByteArray(StandardCharsets.UTF_8)
             Files.write(path, bytes)
+            val added = splitLines(content).size
+            val removed = splitLines(original).size
+            val edit = FileEdit(
+                id = Ids.new("edit"),
+                sessionId = ctx.sessionId,
+                path = rel,
+                startLine = if (added == 0) null else 1,
+                endLine = if (added == 0) null else added,
+                added = added,
+                removed = removed,
+                unifiedDiff = wholeFileDiff(rel, original, content),
+                created = !existed,
+                at = System.currentTimeMillis(),
+            )
             ToolOutcome(
                 output = "Wrote $raw (${bytes.size} bytes, ${content.count { it == '\n' } + if (content.isEmpty()) 0 else 1} lines)",
                 metadata = mapOf(
                     "path" to raw,
                     "bytes" to bytes.size.toString(),
                 ),
+                edit = edit,
+                snapshotId = snapshotId,
             )
         } catch (e: Exception) {
             ToolOutcome("Failed to write $raw: ${e.message}", isError = true)

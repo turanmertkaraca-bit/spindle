@@ -8,6 +8,7 @@ import dev.spindle.core.model.PartId
 import dev.spindle.core.model.Role
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
+import dev.spindle.core.model.SessionState
 import dev.spindle.core.model.TodoItem
 import dev.spindle.core.model.TodoStatus
 import dev.spindle.core.model.ToolCall
@@ -15,13 +16,19 @@ import dev.spindle.core.model.ToolResult
 import dev.spindle.core.model.ToolState
 import dev.spindle.core.model.Usage
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.modules.SerializersModule
+import kotlinx.serialization.modules.polymorphic
+import kotlinx.serialization.modules.subclass
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
+import java.sql.DriverManager
 
 class SqliteSessionStoreTest {
 
@@ -185,5 +192,169 @@ class SqliteSessionStoreTest {
         assertEquals(1, s.messages(ids[4]).size)
         assertEquals(1, s.todos(ids[4]).size)
         assertTrue(s.todos(ids[0]).isEmpty())
+    }
+
+    @Test
+    fun forkCopiesMessagesUpToForkPoint(@TempDir tmpDir: Path) = runTest {
+        val db = tmpDir.resolve("fork.db")
+        val s = SqliteSessionStore.open(db)
+        store = s
+        val source = SessionId("ses_src")
+        s.createSession(Session(id = source, cwd = "/w", createdAt = 1L, updatedAt = 1L))
+        s.appendMessage(
+            Message(MessageId("m1"), source, Role.USER, listOf(text("p1", "one")), 1L),
+        )
+        s.appendMessage(
+            Message(MessageId("m2"), source, Role.ASSISTANT, listOf(text("p2", "two")), 2L),
+        )
+        s.appendMessage(
+            Message(MessageId("m3"), source, Role.USER, listOf(text("p3", "three")), 3L),
+        )
+
+        val fork = s.forkSession(source, MessageId("m2"), SessionId("ses_fork"))
+        assertNotNull(fork)
+        assertEquals(source, fork?.parentId)
+
+        val copied = s.messages(SessionId("ses_fork"))
+        assertEquals(listOf("one", "two"), copied.map { (it.parts.single() as Part.Text).text })
+        assertEquals(listOf("m1", "m2", "m3"), s.messages(source).map { it.id.value })
+
+        assertNull(s.forkSession(SessionId("nope"), null, SessionId("ses_x")))
+    }
+
+    @Test
+    fun rewindDropsTail(@TempDir tmpDir: Path) = runTest {
+        val db = tmpDir.resolve("rewind.db")
+        val s = SqliteSessionStore.open(db)
+        store = s
+        val sid = SessionId("ses_rewind")
+        s.createSession(Session(id = sid, cwd = "/w", createdAt = 1L, updatedAt = 1L))
+        s.appendMessage(Message(MessageId("m1"), sid, Role.USER, listOf(text("p1", "one")), 1L))
+        s.appendMessage(Message(MessageId("m2"), sid, Role.ASSISTANT, listOf(text("p2", "two")), 2L))
+        s.appendMessage(Message(MessageId("m3"), sid, Role.USER, listOf(text("p3", "three")), 3L))
+
+        assertEquals(2, s.rewind(sid, MessageId("m1")))
+        assertEquals(listOf("m1"), s.messages(sid).map { it.id.value })
+        assertEquals(0, s.rewind(sid, MessageId("m1")))
+    }
+
+    @Test
+    fun searchTracksInsertsUpdatesAndDeletes(@TempDir tmpDir: Path) = runTest {
+        val db = tmpDir.resolve("search.db")
+        val s = SqliteSessionStore.open(db)
+        store = s
+        val sid = SessionId("ses_search")
+        s.createSession(Session(id = sid, cwd = "/w", createdAt = 1L, updatedAt = 1L))
+        val message = Message(
+            id = MessageId("msg_search"),
+            sessionId = sid,
+            role = Role.ASSISTANT,
+            parts = listOf(text("pt", "the quick brown fox")),
+            createdAt = 9L,
+        )
+        s.appendMessage(message)
+
+        val hits = s.search("brown")
+        assertEquals(1, hits.size)
+        assertEquals("msg_search", hits.single().messageId)
+        assertEquals(Role.ASSISTANT.name, hits.single().role)
+        assertEquals(9L, hits.single().at)
+        assertTrue(hits.single().snippet.contains("brown"))
+        assertEquals(1, s.search("bro").size)
+
+        s.updateMessage(message.copy(parts = listOf(text("pt2", "entirely different words"))))
+        assertTrue(s.search("brown").isEmpty())
+        assertEquals(1, s.search("different").size)
+
+        s.deleteSession(sid)
+        assertTrue(s.search("different").isEmpty())
+    }
+
+    @Test
+    fun sessionMetadataRoundTripsAndArchivedFilters(@TempDir tmpDir: Path) = runTest {
+        val db = tmpDir.resolve("meta.db")
+        val s = SqliteSessionStore.open(db)
+        store = s
+        val meta = Session(
+            id = SessionId("ses_meta"),
+            cwd = "/w",
+            createdAt = 1L,
+            updatedAt = 2L,
+            state = SessionState.RUNNING,
+            pinned = true,
+            archived = true,
+            tags = listOf("alpha", "beta"),
+        )
+        s.createSession(meta)
+        s.createSession(Session(id = SessionId("ses_live"), cwd = "/w", createdAt = 3L, updatedAt = 4L))
+
+        assertEquals(meta, s.session(SessionId("ses_meta")))
+        assertEquals(listOf("ses_live"), s.sessions().map { it.id.value })
+        assertEquals(
+            setOf("ses_meta", "ses_live"),
+            s.sessions(includeArchived = true).map { it.id.value }.toSet(),
+        )
+
+        s.createSession(Session(id = SessionId("ses_child"), cwd = "/w", createdAt = 5L, updatedAt = 6L, parentId = SessionId("ses_meta")))
+        assertTrue(s.sessions().none { it.id.value == "ses_child" })
+        assertTrue(
+            s.sessions(includeChildren = true, includeArchived = true).any { it.id.value == "ses_child" },
+        )
+    }
+
+    @Test
+    fun migratesLegacyDatabaseWithoutDataLoss(@TempDir tmpDir: Path) = runTest {
+        val db = tmpDir.resolve("legacy.db")
+        val legacyJson = Json {
+            encodeDefaults = true
+            classDiscriminator = "kind"
+            serializersModule = SerializersModule {
+                polymorphic(Part::class) {
+                    subclass(Part.Text::class, Part.Text.serializer())
+                    subclass(Part.Reasoning::class, Part.Reasoning.serializer())
+                    subclass(Part.Tool::class, Part.Tool.serializer())
+                    subclass(Part.File::class, Part.File.serializer())
+                    subclass(Part.Step::class, Part.Step.serializer())
+                }
+            }
+        }
+        val partData = legacyJson.encodeToString(Part.serializer(), Part.Text(PartId("p_old"), "legacy hello"))
+
+        DriverManager.getConnection("jdbc:sqlite:$db").use { connection ->
+            connection.createStatement().use { st ->
+                st.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+                st.execute("INSERT INTO schema_version(version) VALUES (1)")
+                st.execute(
+                    "CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, cwd TEXT, created_at INTEGER, " +
+                        "updated_at INTEGER, model TEXT, provider_id TEXT, agent TEXT, parent_id TEXT)",
+                )
+                st.execute(
+                    "CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, created_at INTEGER, " +
+                        "model TEXT, provider_id TEXT, agent TEXT, usage TEXT, finish TEXT, error TEXT, seq INTEGER)",
+                )
+                st.execute(
+                    "CREATE TABLE parts (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, ord INTEGER, data TEXT)",
+                )
+                st.execute(
+                    "CREATE TABLE todos (id TEXT PRIMARY KEY, session_id TEXT, ord INTEGER, content TEXT, status TEXT)",
+                )
+                st.execute("INSERT INTO sessions VALUES ('ses_old','Old','/w',1,2,NULL,NULL,'build',NULL)")
+                st.execute("INSERT INTO messages VALUES ('msg_old','ses_old','USER',1,NULL,NULL,NULL,NULL,NULL,NULL,1)")
+                st.execute("INSERT INTO parts VALUES ('p_old','msg_old','ses_old',0,'$partData')")
+            }
+        }
+
+        val s = SqliteSessionStore.open(db)
+        store = s
+        val migrated = s.session(SessionId("ses_old"))
+        assertNotNull(migrated)
+        assertEquals(SessionState.IDLE, migrated?.state)
+        assertEquals(false, migrated?.pinned)
+        assertEquals(false, migrated?.archived)
+        assertEquals(emptyList<String>(), migrated?.tags)
+
+        assertEquals(listOf("msg_old"), s.messages(SessionId("ses_old")).map { it.id.value })
+        assertEquals(1, s.search("legacy").size)
+        assertEquals(listOf("ses_old"), s.sessions().map { it.id.value })
     }
 }

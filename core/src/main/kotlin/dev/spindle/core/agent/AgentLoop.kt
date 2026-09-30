@@ -20,10 +20,16 @@ import dev.spindle.core.model.Usage
 import dev.spindle.core.provider.ProviderEvent
 import dev.spindle.core.provider.ProviderRegistry
 import dev.spindle.core.store.SessionStore
+import dev.spindle.core.store.SnapshotStore
+import dev.spindle.core.tool.AllowAllPolicy
+import dev.spindle.core.tool.ApprovalDecision
+import dev.spindle.core.tool.ApprovalPolicy
+import dev.spindle.core.tool.ApprovalRequest
 import dev.spindle.core.tool.SubagentResult
 import dev.spindle.core.tool.SubagentRunner
 import dev.spindle.core.tool.SubagentSpec
 import dev.spindle.core.tool.ToolContext
+import dev.spindle.core.tool.ToolEdit
 import dev.spindle.core.tool.ToolOutcome
 import dev.spindle.core.tool.ToolProgress
 import dev.spindle.core.tool.ToolRegistry
@@ -33,6 +39,10 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -54,6 +64,10 @@ class AgentLoop(
     private val maxToolOutputChars: Int = 60_000,
     /** Subagent override — when null, the loop spawns child AgentLoops on demand. */
     private val subagents: SubagentRunner? = null,
+    /** Per-call allow/ask/deny decision layer; [permissions] is the ASK transport. */
+    private val approval: ApprovalPolicy = AllowAllPolicy,
+    /** Pre-edit snapshots; null disables the record-and-revert capability. */
+    private val snapshots: SnapshotStore? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -63,13 +77,27 @@ class AgentLoop(
             sessionId = sessionId,
             cwd = Path.of(session.cwd),
             session = session,
+            snapshots = snapshots,
             gate = gate,
             questionGate = questions,
             bus = bus,
             store = store,
+            approval = approval,
+            policyApproved = false,
             subagentRunner = { spec -> runSubagent(sessionId, spec, AgentConfig()) },
         )
     }
+
+    /** Run a prompt with a primary agent selected by name (build/plan/explore/general). */
+    suspend fun prompt(
+        sessionId: SessionId,
+        userText: String,
+        modelRef: String,
+        agentName: String,
+        onPermission: PermissionGate = permissions,
+        budget: ContextBudget = ContextBudget(),
+        rules: String? = null,
+    ): Message = prompt(sessionId, userText, modelRef, AgentConfig.byName(agentName), onPermission, budget, rules)
 
     suspend fun prompt(
         sessionId: SessionId,
@@ -78,6 +106,8 @@ class AgentLoop(
         agent: AgentConfig = AgentConfig(),
         onPermission: PermissionGate = permissions,
         budget: ContextBudget = ContextBudget(),
+        /** Extra host-supplied rules appended after any AGENTS.md content. */
+        rules: String? = null,
     ): Message {
         val (provider, model) = providers.resolve(modelRef)
             ?: throw IllegalArgumentException("Unknown model: $modelRef")
@@ -99,6 +129,7 @@ class AgentLoop(
             // Subagents that must not recurse can't even be offered the `task` tool.
             val denied = if (agent.allowSubagents) agent.denyTools else agent.denyTools + "task"
             val active = tools.without(denied)
+            val system = systemPrompt(agent.systemPrompt, Path.of(session.cwd), rules)
             var step = 0
             var compacted = false
             while (true) {
@@ -106,7 +137,7 @@ class AgentLoop(
                 step++
 
                 // ---- context policy: trim/compact before we build the request ----
-                val decision = evaluateOverflow(sessionId, model.contextWindow, active, agent)
+                val decision = evaluateOverflow(sessionId, model.contextWindow, active, system)
                 if (decision.action != OverflowAction.NONE) {
                     bus.emit(AgentEvent.StateChanged(sessionId, SessionState.RUNNING))
                 }
@@ -145,7 +176,7 @@ class AgentLoop(
 
                 val request = Wire.request(
                     model = model.id,
-                    system = agent.systemPrompt,
+                    system = system,
                     messages = wire,
                     tools = specs,
                     agent = agent,
@@ -200,6 +231,7 @@ class AgentLoop(
                     )
                     store.updateMessage(errored)
                     bus.emit(AgentEvent.Error(sessionId, e.message ?: "provider error"))
+                    bus.emit(AgentEvent.UsageUpdated(sessionId, store.messages(sessionId).fold(Usage()) { acc, m -> acc + m.usage }))
                     bus.emit(AgentEvent.StateChanged(sessionId, SessionState.ERROR))
                     return errored
                 }
@@ -219,6 +251,8 @@ class AgentLoop(
                 store.updateMessage(finalized)
                 parts.forEach { bus.emit(AgentEvent.PartUpdated(sessionId, finalized.id.value, it)) }
                 if (sessionId.let { store.session(it) } != null) store.updateSession(session.copy(updatedAt = clock()))
+                val sessionUsage = store.messages(sessionId).fold(Usage()) { acc, m -> acc + m.usage }
+                bus.emit(AgentEvent.UsageUpdated(sessionId, sessionUsage))
 
                 if (toolCalls.isEmpty()) break
                 if (agent.maxSteps != null && step >= agent.maxSteps) break
@@ -248,12 +282,12 @@ class AgentLoop(
         sessionId: SessionId,
         contextWindow: Int,
         active: ToolRegistry,
-        agent: AgentConfig,
+        system: String,
     ): OverflowDecision {
         val history = store.messages(sessionId)
         val open = history.lastOrNull()?.parts?.filterIsInstance<Part.Tool>()
             ?.any { it.state == ToolState.PENDING || it.state == ToolState.RUNNING } ?: false
-        val sysChars = agent.systemPrompt.length
+        val sysChars = system.length
         val msgChars = history.sumOf { m ->
             m.parts.sumOf { p ->
                 when (p) {
@@ -295,19 +329,62 @@ class AgentLoop(
             return
         }
 
+        if (part.call.name in agent.denyTools || (!agent.allowSubagents && part.call.name == "task")) {
+            finishTool(
+                sessionId, messageId,
+                part.copy(
+                    state = ToolState.ERROR,
+                    result = ToolResult(
+                        part.call.id,
+                        "Tool not permitted for agent ${agent.name}: ${part.call.name}",
+                        isError = true,
+                    ),
+                ),
+            )
+            return
+        }
+
+        val input: JsonObject = runCatching { json.parseToJsonElement(part.call.argumentsJson) as JsonObject }
+            .getOrElse { JsonObject(emptyMap()) }
+
+        val request = ApprovalRequest(
+            sessionId = sessionId.value,
+            tool = part.call.name,
+            detail = approvalDetail(input),
+            pattern = approvalPattern(input),
+        )
+        var policyApproved = false
+        when (approval.decide(request)) {
+            ApprovalDecision.DENY -> {
+                finishTool(sessionId, messageId, deniedPart(part, "denied by approval policy"))
+                return
+            }
+            ApprovalDecision.ASK -> {
+                val ok = gate.request(request.tool, request.detail, request.pattern)
+                approval.remember(request, if (ok) ApprovalDecision.ALLOW else ApprovalDecision.DENY)
+                if (!ok) {
+                    finishTool(sessionId, messageId, deniedPart(part, "denied by user"))
+                    return
+                }
+                policyApproved = true
+            }
+            ApprovalDecision.ALLOW -> policyApproved = true
+        }
+
         val outcome: ToolOutcome = try {
             val ctx = LoopToolContext(
                 sessionId = sessionId,
                 cwd = Path.of(cwd),
                 session = store.session(sessionId) ?: error("no session"),
+                snapshots = snapshots,
                 gate = gate,
                 questionGate = questions,
                 bus = bus,
                 store = store,
+                approval = approval,
+                policyApproved = policyApproved,
                 subagentRunner = { spec -> runSubagent(sessionId, spec, agent) },
             )
-            val input: JsonObject = runCatching { json.parseToJsonElement(part.call.argumentsJson) as JsonObject }
-                .getOrElse { JsonObject(emptyMap()) }
             tool.run(input, ctx)
         } catch (e: CancellationException) {
             throw e
@@ -327,6 +404,69 @@ class AgentLoop(
                 result = ToolResult(part.call.id, clipped, outcome.isError, outcome.diff, outcome.metadata),
             ),
         )
+
+        val reports = if (outcome.edits.isNotEmpty()) {
+            outcome.edits
+        } else {
+            listOfNotNull(outcome.edit?.let { ToolEdit(it, outcome.snapshotId) })
+        }
+        for (report in reports) {
+            val edit = report.edit.copy(messageId = messageId)
+            bus.emit(AgentEvent.FileEdited(sessionId, edit))
+            report.snapshotId?.let {
+                bus.emit(AgentEvent.SnapshotCreated(sessionId, it, report.snapshotPath ?: edit.path))
+            }
+        }
+    }
+
+    private fun deniedPart(part: Part.Tool, message: String): Part.Tool = part.copy(
+        state = ToolState.ERROR,
+        result = ToolResult(part.call.id, message, isError = true),
+    )
+
+    private fun approvalDetail(input: JsonObject): String {
+        for (key in listOf("command", "path", "url", "patchText")) {
+            val value = (input[key] as? JsonPrimitive)?.contentOrNull
+            if (!value.isNullOrBlank()) return if (value.length > 280) value.take(280) else value
+        }
+        return input.toString().take(280)
+    }
+
+    private fun approvalPattern(input: JsonObject): String? {
+        (input["command"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }?.let { command ->
+            return command.trim().split(Regex("\\s+")).firstOrNull()
+        }
+        (input["path"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }?.let { return it }
+        return null
+    }
+
+    /**
+     * The system prompt actually sent: the agent's base prompt plus project rules
+     * read from `<cwd>/AGENTS.md` and any host-supplied [extraRules].
+     */
+    private fun systemPrompt(base: String, cwd: Path, extraRules: String?): String {
+        val builder = StringBuilder(base)
+        val projectRules = readProjectRules(cwd)
+        if (projectRules.isNotBlank()) {
+            builder.append("\n\n## Project rules\n\n").append(projectRules)
+        }
+        if (!extraRules.isNullOrBlank()) {
+            builder.append("\n\n## Additional rules\n\n").append(extraRules)
+        }
+        return builder.toString()
+    }
+
+    private fun readProjectRules(cwd: Path): String = try {
+        val base = cwd.toAbsolutePath().normalize()
+        val file = base.resolve(AGENTS_FILE).normalize()
+        if (!file.startsWith(base) || !Files.isRegularFile(file)) {
+            ""
+        } else {
+            val text = Files.readString(file, StandardCharsets.UTF_8)
+            if (text.length > MAX_RULES_CHARS) text.take(MAX_RULES_CHARS) + "\n…[truncated]" else text
+        }
+    } catch (_: Exception) {
+        ""
     }
 
     /** Spawn (or delegate) a subagent and return its final text. */
@@ -358,18 +498,33 @@ class AgentLoop(
         override val sessionId: SessionId,
         override val cwd: Path,
         override val session: dev.spindle.core.model.Session,
+        override val snapshots: SnapshotStore?,
         private val gate: PermissionGate,
         private val questionGate: QuestionGate,
         private val bus: EventBus,
         private val store: SessionStore,
+        private val approval: ApprovalPolicy,
+        private val policyApproved: Boolean,
         private val subagentRunner: suspend (SubagentSpec) -> SubagentResult,
     ) : ToolContext {
         private val aborted = AtomicBoolean(false)
 
         override suspend fun requestPermission(tool: String, detail: String, pattern: String?): Boolean {
-            val approved = gate.request(tool, detail, pattern)
-            if (!approved) bus.emit(AgentEvent.Error(sessionId, "denied: $tool"))
-            return approved
+            if (policyApproved) return true
+            val request = ApprovalRequest(sessionId.value, tool, detail, pattern)
+            return when (approval.decide(request)) {
+                ApprovalDecision.ALLOW -> true
+                ApprovalDecision.DENY -> {
+                    bus.emit(AgentEvent.Error(sessionId, "denied: $tool"))
+                    false
+                }
+                ApprovalDecision.ASK -> {
+                    val approved = gate.request(tool, detail, pattern)
+                    approval.remember(request, if (approved) ApprovalDecision.ALLOW else ApprovalDecision.DENY)
+                    if (!approved) bus.emit(AgentEvent.Error(sessionId, "denied: $tool"))
+                    approved
+                }
+            }
         }
 
         override suspend fun ask(question: String, options: List<String>, multiple: Boolean): List<String> {
@@ -392,5 +547,7 @@ class AgentLoop(
 
     internal companion object {
         const val COMPACT_MARKER = "[compacted]"
+        const val AGENTS_FILE = "AGENTS.md"
+        const val MAX_RULES_CHARS = 8_192
     }
 }

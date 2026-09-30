@@ -14,8 +14,30 @@ interface SessionStore {
     suspend fun createSession(session: Session)
     suspend fun updateSession(session: Session)
     suspend fun session(id: SessionId): Session?
-    suspend fun sessions(limit: Int = 50, includeChildren: Boolean = false): List<Session>
+
+    /** Most recently updated first. Hidden children/archived sessions are opt-in. */
+    suspend fun sessions(
+        limit: Int = 50,
+        includeChildren: Boolean = false,
+        includeArchived: Boolean = false,
+    ): List<Session>
+
     suspend fun deleteSession(id: SessionId)
+
+    /**
+     * Copy [sourceId] into [newId] as a child (`parentId = sourceId`). Messages
+     * are copied in order up to and including [atMessageId], or all of them when
+     * it is null. Returns the new session, or null when the source or the fork
+     * point does not exist.
+     */
+    suspend fun forkSession(sourceId: SessionId, atMessageId: MessageId?, newId: SessionId): Session?
+
+    /**
+     * Drop every message strictly after [toMessageId] (the rewind point is
+     * kept). Returns the number of messages removed; zero when the point is
+     * unknown.
+     */
+    suspend fun rewind(sessionId: SessionId, toMessageId: MessageId): Int
 
     suspend fun appendMessage(message: Message)
     suspend fun updateMessage(message: Message)

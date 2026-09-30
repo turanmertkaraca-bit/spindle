@@ -3,18 +3,27 @@ package dev.lumen.app.data
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import dev.spindle.core.model.FinishReason
+import dev.spindle.core.model.Ids
 import dev.spindle.core.model.Message
 import dev.spindle.core.model.MessageId
 import dev.spindle.core.model.Part
 import dev.spindle.core.model.Role
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
+import dev.spindle.core.model.SessionState
 import dev.spindle.core.model.TodoItem
 import dev.spindle.core.model.TodoStatus
 import dev.spindle.core.model.Usage
+import dev.spindle.core.store.SearchHit
+import dev.spindle.core.store.SessionSearch
 import dev.spindle.core.store.SessionStore
+import dev.spindle.core.store.messageSearchText
+import dev.spindle.core.store.searchSnippet
+import dev.spindle.core.store.withNewId
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.polymorphic
@@ -30,7 +39,7 @@ import kotlinx.serialization.modules.subclass
  *
  * The schema mirrors `:store-sqlite` so a future migration is mechanical.
  */
-class AndroidSessionStore(context: Context) : SessionStore, AutoCloseable {
+class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoCloseable {
 
     private val db: SQLiteDatabase =
         context.applicationContext.openOrCreateDatabase("lumen.db", Context.MODE_PRIVATE, null)
@@ -59,8 +68,10 @@ class AndroidSessionStore(context: Context) : SessionStore, AutoCloseable {
         db.execSQL(
             """CREATE TABLE IF NOT EXISTS sessions(
                  id TEXT PRIMARY KEY, title TEXT, cwd TEXT, created_at INTEGER,
-                 updated_at INTEGER, model TEXT, provider_id TEXT, agent TEXT, parent_id TEXT)""",
+                 updated_at INTEGER, model TEXT, provider_id TEXT, agent TEXT, parent_id TEXT,
+                 state TEXT, pinned INTEGER, archived INTEGER, tags TEXT)""",
         )
+        migrateSessions()
         db.execSQL(
             """CREATE TABLE IF NOT EXISTS messages(
                  id TEXT PRIMARY KEY, session_id TEXT, role TEXT, created_at INTEGER,
@@ -79,45 +90,127 @@ class AndroidSessionStore(context: Context) : SessionStore, AutoCloseable {
         )
     }
 
+    /** Add the columns introduced after the first schema, so old DBs migrate forward. */
+    private fun migrateSessions() {
+        val existing = columnNames("sessions")
+        fun add(name: String, ddl: String) {
+            if (name !in existing) db.execSQL("ALTER TABLE sessions ADD COLUMN $name $ddl")
+        }
+        add("state", "TEXT")
+        add("pinned", "INTEGER")
+        add("archived", "INTEGER")
+        add("tags", "TEXT")
+    }
+
+    private fun columnNames(table: String): Set<String> =
+        db.rawQuery("PRAGMA table_info($table)", null).use { c ->
+            buildSet {
+                val name = c.getColumnIndexOrThrow("name")
+                while (c.moveToNext()) add(c.getString(name))
+            }
+        }
+
     // ---- sessions ----
 
-    override suspend fun createSession(session: Session) = mutex.withLock {
+    override suspend fun createSession(session: Session) = mutex.withLock { writeSession(session) }
+
+    private fun writeSession(session: Session) {
         db.execSQL(
-            "INSERT OR REPLACE INTO sessions VALUES(?,?,?,?,?,?,?,?,?)",
+            """INSERT OR REPLACE INTO sessions
+               (id,title,cwd,created_at,updated_at,model,provider_id,agent,parent_id,state,pinned,archived,tags)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             arrayOf(
                 session.id.value, session.title, session.cwd, session.createdAt,
                 session.updatedAt, session.model, session.providerId, session.agent,
-                session.parentId?.value,
+                session.parentId?.value, session.state.name,
+                if (session.pinned) 1 else 0, if (session.archived) 1 else 0,
+                json.encodeToString(ListSerializer(String.serializer()), session.tags),
             ),
         )
     }
 
     override suspend fun updateSession(session: Session) = createSession(session)
 
-    override suspend fun session(id: SessionId): Session? = mutex.withLock {
+    override suspend fun session(id: SessionId): Session? = mutex.withLock { sessionUnlocked(id) }
+
+    private fun sessionUnlocked(id: SessionId): Session? =
         db.rawQuery("SELECT * FROM sessions WHERE id=?", arrayOf(id.value)).use { c ->
             if (c.moveToFirst()) c.toSession() else null
         }
+
+    override suspend fun sessions(
+        limit: Int,
+        includeChildren: Boolean,
+        includeArchived: Boolean,
+    ): List<Session> = mutex.withLock { sessionsUnlocked(limit, includeChildren, includeArchived) }
+
+    private fun sessionsUnlocked(limit: Int, includeChildren: Boolean, includeArchived: Boolean): List<Session> {
+        val where = buildList {
+            if (!includeChildren) add("parent_id IS NULL")
+            if (!includeArchived) add("(archived IS NULL OR archived=0)")
+        }.joinToString(" AND ").let { if (it.isBlank()) "" else "WHERE $it" }
+        return db.rawQuery(
+            "SELECT * FROM sessions $where ORDER BY updated_at DESC LIMIT ?",
+            arrayOf(limit.toString()),
+        ).use { c -> buildList { while (c.moveToNext()) add(c.toSession()) } }
     }
 
-    override suspend fun sessions(limit: Int, includeChildren: Boolean): List<Session> = mutex.withLock {
-        val where = if (includeChildren) "" else "WHERE parent_id IS NULL"
-        db.rawQuery("SELECT * FROM sessions $where ORDER BY updated_at DESC LIMIT ?", arrayOf(limit.toString())).use { c ->
-            buildList { while (c.moveToNext()) add(c.toSession()) }
-        }
-    }
+    override suspend fun deleteSession(id: SessionId) = mutex.withLock { deleteSessionUnlocked(id) }
 
-    override suspend fun deleteSession(id: SessionId) = mutex.withLock {
+    private fun deleteSessionUnlocked(id: SessionId) {
         db.delete("parts", "session_id=?", arrayOf(id.value))
         db.delete("messages", "session_id=?", arrayOf(id.value))
         db.delete("todos", "session_id=?", arrayOf(id.value))
         db.delete("sessions", "id=?", arrayOf(id.value))
-        Unit
+    }
+
+    override suspend fun forkSession(
+        sourceId: SessionId,
+        atMessageId: MessageId?,
+        newId: SessionId,
+    ): Session? = mutex.withLock {
+        val source = sessionUnlocked(sourceId) ?: return@withLock null
+        val sourceMessages = messagesUnlocked(sourceId)
+        val upTo = if (atMessageId == null) {
+            sourceMessages.toList()
+        } else {
+            val index = sourceMessages.indexOfFirst { it.id == atMessageId }
+            if (index < 0) return@withLock null
+            sourceMessages.subList(0, index + 1).toList()
+        }
+        val now = System.currentTimeMillis()
+        val fork = source.copy(
+            id = newId,
+            parentId = sourceId,
+            createdAt = now,
+            updatedAt = now,
+            archived = false,
+            pinned = false,
+        )
+        writeSession(fork)
+        for (m in upTo) {
+            insertMessage(m.copy(id = MessageId(Ids.new("msg")), sessionId = newId, parts = m.parts.map { it.withNewId() }))
+        }
+        fork
+    }
+
+    override suspend fun rewind(sessionId: SessionId, toMessageId: MessageId): Int = mutex.withLock {
+        val list = messagesUnlocked(sessionId)
+        val index = list.indexOfFirst { it.id == toMessageId }
+        if (index < 0) return@withLock 0
+        val tail = list.subList(index + 1, list.size)
+        for (m in tail) {
+            db.delete("parts", "message_id=?", arrayOf(m.id.value))
+            db.delete("messages", "id=?", arrayOf(m.id.value))
+        }
+        tail.size
     }
 
     // ---- messages ----
 
-    override suspend fun appendMessage(message: Message) = mutex.withLock {
+    override suspend fun appendMessage(message: Message) = mutex.withLock { insertMessage(message) }
+
+    private fun insertMessage(message: Message) {
         val seq = nextSeq(message.sessionId)
         db.execSQL(
             "INSERT OR REPLACE INTO messages VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -165,16 +258,41 @@ class AndroidSessionStore(context: Context) : SessionStore, AutoCloseable {
         }
     }
 
-    override suspend fun messages(sessionId: SessionId): List<Message> = mutex.withLock {
+    override suspend fun messages(sessionId: SessionId): List<Message> = mutex.withLock { messagesUnlocked(sessionId) }
+
+    private fun messagesUnlocked(sessionId: SessionId): List<Message> =
         db.rawQuery("SELECT * FROM messages WHERE session_id=? ORDER BY seq", arrayOf(sessionId.value)).use { c ->
             buildList { while (c.moveToNext()) add(c.toMessage()) }
         }
-    }
 
     override suspend fun latestMessage(sessionId: SessionId): Message? = mutex.withLock {
         db.rawQuery("SELECT * FROM messages WHERE session_id=? ORDER BY seq DESC LIMIT 1", arrayOf(sessionId.value)).use { c ->
             if (c.moveToFirst()) c.toMessage() else null
         }
+    }
+
+    // ---- search ----
+
+    override suspend fun search(query: String, limit: Int): List<SearchHit> = mutex.withLock {
+        val needle = query.trim()
+        if (needle.isEmpty()) return@withLock emptyList()
+        val hits = ArrayList<SearchHit>()
+        db.rawQuery("SELECT * FROM messages ORDER BY created_at DESC", null).use { c ->
+            while (c.moveToNext() && hits.size < limit) {
+                val message = c.toMessage()
+                val text = messageSearchText(message)
+                if (text.contains(needle, ignoreCase = true)) {
+                    hits += SearchHit(
+                        sessionId = message.sessionId,
+                        messageId = message.id.value,
+                        role = message.role.name,
+                        snippet = searchSnippet(text, needle),
+                        at = message.createdAt,
+                    )
+                }
+            }
+        }
+        hits
     }
 
     // ---- todos ----
@@ -205,18 +323,13 @@ class AndroidSessionStore(context: Context) : SessionStore, AutoCloseable {
     }
 
     override suspend fun prune(keepSessions: Int): Int = mutex.withLock {
-        val keep = sessions(keepSessions, includeChildren = true).map { it.id.value }
+        val keep = sessionsUnlocked(keepSessions, includeChildren = true, includeArchived = true).map { it.id.value }
         if (keep.isEmpty()) return@withLock 0
         val placeholders = keep.joinToString(",") { "?" }
         val gone = db.rawQuery("SELECT id FROM sessions WHERE id NOT IN ($placeholders)", keep.toTypedArray()).use { c ->
             buildList { while (c.moveToNext()) add(c.getString(0)) }
         }
-        for (id in gone) {
-            db.delete("parts", "session_id=?", arrayOf(id))
-            db.delete("messages", "session_id=?", arrayOf(id))
-            db.delete("todos", "session_id=?", arrayOf(id))
-            db.delete("sessions", "id=?", arrayOf(id))
-        }
+        for (id in gone) deleteSessionUnlocked(SessionId(id))
         gone.size
     }
 
@@ -236,6 +349,13 @@ class AndroidSessionStore(context: Context) : SessionStore, AutoCloseable {
         providerId = getString(getColumnIndexOrThrow("provider_id")),
         agent = getString(getColumnIndexOrThrow("agent")) ?: "build",
         parentId = getString(getColumnIndexOrThrow("parent_id"))?.let { SessionId(it) },
+        state = runCatching { SessionState.valueOf(getString(getColumnIndexOrThrow("state")) ?: "") }
+            .getOrDefault(SessionState.IDLE),
+        pinned = getInt(getColumnIndexOrThrow("pinned")) != 0,
+        archived = getInt(getColumnIndexOrThrow("archived")) != 0,
+        tags = getString(getColumnIndexOrThrow("tags"))
+            ?.let { runCatching { json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }
+            .orEmpty(),
     )
 
     private fun android.database.Cursor.toMessage(): Message {

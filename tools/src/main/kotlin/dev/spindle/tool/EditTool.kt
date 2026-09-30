@@ -1,5 +1,7 @@
 package dev.spindle.tool
 
+import dev.spindle.core.model.FileEdit
+import dev.spindle.core.model.Ids
 import dev.spindle.core.provider.ToolSpec
 import dev.spindle.core.tool.Tool
 import dev.spindle.core.tool.ToolContext
@@ -78,21 +80,41 @@ class EditTool : Tool {
             original.replaceFirst(oldString, newString)
         }
 
+        val rel = path.displayPath(ctx.cwd)
+        val snapshotId = recordSnapshot(ctx, path, rel)
+
         return try {
             Files.writeString(path, updated, StandardCharsets.UTF_8)
             val applied = if (replaceAll) occurrences.size else 1
             val diff = buildDiff(
-                relPath = path.displayPath(ctx.cwd),
+                relPath = rel,
                 original = original,
                 oldString = oldString,
                 newString = newString,
                 occurrences = occurrences,
                 replaceAll = replaceAll,
             )
+            val added = splitLines(newString).size * applied
+            val removed = splitLines(oldString).size * applied
+            val startLine = lineNumberAt(original, occurrences.first())
+            val edit = FileEdit(
+                id = Ids.new("edit"),
+                sessionId = ctx.sessionId,
+                path = rel,
+                startLine = startLine,
+                endLine = if (added == 0) null else startLine + added - 1,
+                added = added,
+                removed = removed,
+                unifiedDiff = diff,
+                created = false,
+                at = System.currentTimeMillis(),
+            )
             ToolOutcome(
                 output = "Edited $raw ($applied replacement${if (applied == 1) "" else "s"})",
                 diff = diff,
                 metadata = mapOf("path" to raw, "replacements" to applied.toString()),
+                edit = edit,
+                snapshotId = snapshotId,
             )
         } catch (e: Exception) {
             ToolOutcome("Failed to write $raw: ${e.message}", isError = true)
