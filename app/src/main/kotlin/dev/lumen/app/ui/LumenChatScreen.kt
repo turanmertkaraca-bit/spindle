@@ -255,21 +255,42 @@ fun LumenChatScreen(
                     if (count == 0) {
                         EmptyState(colors, Modifier.align(Alignment.Center))
                     } else {
-                        LazyColumn(
-                            state = listState,
-                            flingBehavior = flingBehavior,
-                            contentPadding = PaddingValues(start = 10.dp, end = 14.dp, top = 10.dp, bottom = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(3.dp),
-                            modifier = Modifier.fillMaxSize().testTag("timeline"),
-                        ) {
-                            itemsIndexed(display, key = { _, s -> s.id }) { index, step ->
-                                MessageRow(
-                                    step = step,
-                                    colors = colors,
-                                    pulse = pulse,
-                                    open = forceOpenIndex == index,
-                                    modifier = Modifier.animateItem(),
+                        // The spine: a continuous spectral rail down the left edge,
+                        // drawn behind the list so every droplet sits on it.
+                        Box(
+                            Modifier.fillMaxSize().drawBehind {
+                                val x = 17.dp.toPx()
+                                drawLine(
+                                    brush = Brush.verticalGradient(
+                                        listOf(
+                                            colors.bloomA.copy(alpha = 0f),
+                                            colors.bloomA.copy(alpha = 0.5f),
+                                            colors.bloomB.copy(alpha = 0.5f),
+                                            colors.bloomA.copy(alpha = 0f),
+                                        ),
+                                    ),
+                                    start = Offset(x, 0f),
+                                    end = Offset(x, size.height),
+                                    strokeWidth = 2.dp.toPx(),
                                 )
+                            },
+                        ) {
+                            LazyColumn(
+                                state = listState,
+                                flingBehavior = flingBehavior,
+                                contentPadding = PaddingValues(start = 8.dp, end = 14.dp, top = 12.dp, bottom = 14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.fillMaxSize().testTag("timeline"),
+                            ) {
+                                itemsIndexed(display, key = { _, s -> s.id }) { index, step ->
+                                    MessageRow(
+                                        step = step,
+                                        colors = colors,
+                                        pulse = pulse,
+                                        open = forceOpenIndex == index,
+                                        modifier = Modifier.animateItem(),
+                                    )
+                                }
                             }
                         }
                     }
@@ -335,26 +356,28 @@ private fun MessageRow(
     val isTool = step.kind == StepKind.TOOL || step.kind == StepKind.SUBAGENT
 
     Row(
-        modifier.fillMaxWidth().padding(vertical = 3.dp),
+        modifier.fillMaxWidth(),
         horizontalArrangement = if (isYou) Arrangement.End else Arrangement.Start,
     ) {
         if (!isYou) {
-            // The spine droplet: a spectrum teardrop at the bubble's leading edge.
-            Spacer(Modifier.width(14.dp))
-            Droplet(
-                modifier = Modifier.padding(top = 14.dp).size(9.dp),
-                brush = Brush.verticalGradient(listOf(colors.bloomA, colors.water)),
-                ring = step.running,
-                pulse = pulse,
-                colors = colors,
-            )
-            Spacer(Modifier.width(9.dp))
+            // A fixed gutter whose centre sits on the spine rail (drawn behind
+            // the list), so the droplet reads as a marker on the spine.
+            Box(Modifier.width(26.dp), contentAlignment = Alignment.TopCenter) {
+                Spacer(Modifier.height(16.dp))
+                Droplet(
+                    modifier = Modifier.size(10.dp),
+                    brush = Brush.verticalGradient(listOf(colors.bloomA, colors.water)),
+                    ring = step.running,
+                    pulse = pulse,
+                    colors = colors,
+                )
+            }
         }
 
         val bubbleShape = if (isYou) {
-            RoundedCornerShape(20.dp, 20.dp, 7.dp, 20.dp)
+            RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp)
         } else {
-            RoundedCornerShape(20.dp, 20.dp, 20.dp, 7.dp)
+            RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp)
         }
 
         Column(
@@ -369,17 +392,7 @@ private fun MessageRow(
                     } else {
                         Modifier
                             .background(colors.surface, bubbleShape)
-                            .border(1.dp, colors.spectrum.getOrElse(2) { colors.water }.copy(alpha = 0.22f), bubbleShape)
-                            // A spectral hairline down the leading edge — the prism.
-                            .drawBehind {
-                                drawRect(
-                                    brush = Brush.verticalGradient(
-                                        listOf(colors.bloomA, colors.bloomB, colors.bloomC),
-                                    ),
-                                    topLeft = Offset(0f, 12.dp.toPx()),
-                                    size = androidx.compose.ui.geometry.Size(2.dp.toPx(), size.height - 24.dp.toPx()),
-                                )
-                            }
+                            .border(1.dp, colors.spectrum.getOrElse(2) { colors.water }.copy(alpha = 0.20f), bubbleShape)
                     },
                 )
                 .padding(start = if (isYou) 14.dp else 16.dp, end = 14.dp, top = 11.dp, bottom = 11.dp),
