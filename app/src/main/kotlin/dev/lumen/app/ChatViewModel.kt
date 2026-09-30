@@ -232,36 +232,45 @@ class ChatViewModel(
      */
     private val childCache = mutableMapOf<String, List<UiStep>>()
 
+    /** Subagent ids the user has explicitly expanded; kept open across rebuilds. */
+    private val expandedChildren = mutableSetOf<String>()
+
     private suspend fun enrich(steps: List<UiStep>): List<UiStep> = steps.map { step ->
         val child = step.childId ?: return@map step
         val kids = childCache.getOrPut(child) {
             runCatching { StepMapper.fromMessages(store.messages(SessionId(child))) }.getOrDefault(emptyList())
         }
-        step.copy(rows = kids.take(8).map { it.label to it.summary })
+        step.copy(
+            rows = kids.take(8).map { it.label to it.summary },
+            childSteps = if (child in expandedChildren) kids else emptyList(),
+        )
     }
 
     /** Load a subagent's full transcript (on tap) and attach it to the row. */
     fun expandSubagent(step: UiStep) {
         val child = step.childId ?: return
-        if (step.childSteps.isNotEmpty()) {
-            // Already loaded — just toggle it closed.
+        // Match on `childId`, not `id`: groupSteps rewrites a folded row's id to
+        // the preceding THINKING row's id, so `id` may not exist in the raw list.
+        fun patch(f: (UiStep) -> UiStep) {
             _state.value = _state.value.copy(
-                steps = _state.value.steps.map { if (it.id == step.id) it.copy(childSteps = emptyList()) else it },
+                steps = _state.value.steps.map { if (it.childId == child) f(it) else it },
             )
+        }
+        if (step.childSteps.isNotEmpty()) {
+            // Already loaded — toggle it closed.
+            expandedChildren -= child
+            patch { it.copy(childSteps = emptyList()) }
             return
         }
-        _state.value = _state.value.copy(
-            steps = _state.value.steps.map { if (it.id == step.id) it.copy(childLoading = true) else it },
-        )
+        expandedChildren += child
+        patch { it.copy(childLoading = true) }
         viewModelScope.launch {
             val kids = runCatching { StepMapper.fromMessages(store.messages(SessionId(child))) }
                 .getOrDefault(emptyList())
             childCache[child] = kids
-            _state.value = _state.value.copy(
-                steps = _state.value.steps.map {
-                    if (it.id == step.id) it.copy(childSteps = kids, childLoading = false) else it
-                },
-            )
+            // Re-attach in both the raw list and the enriched view; enrich() will
+            // also pick this up on the next rebuild via childCache.
+            patch { it.copy(childSteps = kids, childLoading = false) }
         }
     }
 
