@@ -70,6 +70,9 @@ Key capabilities already working on device:
   `ContextBudget.warnAtFraction`, stops at the ceiling, and the usage meter shows
   spend against the limit.
 - Adaptive two-pane: files cockpit shows list + editor side by side on >=600dp.
+- On-device perf probe: `PerfSampler` samples frame jank + heap during a run and
+  appends a `perf:` line to diagnostics (copyable). First sweep is clean; a
+  stopped run no longer logs a cancellation error.
 
 ## 4. CI status — all green
 

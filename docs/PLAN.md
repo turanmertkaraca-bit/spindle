@@ -162,7 +162,10 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
 - [x] Full Linux userland: Alpine (bundled) + opt-in Debian proot, behind
       `ShellExecutor`; targetSdk 28 exec exemption.
 - [x] Adaptive two-pane (tablet/foldable) — files cockpit list + editor.
-- [ ] On-device performance/battery/ANR sweep.
+- [~] On-device perf/ANR sweep: first pass clean (48–57 fps, 1–6% janky,
+      p95 ≤33 ms, worst ≤200 ms only at cancel, peak heap ≤37 MB). Battery/
+      thermal and long-session heap retention still to check (`PerfSampler`
+      logs a `perf:` line to diagnostics per run).
 - [x] CI green gate + screenshot evidence; APK update-in-place.
 
 ## Risks
