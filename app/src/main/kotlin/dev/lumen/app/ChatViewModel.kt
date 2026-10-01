@@ -71,6 +71,8 @@ data class SessionRow(
     val title: String,
     val updatedAt: Long,
     val preview: String,
+    val pinned: Boolean = false,
+    val archived: Boolean = false,
 )
 
 /**
@@ -208,6 +210,9 @@ data class ChatState(
     val needsKey: Boolean = true,
     /** Recent chats, newest first. */
     val sessions: List<SessionRow> = emptyList(),
+
+    /** Home shows archived sessions when this is on (default hides them). */
+    val showArchived: Boolean = false,
     /** Full-text hits for [searchQuery]; null when no search is active. */
     val search: List<SearchHit>? = null,
     /** The text currently in the home search field. */
@@ -831,6 +836,45 @@ class ChatViewModel(
         }
     }
 
+    /** Pin/unpin a session; pinned rows sort above the rest on Home. */
+    fun setPinned(id: String, pinned: Boolean) {
+        viewModelScope.launch {
+            val session = store.session(SessionId(id)) ?: return@launch
+            store.updateSession(session.copy(pinned = pinned))
+            refreshSessions()
+        }
+    }
+
+    /**
+     * Archive/unarchive a session. Archiving hides it from Home (unless the
+     * "archived" toggle is on) and closes it if it is the open chat.
+     */
+    fun setArchived(id: String, archived: Boolean) {
+        viewModelScope.launch {
+            val session = store.session(SessionId(id)) ?: return@launch
+            store.updateSession(session.copy(archived = archived))
+            if (archived && _state.value.currentSessionId == id) closeChat()
+            refreshSessions()
+        }
+    }
+
+    /** Rename a session; a blank title is ignored. */
+    fun renameSession(id: String, title: String) {
+        val clean = title.trim()
+        if (clean.isEmpty()) return
+        viewModelScope.launch {
+            val session = store.session(SessionId(id)) ?: return@launch
+            store.updateSession(session.copy(title = clean))
+            refreshSessions()
+        }
+    }
+
+    /** Show or hide archived sessions on Home. */
+    fun setShowArchived(on: Boolean) {
+        _state.value = _state.value.copy(showArchived = on)
+        viewModelScope.launch { refreshSessions() }
+    }
+
     /**
      * Fork [id] at its head (all messages) into a fresh child session and open
      * it. Stores that cannot fork return null and nothing changes.
@@ -888,12 +932,21 @@ class ChatViewModel(
     }
 
     private suspend fun refreshSessions() {
-        val rows = store.sessions().map { s ->
-            val preview = runCatching { store.latestMessage(s.id) }.getOrNull()
-                ?.parts?.filterIsInstance<Part.Text>()?.joinToString("") { it.text }
-                ?.let { oneLine(it, 90) } ?: ""
-            SessionRow(s.id.value, s.title.ifBlank { "chat" }, s.updatedAt, preview)
-        }
+        val rows = store.sessions(includeArchived = _state.value.showArchived)
+            .sortedWith(compareByDescending<Session> { it.pinned }.thenByDescending { it.updatedAt })
+            .map { s ->
+                val preview = runCatching { store.latestMessage(s.id) }.getOrNull()
+                    ?.parts?.filterIsInstance<Part.Text>()?.joinToString("") { it.text }
+                    ?.let { oneLine(it, 90) } ?: ""
+                SessionRow(
+                    id = s.id.value,
+                    title = s.title.ifBlank { "chat" },
+                    updatedAt = s.updatedAt,
+                    preview = preview,
+                    pinned = s.pinned,
+                    archived = s.archived,
+                )
+            }
         _state.value = _state.value.copy(sessions = rows)
     }
 

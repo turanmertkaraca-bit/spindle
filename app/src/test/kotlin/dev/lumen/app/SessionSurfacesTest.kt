@@ -26,6 +26,7 @@ import java.nio.file.Files
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * The session surfaces wired through the view model: full-text search, fork at
@@ -133,5 +134,55 @@ class SessionSurfacesTest {
         vm.rewindTo("m2")
         assertEquals(2, runBlocking { store.messages(sid) }.size, "the tail past m2 is gone")
         assertEquals(2, vm.state.value.steps.size, "the timeline is rebuilt from the store")
+    }
+
+    @Test
+    fun `pin floats a session to the top`() {
+        val dir = tmp()
+        val store = InMemorySessionStore()
+        runBlocking {
+            store.createSession(Session(SessionId("ses_old"), "old", dir.path, 0, 100))
+            store.createSession(Session(SessionId("ses_new"), "new", dir.path, 0, 200))
+        }
+        val vm = ChatViewModel(dir.toPath(), keys(), store)
+        assertEquals(listOf("ses_new", "ses_old"), vm.state.value.sessions.map { it.id })
+
+        vm.setPinned("ses_old", true)
+        assertEquals(
+            listOf("ses_old", "ses_new"),
+            vm.state.value.sessions.map { it.id },
+            "a pinned session sorts above a more recently updated one",
+        )
+        assertTrue(vm.state.value.sessions.first().pinned)
+    }
+
+    @Test
+    fun `archive hides a session and the toggle reveals it`() {
+        val dir = tmp()
+        val store = InMemorySessionStore()
+        runBlocking { store.createSession(Session(SessionId("ses_a"), "a", dir.path, 0, 1)) }
+        val vm = ChatViewModel(dir.toPath(), keys(), store)
+        assertEquals(1, vm.state.value.sessions.size)
+
+        vm.setArchived("ses_a", true)
+        assertTrue(vm.state.value.sessions.isEmpty(), "archived is hidden by default")
+
+        vm.setShowArchived(true)
+        assertEquals(1, vm.state.value.sessions.size)
+        assertTrue(vm.state.value.sessions.single().archived)
+    }
+
+    @Test
+    fun `rename trims and updates the stored title`() {
+        val dir = tmp()
+        val store = InMemorySessionStore()
+        runBlocking { store.createSession(Session(SessionId("ses_r"), "old", dir.path, 0, 1)) }
+        val vm = ChatViewModel(dir.toPath(), keys(), store)
+
+        vm.renameSession("ses_r", "  renamed  ")
+        assertEquals("renamed", vm.state.value.sessions.single().title)
+
+        vm.renameSession("ses_r", "   ")
+        assertEquals("renamed", vm.state.value.sessions.single().title, "a blank rename is ignored")
     }
 }

@@ -17,13 +17,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,6 +67,16 @@ fun HomeScreen(
     onSearch: (String) -> Unit = {},
     /** Fork a session at its head into a new child chat. */
     onFork: (String) -> Unit = {},
+    /** Pin/unpin a session; pinned rows float to the top. */
+    onPin: (String, Boolean) -> Unit = { _, _ -> },
+    /** Archive/unarchive a session; archived rows are hidden unless shown. */
+    onArchive: (String, Boolean) -> Unit = { _, _ -> },
+    /** Rename a session. */
+    onRename: (String, String) -> Unit = { _, _ -> },
+    /** Whether archived sessions are currently listed. */
+    showArchived: Boolean = false,
+    /** Toggle the listing of archived sessions. */
+    onShowArchived: (Boolean) -> Unit = {},
 ) {
     Column(
         modifier.fillMaxSize().background(colors.bg).imePadding()
@@ -158,7 +171,20 @@ fun HomeScreen(
                 modifier = Modifier.fillMaxWidth().testTag("search"),
             )
         }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Text(
+                if (showArchived) "hide archived" else "archived",
+                color = if (showArchived) colors.accent else colors.faint,
+                fontFamily = Mono, fontSize = 11.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { onShowArchived(!showArchived) }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .testTag("show-archived"),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
 
         if (search != null) {
             if (search.isEmpty()) {
@@ -200,56 +226,110 @@ fun HomeScreen(
         } else {
             LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("sessions")) {
                 items(sessions, key = { it.id }) { s ->
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .padding(vertical = 2.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable { onOpen(s.id) }
-                            .padding(horizontal = 12.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(Modifier.size(8.dp).background(colors.water, WaterShapes.droplet(tail = 0.55f)))
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                s.title, color = colors.fg, fontFamily = Mono, fontSize = 14.sp,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            )
-                            if (s.preview.isNotEmpty()) {
-                                Spacer(Modifier.height(3.dp))
+                    var expanded by remember { mutableStateOf(false) }
+                    var renaming by remember { mutableStateOf(false) }
+                    var draft by remember(s.title) { mutableStateOf(s.title) }
+                    Column(Modifier.fillMaxWidth()) {
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .padding(vertical = 2.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { onOpen(s.id) }
+                                .padding(horizontal = 12.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(Modifier.size(8.dp).background(colors.water, WaterShapes.droplet(tail = 0.55f)))
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
                                 Text(
-                                    s.preview, color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
+                                    if (s.pinned) "★ ${s.title}" else s.title,
+                                    color = colors.fg, fontFamily = Mono, fontSize = 14.sp,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 )
+                                if (s.preview.isNotEmpty()) {
+                                    Spacer(Modifier.height(3.dp))
+                                    Text(
+                                        s.preview, color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Text(ago(s.updatedAt), color = colors.faint, fontFamily = Mono, fontSize = 11.sp)
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "⋯",
+                                color = colors.dim, fontFamily = Mono, fontSize = 15.sp,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { expanded = !expanded }
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    .testTag("more-${s.id}"),
+                            )
+                        }
+                        if (expanded) {
+                            if (renaming) {
+                                Row(
+                                    Modifier.fillMaxWidth().padding(start = 32.dp, end = 12.dp, bottom = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Box(
+                                        Modifier.weight(1f)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .border(1.dp, colors.rule, RoundedCornerShape(8.dp))
+                                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    ) {
+                                        BasicTextField(
+                                            value = draft,
+                                            onValueChange = { draft = it },
+                                            singleLine = true,
+                                            textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 13.sp),
+                                            cursorBrush = SolidColor(colors.water),
+                                            modifier = Modifier.fillMaxWidth().testTag("rename-field-${s.id}"),
+                                        )
+                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    RowAction(colors, "save", "rename-save-${s.id}") {
+                                        onRename(s.id, draft)
+                                        renaming = false
+                                        expanded = false
+                                    }
+                                }
+                            } else {
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .padding(start = 32.dp, end = 12.dp, bottom = 8.dp)
+                                        .testTag("actions-${s.id}"),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    RowAction(colors, if (s.pinned) "unpin" else "pin", "pin-${s.id}") { onPin(s.id, !s.pinned) }
+                                    RowAction(colors, if (s.archived) "unarchive" else "archive", "archive-${s.id}") { onArchive(s.id, !s.archived) }
+                                    RowAction(colors, "rename", "rename-${s.id}") { draft = s.title; renaming = true }
+                                    RowAction(colors, "fork", "fork-${s.id}") { onFork(s.id) }
+                                    RowAction(colors, "delete", "delete-${s.id}") { onDelete(s.id) }
+                                }
                             }
                         }
-                        Spacer(Modifier.width(10.dp))
-                        Text(ago(s.updatedAt), color = colors.faint, fontFamily = Mono, fontSize = 11.sp)
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "fork",
-                            color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { onFork(s.id) }
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                                .testTag("fork-${s.id}"),
-                        )
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            "×",
-                            color = colors.faint, fontFamily = Mono, fontSize = 16.sp,
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .clickable { onDelete(s.id) }
-                                .padding(horizontal = 6.dp)
-                                .testTag("delete-${s.id}"),
-                        )
                     }
                 }
             }
         }
     }
+}
+
+/** A compact bordered action used in an expanded session row. */
+@Composable
+private fun RowAction(colors: LumenColors, label: String, tag: String, onClick: () -> Unit) {
+    Text(
+        label,
+        color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .border(1.dp, colors.rule, RoundedCornerShape(6.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .testTag(tag),
+    )
 }
 
 private fun ago(ts: Long): String {
