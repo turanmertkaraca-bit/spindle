@@ -31,6 +31,7 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
     override val id = "alpine"
 
     private val environment = AndroidEnvironment(context)
+    private val debian = DebianEnvironment(context)
 
     /** Guards the one-time rootfs install on the first shell call. */
     private val installLock = Mutex()
@@ -47,6 +48,14 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         env: Map<String, String>,
     ): ShellResult = withContext(Dispatchers.IO) {
         try {
+            // Debian wins whenever the user has installed it and its proot
+            // probe passed. It is NEVER auto-downloaded here (default off), so
+            // a fresh install keeps using Alpine until [DebianEnvironment.install]
+            // is run explicitly.
+            if (debian.active()) {
+                return@withContext runInDebian(command, cwd, timeoutMs, env)
+            }
+
             // Install the userland once, on first use. If it fails the run
             // still proceeds on the fallback shell.
             if (!environment.ready()) {
@@ -82,6 +91,22 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         }
     }
 
+    /** Run one agent command inside the Debian guest through proot. */
+    private fun runInDebian(
+        command: String,
+        cwd: Path,
+        timeoutMs: Long,
+        env: Map<String, String>,
+    ): ShellResult {
+        val builder = debian.guestProcess(command, cwd.toFile().absolutePath)
+        builder.environment().apply {
+            remove("JAVA_TOOL_OPTIONS")
+            remove("_JAVA_OPTIONS")
+            putAll(env)
+        }
+        return collect(builder.start(), timeoutMs)
+    }
+
     /**
      * Start a shell for the interactive terminal panel. Android has no PTY
      * without native code, so this is a pragmatic, line-oriented approximation:
@@ -91,6 +116,13 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
      */
     override suspend fun openPty(command: String, cwd: Path): PtySession? = withContext(Dispatchers.IO) {
         try {
+            // Prefer a real Debian login shell once the layer is active.
+            if (debian.active()) {
+                val guest = command.takeIf { it.isNotBlank() } ?: "exec /bin/bash"
+                return@withContext ProcessPtySession(
+                    debian.guestProcess(guest, cwd.toFile().absolutePath).start(),
+                )
+            }
             val ready = environment.ready()
             val shell = command.takeIf { it.isNotBlank() } ?: systemSh
             val builder = ProcessBuilder(listOf(shell))
