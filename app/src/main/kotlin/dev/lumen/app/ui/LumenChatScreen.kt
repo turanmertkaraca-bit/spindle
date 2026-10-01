@@ -91,6 +91,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.FilePeek
+import dev.lumen.app.PendingAsk
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
@@ -231,6 +232,14 @@ fun LumenChatScreen(
     exists: (String) -> Boolean = { false },
     /** Paths changed this run; references to them get a stronger style. */
     touchedPaths: Set<String> = emptySet(),
+    /** A permission or question prompt pinned above the composer, or null. */
+    ask: PendingAsk? = null,
+    /** Answer the permission card: allow/deny, and whether to remember it. */
+    onAnswerPermission: (Boolean, Boolean) -> Unit = { _, _ -> },
+    /** Answer the question card with the selected options. */
+    onAnswerQuestion: (List<String>) -> Unit = {},
+    /** Skip the question card (first option or an empty selection). */
+    onSkipQuestion: () -> Unit = {},
     /** Off in tests/CI so the "answer landed" haptic never fires there. */
     haptics: Boolean = true,
 ) {
@@ -388,6 +397,9 @@ fun LumenChatScreen(
                 ChangesCard(changes, colors)
             }
             UsageMeter(usage, colors)
+            ask?.let {
+                AskCard(it, colors, onAnswerPermission, onAnswerQuestion, onSkipQuestion)
+            }
             Composer(input, busy, colors, onInput, onSend, onStop, onToggleTheme, onEditKey)
         }
         peek?.let { FilePeekOverlay(it, colors, onClosePeek) }
@@ -1053,6 +1065,130 @@ private fun UsageMeter(usage: Usage, colors: LumenColors) {
             .fillMaxWidth()
             .padding(start = 16.dp, end = 16.dp, top = 3.dp, bottom = 1.dp)
             .testTag("usage-meter"),
+    )
+}
+
+/**
+ * A prompt pinned above the composer. Permission asks render the tool and its
+ * detail with allow-once / always-allow / deny; questions render tappable
+ * option chips (single-select answers on tap, multi-select adds an Answer).
+ * Pure hoisted state — all wiring comes from the caller.
+ */
+@Composable
+private fun AskCard(
+    ask: PendingAsk,
+    colors: LumenColors,
+    onAnswerPermission: (Boolean, Boolean) -> Unit,
+    onAnswerQuestion: (List<String>) -> Unit,
+    onSkipQuestion: () -> Unit,
+) {
+    val edge = colors.spectrum.getOrElse(2) { colors.water }
+    val shape = RoundedCornerShape(12.dp)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(shape)
+            .background(colors.surface)
+            .border(1.dp, edge.copy(alpha = 0.30f), shape)
+            .padding(12.dp)
+            .testTag("ask-card"),
+    ) {
+        when (ask) {
+            is PendingAsk.Permission -> PermissionAsk(ask, colors, onAnswerPermission)
+            is PendingAsk.Question -> QuestionAsk(ask, colors, onAnswerQuestion, onSkipQuestion)
+        }
+    }
+}
+
+@Composable
+private fun PermissionAsk(
+    ask: PendingAsk.Permission,
+    colors: LumenColors,
+    onAnswer: (Boolean, Boolean) -> Unit,
+) {
+    Text("permission", color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 2.sp)
+    Spacer(Modifier.height(6.dp))
+    Text(ask.tool, color = colors.fg, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    if (ask.detail.isNotBlank()) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            ask.detail, color = colors.dim, fontFamily = Mono, fontSize = 11.5.sp, lineHeight = 16.sp,
+            maxLines = 4, overflow = TextOverflow.Ellipsis,
+        )
+    }
+    Spacer(Modifier.height(10.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        AskAction(colors, "allow once", "ask-allow", accent = true) { onAnswer(true, false) }
+        AskAction(colors, "always allow", "ask-always", accent = false) { onAnswer(true, true) }
+        AskAction(colors, "deny", "ask-deny", accent = false) { onAnswer(false, false) }
+    }
+}
+
+@Composable
+private fun QuestionAsk(
+    ask: PendingAsk.Question,
+    colors: LumenColors,
+    onAnswer: (List<String>) -> Unit,
+    onSkip: () -> Unit,
+) {
+    var selected by remember(ask.id) { mutableStateOf(emptySet<String>()) }
+    Text("question", color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 2.sp)
+    Spacer(Modifier.height(6.dp))
+    Text(ask.question, color = colors.fg, fontFamily = Mono, fontSize = 13.sp, lineHeight = 18.sp)
+    Spacer(Modifier.height(10.dp))
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        ask.options.forEachIndexed { index, option ->
+            val isSelected = option in selected
+            Text(
+                option,
+                color = if (isSelected) colors.fg else colors.dim,
+                fontFamily = Mono, fontSize = 12.5.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(9.dp))
+                    .border(1.dp, if (isSelected) colors.water else colors.rule, RoundedCornerShape(9.dp))
+                    .background(if (isSelected) colors.bg.copy(alpha = 0.35f) else Color.Transparent)
+                    .clickable {
+                        if (ask.multiple) {
+                            selected = if (isSelected) selected - option else selected + option
+                        } else {
+                            onAnswer(listOf(option))
+                        }
+                    }
+                    .padding(horizontal = 12.dp, vertical = 9.dp)
+                    .testTag("ask-option-$index"),
+            )
+        }
+    }
+    Spacer(Modifier.height(10.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (ask.multiple) {
+            AskAction(colors, "answer", "ask-answer", accent = true) { onAnswer(selected.toList()) }
+        }
+        AskAction(colors, "skip", "ask-skip", accent = false) { onSkip() }
+    }
+}
+
+@Composable
+private fun AskAction(
+    colors: LumenColors,
+    label: String,
+    tag: String,
+    accent: Boolean,
+    onClick: () -> Unit,
+) {
+    Text(
+        label,
+        color = if (accent) colors.bg else colors.fg,
+        fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (accent) colors.water else colors.surface)
+            .border(1.dp, if (accent) colors.water else colors.rule, RoundedCornerShape(50))
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .testTag(tag),
     )
 }
 

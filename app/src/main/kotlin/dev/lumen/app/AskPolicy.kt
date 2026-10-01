@@ -1,0 +1,32 @@
+package dev.lumen.app
+
+import dev.spindle.core.tool.AllowAllPolicy
+import dev.spindle.core.tool.ApprovalDecision
+import dev.spindle.core.tool.ApprovalPolicy
+import dev.spindle.core.tool.ApprovalRequest
+
+/**
+ * Interactive approval policy: allow a call when its tool or scope pattern has
+ * been explicitly remembered by the user, otherwise ask. The pattern source is
+ * a lambda so the persisted set is consulted at decide time, not captured once.
+ */
+class PatternApprovalPolicy(
+    private val patterns: () -> Set<String>,
+) : ApprovalPolicy {
+    override suspend fun decide(request: ApprovalRequest): ApprovalDecision {
+        val remembered = patterns()
+        val pattern = request.pattern?.takeIf { it.isNotBlank() }
+        return if (request.tool in remembered || (pattern != null && pattern in remembered)) {
+            ApprovalDecision.ALLOW
+        } else {
+            ApprovalDecision.ASK
+        }
+    }
+}
+
+/**
+ * The policy the app runs with. Unattended mode (the default) is allow-all;
+ * interactive mode consults the remembered pattern set on every decision.
+ */
+fun approvalFor(askBeforeTools: Boolean, patterns: () -> Set<String>): ApprovalPolicy =
+    if (askBeforeTools) PatternApprovalPolicy(patterns) else AllowAllPolicy

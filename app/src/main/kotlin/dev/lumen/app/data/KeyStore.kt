@@ -28,9 +28,36 @@ class KeyStore(context: Context) {
         get() = prefs.getString("theme", "system") ?: "system"
         set(value) = prefs.edit().putString("theme", value).apply()
 
+    /**
+     * When true, every tool call goes through an interactive ask before it runs.
+     * Default false keeps the historical unattended behaviour (allow all).
+     */
+    var askBeforeTools: Boolean
+        get() = prefs.getBoolean("askBeforeTools", false)
+        set(value) = prefs.edit().putBoolean("askBeforeTools", value).apply()
+
+    /**
+     * Scope keys (tool name, or a bash command's first token / file path) the
+     * user chose "always allow" for. Stored as a single delimited string; an
+     * empty or missing value means nothing has been remembered yet.
+     */
+    var allowedPatterns: Set<String>
+        get() = prefs.getString("allowedPatterns", null)
+            ?.split(PATTERN_DELIM)
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.toSet()
+            ?: emptySet()
+        set(value) = prefs.edit()
+            .putString("allowedPatterns", value.filter { it.isNotBlank() }.joinToString(PATTERN_DELIM))
+            .apply()
+
     val hasKey: Boolean get() = !apiKey.isNullOrBlank()
 
     companion object {
+        /** Unit separator: cannot occur in tool names, commands or paths we store. */
+        private const val PATTERN_DELIM = "\u001F"
+
         /**
          * The model id is `<provider>/<model id>`. OpenRouter model ids may
          * themselves contain slashes, and its router ids are the safest default

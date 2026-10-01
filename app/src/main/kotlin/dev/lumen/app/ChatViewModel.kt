@@ -30,6 +30,7 @@ import dev.spindle.core.model.SessionId
 import dev.spindle.core.provider.SimpleProviderRegistry
 import dev.spindle.core.store.SessionStore
 import dev.spindle.tool.DefaultTools
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -59,6 +60,29 @@ data class FilePeek(
     val truncated: Boolean = false,
 )
 
+/**
+ * A gate prompt waiting on the user. [Permission] maps to the approval policy's
+ * ASK branch; [Question] maps to the `question` tool. Each carries its own id so
+ * the UI can key selection state and the view model can resolve the right wait.
+ */
+sealed interface PendingAsk {
+    val id: String
+
+    data class Permission(
+        override val id: String,
+        val tool: String,
+        val detail: String,
+        val pattern: String?,
+    ) : PendingAsk
+
+    data class Question(
+        override val id: String,
+        val question: String,
+        val options: List<String>,
+        val multiple: Boolean,
+    ) : PendingAsk
+}
+
 /** What the screens need to draw, in one immutable snapshot. */
 data class ChatState(
     val steps: List<UiStep> = emptyList(),
@@ -81,6 +105,10 @@ data class ChatState(
     val changes: RunChanges = RunChanges.EMPTY,
     /** The file currently shown in the peek sheet, or null when closed. */
     val peek: FilePeek? = null,
+    /** A permission or question prompt awaiting the user, or null when idle. */
+    val ask: PendingAsk? = null,
+    /** Whether tools are confirmed interactively before running. */
+    val askBeforeTools: Boolean = false,
 )
 
 /**
@@ -106,11 +134,121 @@ class ChatViewModel(
             provider = keys.provider,
             needsKey = !keys.hasKey,
             theme = keys.theme,
+            askBeforeTools = keys.askBeforeTools,
         ),
     )
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
     private var runJob: Job? = null
+
+    // ---- interactive gates ----
+    //
+    // At most one ask is "active" (the one the UI shows). The gates suspend on a
+    // per-entry CompletableDeferred; if a second request arrives while one is on
+    // screen it is queued FIFO and promoted once the active one is answered.
+
+    private sealed interface PendingEntry {
+        val ask: PendingAsk
+    }
+
+    private class PermissionEntry(
+        override val ask: PendingAsk.Permission,
+        val deferred: CompletableDeferred<Boolean>,
+    ) : PendingEntry
+
+    private class QuestionEntry(
+        override val ask: PendingAsk.Question,
+        val deferred: CompletableDeferred<List<String>>,
+    ) : PendingEntry
+
+    private val queuedAsks = ArrayDeque<PendingEntry>()
+    private var activeAsk: PendingEntry? = null
+
+    private val permissionGate = PermissionGate { tool, detail, pattern ->
+        val entry = PermissionEntry(
+            PendingAsk.Permission(Ids.new("ask"), tool, detail, pattern),
+            CompletableDeferred(),
+        )
+        enqueueAsk(entry)
+        entry.deferred.await()
+    }
+
+    private val questionGate = QuestionGate { _, question, options, multiple ->
+        val entry = QuestionEntry(
+            PendingAsk.Question(Ids.new("ask"), question, options, multiple),
+            CompletableDeferred(),
+        )
+        enqueueAsk(entry)
+        entry.deferred.await()
+    }
+
+    @Synchronized
+    private fun enqueueAsk(entry: PendingEntry) {
+        queuedAsks.addLast(entry)
+        if (activeAsk == null) promoteAskLocked()
+    }
+
+    @Synchronized
+    private fun promoteAskLocked() {
+        activeAsk = queuedAsks.removeFirstOrNull()
+        _state.value = _state.value.copy(ask = activeAsk?.ask)
+    }
+
+    /** Retire [entry] if it is the active one and show the next queued ask. */
+    @Synchronized
+    private fun advanceAsk(entry: PendingEntry) {
+        if (activeAsk !== entry) return
+        promoteAskLocked()
+    }
+
+    /** Resolve the visible permission prompt; [always] remembers the scope key. */
+    fun answerPermission(allow: Boolean, always: Boolean = false) {
+        val entry = activeAsk as? PermissionEntry ?: return
+        if (always && allow) {
+            val scope = entry.ask.pattern?.takeIf { it.isNotBlank() } ?: entry.ask.tool
+            keys.allowedPatterns = keys.allowedPatterns + scope
+        }
+        advanceAsk(entry)
+        entry.deferred.complete(allow)
+    }
+
+    /** Resolve the visible question with [selected] (possibly multiple) options. */
+    fun answerQuestion(selected: List<String>) {
+        val entry = activeAsk as? QuestionEntry ?: return
+        advanceAsk(entry)
+        entry.deferred.complete(selected)
+    }
+
+    /** Skip the visible question: fall back to its first option, else nothing. */
+    fun skipQuestion() {
+        val entry = activeAsk as? QuestionEntry ?: return
+        val fallback = entry.ask.options.firstOrNull()?.let { listOf(it) } ?: emptyList()
+        advanceAsk(entry)
+        entry.deferred.complete(fallback)
+    }
+
+    /** Toggle interactive approval and persist it. */
+    fun setAskBeforeTools(on: Boolean) {
+        keys.askBeforeTools = on
+        _state.value = _state.value.copy(askBeforeTools = on)
+    }
+
+    /** Drop every pending prompt and wake its waiter with cancellation. */
+    @Synchronized
+    private fun clearAsks() {
+        val stale = ArrayList<PendingEntry>()
+        activeAsk?.let { stale.add(it) }
+        stale.addAll(queuedAsks)
+        activeAsk = null
+        queuedAsks.clear()
+        _state.value = _state.value.copy(ask = null)
+        for (entry in stale) {
+            when (entry) {
+                is PermissionEntry -> entry.deferred.cancel()
+                is QuestionEntry -> entry.deferred.cancel()
+            }
+        }
+    }
 
     init {
         viewModelScope.launch { refreshSessions() }
@@ -206,6 +344,7 @@ class ChatViewModel(
 
     fun closeChat() {
         runJob?.cancel()
+        clearAsks()
         _state.value = _state.value.copy(
             currentSessionId = null,
             steps = emptyList(),
@@ -214,6 +353,7 @@ class ChatViewModel(
             usage = Usage(),
             changes = RunChanges.EMPTY,
             peek = null,
+            ask = null,
         )
     }
 
@@ -429,8 +569,9 @@ class ChatViewModel(
                 tools = DefaultTools.registry(shell = shell ?: HostShellExecutor()),
                 store = store,
                 bus = bus,
-                permissions = PermissionGate { _, _, _ -> true },
-                questions = QuestionGate { _, _, options, _ -> listOf(options.firstOrNull() ?: "ok") },
+                permissions = permissionGate,
+                questions = questionGate,
+                approval = approvalFor(keys.askBeforeTools) { keys.allowedPatterns },
                 snapshots = snapshots,
             )
             try {
@@ -444,7 +585,8 @@ class ChatViewModel(
 
     fun stop() {
         runJob?.cancel()
-        _state.value = _state.value.copy(busy = false)
+        clearAsks()
+        _state.value = _state.value.copy(busy = false, ask = null)
     }
 
     override fun onCleared() {

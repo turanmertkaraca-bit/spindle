@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -46,6 +48,8 @@ fun SettingsScreen(
     onEditKey: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    askBeforeTools: Boolean = false,
+    onAskBeforeTools: (Boolean) -> Unit = {},
 ) {
     Column(
         modifier.fillMaxSize().background(colors.bg).imePadding()
@@ -118,6 +122,37 @@ fun SettingsScreen(
             chip(colors, "system", theme == "system", "theme-system") { onTheme("system") }
             chip(colors, "light", theme == "light", "theme-light") { onTheme("light") }
             chip(colors, "dark", theme == "dark", "theme-dark") { onTheme("dark") }
+        }
+
+        Spacer(Modifier.height(24.dp))
+        Text("tools", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("ask before tools", color = colors.fg, fontFamily = Mono, fontSize = 13.sp)
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    "confirm each tool before it runs",
+                    color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Switch(
+                checked = askBeforeTools,
+                onCheckedChange = onAskBeforeTools,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = colors.bg,
+                    checkedTrackColor = colors.water,
+                    uncheckedThumbColor = colors.dim,
+                    uncheckedTrackColor = colors.surface,
+                    uncheckedBorderColor = colors.rule,
+                ),
+                modifier = Modifier.testTag("ask-before-tools"),
+            )
         }
 
         Spacer(Modifier.height(24.dp))

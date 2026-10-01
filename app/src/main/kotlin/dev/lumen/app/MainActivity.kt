@@ -110,6 +110,10 @@ class MainActivity : ComponentActivity() {
                     cwd = viewModel.workspacePath,
                     exists = viewModel::fileExists,
                     touchedPaths = state.changes.byFile().keys,
+                    ask = state.ask,
+                    onAnswerPermission = viewModel::answerPermission,
+                    onAnswerQuestion = viewModel::answerQuestion,
+                    onSkipQuestion = viewModel::skipQuestion,
                 )
                 route == "settings" -> SettingsScreen(
                     colors = colors,
@@ -125,6 +129,8 @@ class MainActivity : ComponentActivity() {
                     },
                     onBack = { route = "home" },
                     modifier = modifier,
+                    askBeforeTools = state.askBeforeTools,
+                    onAskBeforeTools = viewModel::setAskBeforeTools,
                 )
                 else -> HomeScreen(
                     colors = colors,
