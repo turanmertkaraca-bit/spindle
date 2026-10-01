@@ -1543,7 +1543,12 @@ class ChatViewModel(
                 is AgentEvent.StateChanged -> {
                     val busy = e.state == dev.spindle.core.model.SessionState.RUNNING
                     _state.value = _state.value.copy(busy = busy, todos = loadTodos(SessionId(current)))
-                    if (!busy) refreshSessions()
+                    if (!busy) {
+                        // The store is the truth: replace optimistic/partial rows
+                        // (the common case after a stop) with what was saved.
+                        rebuild(SessionId(current))
+                        refreshSessions()
+                    }
                 }
                 is AgentEvent.Error -> {
                     diag("error: " + e.message)
@@ -1635,7 +1640,10 @@ class ChatViewModel(
         val sid = SessionId(currentId)
         val text = _state.value.input.trim()
         val attachments = _state.value.attachments
-        if ((text.isEmpty() && attachments.isEmpty()) || _state.value.busy) return
+        // Refuse to start a second run while the previous coroutine is still
+        // alive: a non-cooperative tool (e.g. a first-use rootfs install) can
+        // outlive stop(), and two runs sharing the bus/sampler corrupt state.
+        if ((text.isEmpty() && attachments.isEmpty()) || _state.value.busy || runJob?.isActive == true) return
         val key = keys.apiKey
         if (key.isNullOrBlank()) {
             _state.value = _state.value.copy(needsKey = true, input = "")
@@ -1655,7 +1663,11 @@ class ChatViewModel(
             hint = if (blind) "the selected model may not support images" else null,
             busy = true,
             attachments = emptyList(),
-            steps = _state.value.steps + StepMapper.optimisticUser(text),
+            // Replace any stale optimistic row (a prior run stopped before a
+            // store rebuild) so the timeline never holds two rows with the same
+            // id — a duplicate LazyColumn key crashes the app.
+            steps = _state.value.steps.filterNot { it.id == StepMapper.PENDING_USER_ID } +
+                StepMapper.optimisticUser(text),
         )
 
         // Keep the run alive while backgrounded and visible in the shade.

@@ -242,4 +242,20 @@ object StepMapper {
 
     /** Id of the optimistic user row; a rebuild replaces it with the store row. */
     const val PENDING_USER_ID = "\u0000you"
+
+    /**
+     * Last-wins de-duplication by id. A stopped run can leave an optimistic row
+     * in the list, and handing a LazyColumn two identical keys throws and
+     * crashes the app, so the render path always cleans ids first. Pure/testable.
+     */
+    fun dedupeById(steps: List<UiStep>): List<UiStep> {
+        if (steps.size < 2) return steps
+        val seen = HashSet<String>(steps.size)
+        val out = ArrayList<UiStep>(steps.size)
+        for (i in steps.indices.reversed()) {
+            if (seen.add(steps[i].id)) out.add(steps[i])
+        }
+        out.reverse()
+        return out
+    }
 }

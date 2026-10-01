@@ -339,7 +339,9 @@ fun LumenChatScreen(
     // A working bubble between turns so the screen is never blank.
     val pending = busy && grouped.none { it.running } &&
         (grouped.isEmpty() || grouped.last().kind == StepKind.YOU)
-    val display = remember(grouped, pending) { if (pending) grouped + WorkingStep else grouped }
+    val display = remember(grouped, pending) {
+        StepMapper.dedupeById(if (pending) grouped + WorkingStep else grouped)
+    }
     val count = display.size
     val last = display.lastOrNull()
 
