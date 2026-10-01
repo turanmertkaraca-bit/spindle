@@ -38,6 +38,7 @@ import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.model.TodoItem
 import dev.spindle.core.provider.SimpleProviderRegistry
+import dev.spindle.core.refs.ReferenceResolver
 import dev.spindle.core.store.SearchHit
 import dev.spindle.core.store.SessionSearch
 import dev.spindle.core.store.SessionStore
@@ -51,9 +52,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
+import java.io.IOException
 import java.nio.charset.StandardCharsets
+import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
 
 /** One row on the home screen. */
 data class SessionRow(
@@ -84,6 +89,18 @@ data class PendingImage(
     val name: String,
     val mime: String,
     val base64: String,
+)
+
+/**
+ * One earlier step in the current session that references a file. [stepIndex]
+ * indexes [ChatState.steps] so the peek sheet can jump the timeline to it;
+ * [touched] is true when the same file also appears in the run's changes.
+ */
+data class Backlink(
+    val stepIndex: Int,
+    val label: String,
+    val summary: String,
+    val touched: Boolean,
 )
 
 /** One row in the project file browser. [path] is workspace-relative, `/`-joined. */
@@ -894,6 +911,120 @@ class ChatViewModel(
         _state.value = _state.value.copy(peek = null)
     }
 
+    // ---- backlinks ----
+
+    /**
+     * The current session's steps that reference [path], in timeline order:
+     * assistant/thinking text that resolves a real reference to it, a tool
+     * step whose metadata `path` or summary/rows mention it, or any row that
+     * names it. [Backlink.touched] is set when the same path is in this run's
+     * changes. Cheap and capped; safe to call from the peek sheet.
+     */
+    fun backlinksFor(path: String): List<Backlink> =
+        matchBacklinks(
+            steps = _state.value.steps,
+            path = path,
+            cwd = workspacePath,
+            exists = ::fileExists,
+            touchedPaths = _state.value.changes.byFile().keys,
+        )
+
+    // ---- file completion (`@` in the composer) ----
+
+    /** A workspace file indexed for completion, with its modified time. */
+    private data class CompletionEntry(val path: String, val modified: Long)
+
+    /** Recursive index of workspace files, rebuilt from a bounded walk when stale. */
+    @Volatile
+    private var completionIndex: List<CompletionEntry>? = null
+
+    /** When [completionIndex] was built, so a burst of keystrokes reuses one walk. */
+    @Volatile
+    private var completionIndexAt = 0L
+
+    /**
+     * Workspace-relative `/`-paths containing [prefix] (case-insensitive), for
+     * the composer's `@` completion. A path that starts with the prefix ranks
+     * first, then shorter paths, then name; only paths inside the workspace are
+     * listed. An empty prefix yields a few recent root-level entries. The walk
+     * is bounded (cap [MAX_COMPLETION_FILES], heavy/hidden dirs skipped) and
+     * cached, so a keystroke only filters an in-memory list.
+     */
+    fun completeFiles(prefix: String): List<String> {
+        val cached = completionIndex
+        val now = System.currentTimeMillis()
+        val index = if (cached != null && now - completionIndexAt < COMPLETION_TTL_MS) {
+            cached
+        } else {
+            buildCompletionIndex().also {
+                completionIndex = it
+                completionIndexAt = now
+            }
+        }
+        val needle = prefix.replace('\\', '/').removePrefix("@").trimStart('/').lowercase()
+        if (needle.isEmpty()) {
+            val roots = index.asSequence()
+                .filter { !it.path.contains('/') }
+                .sortedByDescending { it.modified }
+                .map { it.path }
+                .take(MAX_COMPLETION_SUGGESTIONS)
+                .toList()
+            if (roots.isNotEmpty()) return roots
+        }
+        return index.asSequence()
+            .filter { it.path.contains(needle, ignoreCase = true) }
+            .sortedWith(
+                compareByDescending<CompletionEntry> { it.path.lowercase().startsWith(needle) }
+                    .thenBy { it.path.length }
+                    .thenBy { it.path.lowercase() },
+            )
+            .map { it.path }
+            .take(MAX_COMPLETION_SUGGESTIONS)
+            .toList()
+    }
+
+    /** Walk the workspace once, skipping heavy/hidden dirs; never escapes it. */
+    private fun buildCompletionIndex(): List<CompletionEntry> {
+        val root = workspace.toAbsolutePath().normalize()
+        val out = ArrayList<CompletionEntry>()
+        var visited = 0
+        try {
+            Files.walkFileTree(
+                root,
+                object : SimpleFileVisitor<Path>() {
+                    override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                        if (visited >= MAX_COMPLETION_SCAN) return FileVisitResult.TERMINATE
+                        visited++
+                        if (dir != root) {
+                            val name = dir.fileName?.toString().orEmpty()
+                            if (name.startsWith(".") || name in HEAVY_DIRS) return FileVisitResult.SKIP_SUBTREE
+                        }
+                        return FileVisitResult.CONTINUE
+                    }
+
+                    override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                        if (out.size >= MAX_COMPLETION_FILES || visited >= MAX_COMPLETION_SCAN) {
+                            return FileVisitResult.TERMINATE
+                        }
+                        visited++
+                        val abs = file.toAbsolutePath().normalize()
+                        if (!abs.startsWith(root)) return FileVisitResult.CONTINUE
+                        val rel = root.relativize(abs).toString().replace('\\', '/')
+                        if (rel.isEmpty()) return FileVisitResult.CONTINUE
+                        val modified = runCatching { Files.getLastModifiedTime(file).toMillis() }.getOrDefault(0L)
+                        out.add(CompletionEntry(rel, modified))
+                        return FileVisitResult.CONTINUE
+                    }
+
+                    override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult =
+                        FileVisitResult.CONTINUE
+                },
+            )
+        } catch (ignored: Throwable) {
+        }
+        return out
+    }
+
     // ---- canvas ----
 
     /**
@@ -1258,6 +1389,11 @@ class ChatViewModel(
     /** Open a changed file in the peek sheet (workspace-relative path). */
     fun openChangedFile(path: String) = openFile(path)
 
+    /** Test/teardown seam: record a structured change without a full run. */
+    internal fun recordChange(edit: FileEdit) {
+        _state.value = _state.value.copy(changes = _state.value.changes + edit)
+    }
+
     // ---- chat ----
 
     private fun providersFor(provider: String, key: String): SimpleProviderRegistry =
@@ -1475,6 +1611,21 @@ class ChatViewModel(
         /** Upper bound on one folder's listing; extra entries are dropped. */
         const val MAX_FILES_ENTRIES = 2000
 
+        /** Upper bound on workspace files indexed for `@` completion. */
+        const val MAX_COMPLETION_FILES = 2000
+
+        /** Upper bound on suggestions returned to the composer. */
+        const val MAX_COMPLETION_SUGGESTIONS = 50
+
+        /** Total directory entries visited while indexing completions, so it stays bounded. */
+        private const val MAX_COMPLETION_SCAN = 20_000
+
+        /** How long a completion index is reused before a fresh bounded walk. */
+        private const val COMPLETION_TTL_MS = 3_000L
+
+        /** Directories too heavy to walk for completion. Hidden dirs are skipped too. */
+        private val HEAVY_DIRS = setOf("node_modules", "build", ".gradle", ".idea", "target", "dist", "vendor")
+
         /** Upper bound on retained terminal chunks, so a chatty shell cannot grow forever. */
         const val MAX_TERMINAL_CHUNKS = 2000
 
@@ -1519,3 +1670,96 @@ class ChatViewModel(
             }
     }
 }
+
+/**
+ * Pure backlink matching, separated so it is unit-testable without a store.
+ *
+ * A step references [path] when an assistant/thinking body or summary resolves
+ * a real reference to it, when a tool step's metadata `path`/`file` names it,
+ * or when its summary/rows/body mention it as a whole path. Results come back
+ * in timeline order, capped at [MAX_BACKLINKS].
+ */
+internal fun matchBacklinks(
+    steps: List<UiStep>,
+    path: String,
+    cwd: String,
+    exists: (String) -> Boolean,
+    touchedPaths: Set<String>,
+): List<Backlink> {
+    val target = normalizeBacklinkPath(path, cwd)
+    if (target.isEmpty()) return emptyList()
+    val touched = touchedPaths.any { normalizeBacklinkPath(it, cwd) == target }
+    val out = ArrayList<Backlink>()
+    for ((index, step) in steps.withIndex()) {
+        if (out.size >= MAX_BACKLINKS) break
+        if (stepReferences(step, target, cwd, exists)) {
+            out += Backlink(index, step.label, step.summary, touched)
+        }
+    }
+    return out
+}
+
+private const val MAX_BACKLINKS = 50
+
+private fun stepReferences(
+    step: UiStep,
+    target: String,
+    cwd: String,
+    exists: (String) -> Boolean,
+): Boolean {
+    val prose = step.kind == StepKind.ASSISTANT || step.kind == StepKind.THINKING
+    if (prose && (resolvesBacklink(step.body, target, cwd, exists) ||
+            resolvesBacklink(step.summary, target, cwd, exists))
+    ) {
+        return true
+    }
+    val metaPath = step.toolMetadata["path"] ?: step.toolMetadata["file"]
+    if (metaPath != null && normalizeBacklinkPath(metaPath, cwd) == target) return true
+    if (mentionsBacklink(step.summary, target)) return true
+    if (step.rows.any { mentionsBacklink(it.first, target) || mentionsBacklink(it.second, target) }) return true
+    if ((step.kind == StepKind.TOOL || step.kind == StepKind.SUBAGENT) && mentionsBacklink(step.body, target)) {
+        return true
+    }
+    return false
+}
+
+private fun resolvesBacklink(
+    text: String,
+    target: String,
+    cwd: String,
+    exists: (String) -> Boolean,
+): Boolean {
+    if (text.isBlank()) return false
+    if (!text.contains('/') && !text.contains('.')) return false
+    return ReferenceResolver.resolve(text, cwd, exists).any { it.path == target }
+}
+
+/** A path as workspace-relative, `/`-joined, without a leading `./` or `@`. */
+private fun normalizeBacklinkPath(path: String, cwd: String): String {
+    var p = path.replace('\\', '/').removePrefix("@")
+    val base = cwd.replace('\\', '/').trimEnd('/')
+    if (base.isNotEmpty() && p.startsWith("$base/")) p = p.substring(base.length + 1)
+    while (p.startsWith("./")) p = p.substring(2)
+    return p.trim('/')
+}
+
+/** True when [target] occurs in [text] as a whole path, not inside a longer token. */
+private fun mentionsBacklink(text: String, target: String): Boolean {
+    if (text.isEmpty() || target.isEmpty()) return false
+    val hay = text.replace('\\', '/')
+    var from = 0
+    while (true) {
+        val i = hay.indexOf(target, from, ignoreCase = true)
+        if (i < 0) return false
+        val before = if (i == 0) null else hay[i - 1]
+        val afterIdx = i + target.length
+        val after = if (afterIdx >= hay.length) null else hay[afterIdx]
+        if ((before == null || !isBacklinkPathChar(before)) && (after == null || !isBacklinkPathChar(after))) {
+            return true
+        }
+        from = i + 1
+    }
+}
+
+private fun isBacklinkPathChar(c: Char): Boolean =
+    c.isLetterOrDigit() || c == '/' || c == '.' || c == '_' || c == '-'

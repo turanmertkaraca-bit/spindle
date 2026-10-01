@@ -104,6 +104,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.lumen.app.Backlink
 import dev.lumen.app.FilePeek
 import dev.lumen.app.PendingAsk
 import dev.lumen.app.PendingImage
@@ -267,6 +268,12 @@ fun LumenChatScreen(
     exists: (String) -> Boolean = { false },
     /** Paths changed this run; references to them get a stronger style. */
     touchedPaths: Set<String> = emptySet(),
+    /** Steps in the current session that reference the peeked file. */
+    onBacklinks: (String) -> List<Backlink> = { emptyList() },
+    /** Best-effort jump of the timeline to a step index (a backlink was tapped). */
+    onJumpToStep: (Int) -> Unit = {},
+    /** Workspace-relative paths matching a trailing `@` token, for completion. */
+    onCompleteFiles: (String) -> List<String> = { emptyList() },
     /** A permission or question prompt pinned above the composer, or null. */
     ask: PendingAsk? = null,
     /** Answer the permission card: allow/deny, and whether to remember it. */
@@ -504,9 +511,29 @@ fun LumenChatScreen(
                 attachments = attachments,
                 onRemoveAttachment = onRemoveAttachment,
                 onAttach = onAttachImage?.let { { pickImage.launch("image/*") } },
+                onCompleteFiles = onCompleteFiles,
             )
         }
-        peek?.let { FilePeekOverlay(it, colors, onClosePeek) }
+        peek?.let { p ->
+            val backlinks = remember(p.path, steps, touchedPaths) { onBacklinks(p.path) }
+            FilePeekOverlay(
+                peek = p,
+                colors = colors,
+                onClose = onClosePeek,
+                backlinks = backlinks,
+                onJumpToStep = { index ->
+                    onClosePeek()
+                    // Map the raw step index onto the grouped display list by id;
+                    // a folded/merged row may not be addressable, so fall back to
+                    // the nearest index (best-effort).
+                    val id = steps.getOrNull(index)?.id
+                    val mapped = if (id != null) display.indexOfFirst { it.id == id } else -1
+                    val slot = if (mapped >= 0) mapped else index.coerceIn(0, (count - 1).coerceAtLeast(0))
+                    scope.launch { listState.animateScrollToItem(slot) }
+                    onJumpToStep(index)
+                },
+            )
+        }
     }
 }
 
@@ -1721,8 +1748,17 @@ private fun Composer(
     attachments: List<PendingImage> = emptyList(),
     onRemoveAttachment: (Int) -> Unit = {},
     onAttach: (() -> Unit)? = null,
+    onCompleteFiles: (String) -> List<String> = { emptyList() },
 ) {
     val canSend = input.isNotBlank() || attachments.isNotEmpty()
+    val atToken = remember(input) { AtToken.find(input)?.groupValues?.get(1) }
+    val suggestions = remember(atToken, onCompleteFiles) {
+        if (atToken != null) onCompleteFiles(atToken).take(MAX_SUGGESTIONS) else emptyList()
+    }
+    val pickSuggestion: (String) -> Unit = { path ->
+        val match = AtToken.find(input)
+        if (match != null) onInput(input.substring(0, match.range.first) + "@" + path + " ")
+    }
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
@@ -1766,6 +1802,7 @@ private fun Composer(
                 )
             },
         )
+        FileSuggestions(suggestions, colors, pickSuggestion)
         Row(
             Modifier.fillMaxWidth().background(colors.bg)
                 .padding(start = 16.dp, end = 14.dp, top = 10.dp, bottom = 12.dp),
@@ -1846,6 +1883,52 @@ private fun Composer(
                     fontFamily = Mono, fontSize = if (busy) 13.sp else 18.sp, fontWeight = FontWeight.Bold,
                 )
             }
+        }
+    }
+}
+
+/** The trailing `@path` token the composer completes, if any. */
+private val AtToken = Regex("""@([^\s]*)$""")
+
+/** Most completion rows the popup shows at once. */
+private const val MAX_SUGGESTIONS = 6
+
+/**
+ * A small list of `@` completions drawn just above the composer field. Tapping
+ * a row replaces the trailing token with `@<path> `. Minimal and non-modal: it
+ * disappears as soon as the input stops ending in a token.
+ */
+@Composable
+private fun FileSuggestions(
+    suggestions: List<String>,
+    colors: LumenColors,
+    onPick: (String) -> Unit,
+) {
+    if (suggestions.isEmpty()) return
+    val edge = colors.spectrum.getOrElse(2) { colors.water }
+    val shape = RoundedCornerShape(12.dp)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 14.dp, bottom = 6.dp)
+            .clip(shape)
+            .background(colors.surface)
+            .border(1.dp, edge.copy(alpha = 0.30f), shape)
+            .heightIn(max = 208.dp)
+            .verticalScroll(rememberScrollState())
+            .testTag("file-suggestions"),
+    ) {
+        suggestions.forEachIndexed { index, path ->
+            Text(
+                path,
+                color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onPick(path) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .testTag("file-suggestion-$index"),
+            )
         }
     }
 }
@@ -1959,7 +2042,13 @@ private fun AgentModeChip(
  * body notes truncation.
  */
 @Composable
-private fun FilePeekOverlay(peek: FilePeek, colors: LumenColors, onClose: () -> Unit) {
+private fun FilePeekOverlay(
+    peek: FilePeek,
+    colors: LumenColors,
+    onClose: () -> Unit,
+    backlinks: List<Backlink> = emptyList(),
+    onJumpToStep: (Int) -> Unit = {},
+) {
     val listState = rememberLazyListState()
     val highlight = peek.highlight
     LaunchedEffect(peek.path, highlight) {
@@ -2025,6 +2114,9 @@ private fun FilePeekOverlay(peek: FilePeek, colors: LumenColors, onClose: () -> 
                         .testTag("peek-truncated"),
                 )
             }
+            if (backlinks.isNotEmpty()) {
+                PeekBacklinks(backlinks, colors, onJumpToStep)
+            }
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp).testTag("peek-body"),
@@ -2051,6 +2143,63 @@ private fun FilePeekOverlay(peek: FilePeek, colors: LumenColors, onClose: () -> 
                             fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp,
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The "backlinks" list inside the peek sheet: the earlier steps that reference
+ * the open file. Tapping one dismisses the peek and jumps the timeline to it;
+ * a touched step (the file changed there) is tinted with the water accent.
+ */
+@Composable
+private fun PeekBacklinks(
+    backlinks: List<Backlink>,
+    colors: LumenColors,
+    onJumpToStep: (Int) -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, bottom = 6.dp)
+            .testTag("peek-backlinks"),
+    ) {
+        Text(
+            "backlinks",
+            color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 2.sp,
+        )
+        Spacer(Modifier.height(4.dp))
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(max = 132.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            backlinks.forEachIndexed { index, link ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onJumpToStep(link.stepIndex) }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .testTag("backlink-$index"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        link.label.lowercase().ifBlank { "step" },
+                        color = if (link.touched) colors.water else colors.dim,
+                        fontFamily = Mono, fontSize = 10.5.sp, fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        link.summary,
+                        color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
                 }
             }
         }

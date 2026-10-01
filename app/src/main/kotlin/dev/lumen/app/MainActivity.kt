@@ -156,6 +156,8 @@ class MainActivity : ComponentActivity() {
                     cwd = viewModel.workspacePath,
                     exists = viewModel::fileExists,
                     touchedPaths = state.changes.byFile().keys,
+                    onBacklinks = viewModel::backlinksFor,
+                    onCompleteFiles = viewModel::completeFiles,
                     ask = state.ask,
                     onAnswerPermission = viewModel::answerPermission,
                     onAnswerQuestion = viewModel::answerQuestion,
