@@ -85,6 +85,7 @@ class AndroidEnvironment(private val context: Context) {
                     progress?.invoke("toolkit installed")
                 }
                 refreshProxy()
+                installStaticBusybox()
                 generateWrappers(false)
                 true
             } catch (t: Throwable) {
@@ -196,10 +197,69 @@ class AndroidEnvironment(private val context: Context) {
         }
     }
 
-    /** Executable search path: wrappers, rootfs bin dirs, then Android's. */
+    /**
+     * Executable search path: static busybox applets first, then the Alpine
+     * wrappers, then the rootfs, then Android's shell. The static applets lead
+     * because dynamic musl binaries die with SIGSYS ("Bad system call") on
+     * devices that enforce seccomp — see [installStaticBusybox].
+     */
     fun shellPath(): String {
         val al = rootfs.absolutePath
-        return "${wrappersDir.absolutePath}:$al/bin:$al/usr/bin:/system/bin"
+        return "${binDir.absolutePath}:${wrappersDir.absolutePath}:$al/bin:$al/usr/bin:/system/bin"
+    }
+
+    /** Bundled static-busybox applet directory, first on PATH. */
+    val binDir: File by lazy {
+        File(context.filesDir, "bin").apply { mkdirs() }
+    }
+
+    /**
+     * P12-style "Bad system call" cure, ported from the old app: the bundled
+     * busybox is musl-STATIC and survives seccomp, while the Alpine loader is
+     * dynamic and dies with SIGSYS when it runs an applet directly on some
+     * kernels. Copy the asset once and symlink every applet it supports into
+     * [binDir] (which [shellPath] puts FIRST), so ls/cat/grep/… never reach the
+     * dynamic loader. User-installed rootfs commands still win where an applet
+     * does not exist. Idempotent; never throws. Call from a worker thread.
+     */
+    fun installStaticBusybox() {
+        try {
+            val bb = File(binDir, "busybox")
+            if (!bb.exists() || bb.length() == 0L) {
+                context.assets.open("busybox").use { input ->
+                    FileOutputStream(bb).use { out -> input.copyTo(out) }
+                }
+                bb.setExecutable(true, false)
+                bb.setReadable(true, false)
+            }
+            val flag = File(binDir, ".applets")
+            val supported = if (flag.exists()) return else busyboxApplets(bb)
+            val applets = supported.ifEmpty { CORE_APPLETS }
+            for (name in applets) {
+                if (name in SKIP_APPLETS) continue
+                val dst = File(binDir, name)
+                if (dst.exists()) continue
+                try {
+                    Os.symlink("busybox", dst.absolutePath)
+                    dst.setExecutable(true, false)
+                } catch (ignored: Exception) {
+                }
+            }
+            writeText(flag, "ok\n")
+        } catch (ignored: Throwable) {
+        }
+    }
+
+    /** `busybox --list`, or empty when it cannot run (then CORE_APPLETS is used). */
+    private fun busyboxApplets(bb: File): List<String> = try {
+        val p = ProcessBuilder(bb.absolutePath, "--list")
+            .redirectErrorStream(true)
+            .start()
+        val text = p.inputStream.bufferedReader().readText()
+        if (!p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly()
+        text.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    } catch (ignored: Throwable) {
+        emptyList()
     }
 
     // ------------------------------------------------------------ extraction
@@ -468,5 +528,22 @@ class AndroidEnvironment(private val context: Context) {
         const val REPO_VER = "v3.22"
         const val LOADER = "lib/ld-musl-aarch64.so.1"
         val SCAN = listOf("bin", "usr/bin", "sbin", "usr/sbin", "usr/local/bin")
+
+        /** Applets never shadowed: these are owned by the wrappers/shims. */
+        val SKIP_APPLETS = setOf("busybox", "sh", "ash", "bash", "git", "pkg", "apk")
+
+        /** Fallback applet set when `busybox --list` cannot run. */
+        val CORE_APPLETS = listOf(
+            "ls", "cat", "cp", "mv", "rm", "mkdir", "rmdir", "echo", "printf",
+            "grep", "egrep", "fgrep", "sed", "awk", "find", "tar", "gzip",
+            "gunzip", "zcat", "head", "tail", "wc", "touch", "chmod", "chown",
+            "ln", "which", "uname", "env", "cut", "tr", "sort", "uniq", "date",
+            "du", "df", "stat", "sleep", "basename", "dirname", "sha256sum",
+            "md5sum", "wget", "od", "dd", "ps", "id", "whoami", "expr", "less",
+            "more", "diff", "vi", "clear", "free", "netstat", "pgrep", "kill",
+            "nice", "nohup", "seq", "yes", "true", "false", "xargs", "realpath",
+            "readlink", "fold", "comm", "expand", "unexpand", "sum", "sync",
+            "time", "timeout", "tty",
+        )
     }
 }
