@@ -36,6 +36,7 @@ import dev.spindle.core.model.PartId
 import dev.spindle.core.model.Role
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
+import dev.spindle.core.model.TodoItem
 import dev.spindle.core.provider.SimpleProviderRegistry
 import dev.spindle.core.store.SearchHit
 import dev.spindle.core.store.SessionSearch
@@ -199,6 +200,8 @@ data class ChatState(
     val usage: Usage = Usage(),
     /** Structured file changes the agent made in this session. */
     val changes: RunChanges = RunChanges.EMPTY,
+    /** The current session's live todo list, refreshed on each rebuild. */
+    val todos: List<TodoItem> = emptyList(),
     /** The file currently shown in the peek sheet, or null when closed. */
     val peek: FilePeek? = null,
     /** The project file browser's current folder, or null until opened. */
@@ -706,6 +709,7 @@ class ChatViewModel(
                 canvasPath = null,
                 usage = Usage(),
                 changes = RunChanges.EMPTY,
+                todos = emptyList(),
             )
             refreshSessions()
         }
@@ -723,6 +727,7 @@ class ChatViewModel(
                 busy = false,
                 usage = messages.fold(Usage()) { acc, m -> acc + m.usage },
                 changes = RunChanges.EMPTY,
+                todos = loadTodos(sid),
             )
         }
     }
@@ -741,6 +746,7 @@ class ChatViewModel(
             canvasPath = null,
             usage = Usage(),
             changes = RunChanges.EMPTY,
+            todos = emptyList(),
             peek = null,
             ask = null,
         )
@@ -1281,7 +1287,7 @@ class ChatViewModel(
                     _state.value.copy(changes = _state.value.changes + e.edit)
                 is AgentEvent.StateChanged -> {
                     val busy = e.state == dev.spindle.core.model.SessionState.RUNNING
-                    _state.value = _state.value.copy(busy = busy)
+                    _state.value = _state.value.copy(busy = busy, todos = loadTodos(SessionId(current)))
                     if (!busy) refreshSessions()
                 }
                 is AgentEvent.Error -> {
@@ -1294,7 +1300,20 @@ class ChatViewModel(
     }
 
     private suspend fun rebuild(sid: SessionId) {
-        _state.value = _state.value.copy(steps = enrich(StepMapper.fromMessages(store.messages(sid))))
+        _state.value = _state.value.copy(
+            steps = enrich(StepMapper.fromMessages(store.messages(sid))),
+            todos = loadTodos(sid),
+        )
+    }
+
+    /** Read the session's todo list, tolerating a store that cannot answer. */
+    private suspend fun loadTodos(sid: SessionId): List<TodoItem> =
+        runCatching { store.todos(sid) }.getOrDefault(emptyList())
+
+    /** Test/teardown seam: re-read the current session's todo list. */
+    internal suspend fun refreshTodos() {
+        val sid = _state.value.currentSessionId?.let { SessionId(it) } ?: return
+        _state.value = _state.value.copy(todos = loadTodos(sid))
     }
 
     /**

@@ -11,6 +11,8 @@ import dev.lumen.app.ui.model.UiStep
 import dev.spindle.core.model.FileEdit
 import dev.spindle.core.model.RunChanges
 import dev.spindle.core.model.SessionId
+import dev.spindle.core.model.TodoItem
+import dev.spindle.core.model.TodoStatus
 import dev.spindle.core.model.Usage
 import org.junit.Rule
 import org.junit.Test
@@ -118,6 +120,33 @@ class ScreenshotTest {
             ),
         )
     }
+
+    /** A session mid-plan: one done, one active, one pending, one dropped. */
+    private fun sampleTodos(): List<TodoItem> = listOf(
+        TodoItem("t1", "read the layout rule", TodoStatus.DONE),
+        TodoItem("t2", "patch the redirect guard", TodoStatus.IN_PROGRESS),
+        TodoItem("t3", "run the unit tests", TodoStatus.PENDING),
+        TodoItem("t4", "update the changelog", TodoStatus.CANCELLED),
+    )
+
+    /** A subagent whose child transcript nests two levels deep. */
+    private fun subagentTreeSample(): List<UiStep> = listOf(
+        UiStep("u1", StepKind.YOU, "YOU", "a1b2c3", "fix the build", "fix the failing build"),
+        UiStep(
+            "s1", StepKind.SUBAGENT, "TASK", "b9c0d1", "fix the build", "spawned a build fixer",
+            childId = "child1",
+            childSteps = listOf(
+                UiStep(
+                    "c1", StepKind.TOOL, "READ", "c1", "read gradle config", "read gradle config",
+                    childSteps = listOf(
+                        UiStep("g1", StepKind.TOOL, "GREP", "g1", "grep assembleDebug", "grep assembleDebug"),
+                    ),
+                ),
+                UiStep("c2", StepKind.THINKING, "THINKING", "c2", "the toolchain is stale", "the toolchain is stale"),
+                UiStep("c3", StepKind.ASSISTANT, "ASSISTANT", "c3", "bumped the plugin", "bumped the kotlin plugin"),
+            ),
+        ),
+    )
 
     /** A failed tool with raw output, for the collapsed/expanded card fixtures. */
     private fun toolFixture(): List<UiStep> = listOf(
@@ -465,6 +494,72 @@ class ScreenshotTest {
             onEditKey = {},
             usage = Usage(inputTokens = 7_400, outputTokens = 4_900, costUsd = 0.0450),
             changes = sampleChanges(),
+        )
+    }
+
+    /** The live todo board pinned above the composer. */
+    @Test fun light_todo_board() = shoot("light_todos.png") {
+        LumenChatScreen(
+            steps = sample(),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Light,
+            title = "make the timeline a spine",
+            onHome = {},
+            ambient = false,
+            onToggleTheme = {},
+            onEditKey = {},
+            todos = sampleTodos(),
+        )
+    }
+
+    @Test fun dark_todo_board() = shoot("dark_todos.png") {
+        LumenChatScreen(
+            steps = sample(),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Dark,
+            title = "make the timeline a spine",
+            onHome = {},
+            ambient = false,
+            onToggleTheme = {},
+            onEditKey = {},
+            todos = sampleTodos(),
+        )
+    }
+
+    /** A subagent card tapped open, revealing its nested call tree. */
+    @Test fun light_subagent_tree() = shoot("light_subagent_tree.png") {
+        LumenChatScreen(
+            steps = subagentTreeSample(),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Light,
+            title = "fix the build",
+            onHome = {},
+            forceOpenIndex = 1,
+            ambient = false,
+            onToggleTheme = {},
+            onEditKey = {},
+        )
+    }
+
+    @Test fun dark_subagent_tree() = shoot("dark_subagent_tree.png") {
+        LumenChatScreen(
+            steps = subagentTreeSample(),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Dark,
+            title = "fix the build",
+            onHome = {},
+            forceOpenIndex = 1,
+            ambient = false,
+            onToggleTheme = {},
+            onEditKey = {},
         )
     }
 

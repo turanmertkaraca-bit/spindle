@@ -20,6 +20,8 @@ import dev.lumen.app.ui.model.UiStep
 import dev.spindle.core.model.FileEdit
 import dev.spindle.core.model.RunChanges
 import dev.spindle.core.model.SessionId
+import dev.spindle.core.model.TodoItem
+import dev.spindle.core.model.TodoStatus
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -300,6 +302,71 @@ class LumenChatScreenTest {
         check(compose.onAllNodesWithText("**bold**", substring = true).fetchSemanticsNodes().isEmpty()) {
             "the raw bold markers should not survive rendering"
         }
+    }
+
+    @Test
+    fun `todo board shows the count and items and hides when empty`() {
+        val todos = mutableStateOf(emptyList<TodoItem>())
+        compose.setContent {
+            LumenChatScreen(
+                steps(2), input = "", busy = false, error = null, modifier = viewport,
+                ambient = false, todos = todos.value,
+            )
+        }
+        check(compose.onAllNodesWithTag("todo-toggle").fetchSemanticsNodes().isEmpty()) {
+            "the board should hide until the session has todos"
+        }
+        compose.runOnIdle {
+            todos.value = listOf(
+                TodoItem("1", "read the layout rule", TodoStatus.DONE),
+                TodoItem("2", "patch the redirect guard", TodoStatus.IN_PROGRESS),
+                TodoItem("3", "run the unit tests", TodoStatus.PENDING),
+            )
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("1/3 tasks", substring = true).assertIsDisplayed()
+        check(compose.onAllNodesWithText("patch the redirect guard").fetchSemanticsNodes().isEmpty()) {
+            "the board starts collapsed, so items stay hidden"
+        }
+        compose.onNodeWithTag("todo-toggle").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithText("patch the redirect guard").assertIsDisplayed()
+        compose.onNodeWithText("read the layout rule").assertIsDisplayed()
+        compose.runOnIdle { todos.value = emptyList() }
+        compose.waitForIdle()
+        check(compose.onAllNodesWithTag("todo-toggle").fetchSemanticsNodes().isEmpty()) {
+            "the board should disappear once the todo list is empty"
+        }
+    }
+
+    @Test
+    fun `a subagent with nested children renders an indented tree`() {
+        val sub = UiStep(
+            "s", StepKind.SUBAGENT, "TASK", "z", "fix the build", "spawn a subagent",
+            childId = "child",
+            childSteps = listOf(
+                UiStep(
+                    "c1", StepKind.TOOL, "READ", "x", "read config", "read config",
+                    childSteps = listOf(
+                        UiStep("g1", StepKind.ASSISTANT, "ASSISTANT", "y", "nested answer one", "nested answer one"),
+                    ),
+                ),
+            ),
+        )
+        compose.setContent {
+            LumenChatScreen(
+                listOf(sub), input = "", busy = false, error = null, modifier = viewport, ambient = false,
+            )
+        }
+        check(compose.onAllNodesWithText("read config").fetchSemanticsNodes().isEmpty()) {
+            "a collapsed subagent card must not render its child tree"
+        }
+        compose.onNodeWithTag("tools-toggle").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        compose.onNodeWithText("read config").assertIsDisplayed()
+        compose.onNodeWithText("nested answer one").assertIsDisplayed()
+        compose.onNodeWithTag("child-row-0", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("child-row-1", useUnmergedTree = true).assertExists()
     }
 
     @Test

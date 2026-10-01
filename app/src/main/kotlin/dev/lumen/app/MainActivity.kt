@@ -148,6 +148,7 @@ class MainActivity : ComponentActivity() {
                     onExpandSubagent = viewModel::expandSubagent,
                     usage = state.usage,
                     changes = state.changes,
+                    todos = state.todos,
                     peek = state.peek,
                     onClosePeek = viewModel::closePeek,
                     onOpenFile = viewModel::openFile,

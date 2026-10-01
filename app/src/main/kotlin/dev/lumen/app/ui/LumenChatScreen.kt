@@ -79,7 +79,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
@@ -108,6 +110,8 @@ import dev.lumen.app.ui.model.UiImage
 import dev.lumen.app.ui.model.UiStep
 import dev.spindle.core.model.FileEdit
 import dev.spindle.core.model.RunChanges
+import dev.spindle.core.model.TodoItem
+import dev.spindle.core.model.TodoStatus
 import dev.spindle.core.model.Usage
 import java.util.Locale
 import kotlin.math.abs
@@ -244,6 +248,8 @@ fun LumenChatScreen(
     usage: Usage = Usage(),
     /** Structured file changes for this run; the card hides when empty. */
     changes: RunChanges = RunChanges.EMPTY,
+    /** Live todo list for the current session; the board hides when empty. */
+    todos: List<TodoItem> = emptyList(),
     /** The file currently shown in the peek sheet, or null when closed. */
     peek: FilePeek? = null,
     /** Dismiss the peek sheet (tap outside or the close affordance). */
@@ -485,6 +491,7 @@ fun LumenChatScreen(
             if (changes.editCount > 0) {
                 ChangesCard(changes, colors, onRevert, onOpenFile)
             }
+            TodoBoard(todos, colors, pulse)
             UsageMeter(usage, colors)
             ask?.let {
                 AskCard(it, colors, onAnswerPermission, onAnswerQuestion, onSkipQuestion)
@@ -916,7 +923,7 @@ private fun ToolCard(
             enter = expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
             exit = shrinkVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut(),
         ) {
-            ToolCardBody(step, colors, isSub)
+            ToolCardBody(step, colors, isSub, pulse)
         }
     }
 }
@@ -927,9 +934,10 @@ private fun ToolCard(
  * when there are no rows. This is the only place raw output is drawn.
  */
 @Composable
-private fun ToolCardBody(step: UiStep, colors: LumenColors, isSub: Boolean) {
+private fun ToolCardBody(step: UiStep, colors: LumenColors, isSub: Boolean, pulse: Float) {
     val toolScroll = rememberScrollState()
     val atBottom by remember { derivedStateOf { toolScroll.value >= toolScroll.maxValue - 2 } }
+    val showTree = isSub && (step.childSteps.isNotEmpty() || step.childLoading)
     val entries: List<Pair<String, String>> = if (isSub && step.childSteps.isNotEmpty()) {
         step.childSteps.map { it.label to it.summary }
     } else {
@@ -947,14 +955,19 @@ private fun ToolCardBody(step: UiStep, colors: LumenColors, isSub: Boolean) {
                 .verticalScroll(toolScroll)
                 .padding(start = 12.dp, end = 10.dp, top = 2.dp, bottom = 10.dp),
         ) {
-            if (entries.isEmpty()) {
-                Text(
+            when {
+                // A subagent's child transcript renders as an indented call tree;
+                // while it is being read, a small spinner row stands in.
+                step.childLoading -> ChildLoadingRow(colors, pulse)
+                showTree -> step.childSteps.forEach { child ->
+                    ChildTreeRow(child, depth = 0, colors = colors, pulse = pulse)
+                }
+                entries.isEmpty() -> Text(
                     step.body.ifBlank { step.summary },
                     color = colors.dim, fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp,
                     modifier = Modifier.testTag("tool-output-0"),
                 )
-            } else {
-                for ((k, r) in entries.withIndex()) {
+                else -> for ((k, r) in entries.withIndex()) {
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -998,6 +1011,207 @@ private fun ToolCardBody(step: UiStep, colors: LumenColors, isSub: Boolean) {
                         ),
                     ),
             )
+        }
+    }
+}
+
+/** The deepest nesting the subagent call tree draws before it flattens. */
+private const val MAX_CHILD_DEPTH = 3
+
+/**
+ * One row of a subagent's call tree: a kind glyph, the step's label and its
+ * one-line summary, indented by [depth] and joined to its parent by a thin
+ * connector. Children recurse until [MAX_CHILD_DEPTH], so a deep agent call
+ * chain never marches off the right edge.
+ */
+@Composable
+private fun ChildTreeRow(child: UiStep, depth: Int, colors: LumenColors, pulse: Float) {
+    val indent = (depth * 14).dp
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = indent)
+            .drawBehind {
+                if (depth > 0) {
+                    val x = 1.dp.toPx()
+                    drawLine(colors.rule, Offset(x, 0f), Offset(x, size.height), 1.dp.toPx())
+                }
+            }
+            .padding(start = 11.dp, top = 3.dp, bottom = 3.dp, end = 2.dp)
+            .testTag("child-row-$depth"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            childGlyph(child.kind),
+            color = childTint(child, colors),
+            fontFamily = Mono, fontSize = 10.5.sp,
+            modifier = Modifier.widthIn(min = 12.dp),
+        )
+        Spacer(Modifier.width(7.dp))
+        Text(
+            child.label.lowercase().ifBlank { childKindName(child.kind) },
+            color = colors.fg, fontFamily = Mono, fontSize = 10.5.sp, fontWeight = FontWeight.Medium,
+            maxLines = 1,
+        )
+        Spacer(Modifier.width(7.dp))
+        Text(
+            child.summary.ifBlank { child.body }.replace(Regex("\\s+"), " ").trim(),
+            color = if (child.failed) colors.danger() else colors.faint,
+            fontFamily = Mono, fontSize = 10.5.sp,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (child.failed) {
+            Spacer(Modifier.width(6.dp))
+            Text("!", color = colors.danger(), fontFamily = Mono, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+    if (depth < MAX_CHILD_DEPTH) {
+        child.childSteps.forEach { grand -> ChildTreeRow(grand, depth + 1, colors, pulse) }
+    }
+}
+
+/** A tiny arc spinner (driven by the ambient [pulse]) for a loading child read. */
+@Composable
+private fun ChildLoadingRow(colors: LumenColors, pulse: Float) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 11.dp, top = 4.dp, bottom = 4.dp)
+            .testTag("child-loading"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(12.dp)
+                .drawBehind {
+                    val w = 1.5.dp.toPx()
+                    drawArc(
+                        color = colors.water.copy(alpha = 0.22f),
+                        startAngle = 0f, sweepAngle = 360f, useCenter = false,
+                        style = Stroke(width = w),
+                    )
+                    drawArc(
+                        color = colors.water.copy(alpha = 0.4f + 0.6f * pulse),
+                        startAngle = -90f + 360f * pulse, sweepAngle = 90f, useCenter = false,
+                        style = Stroke(width = w, cap = StrokeCap.Round),
+                    )
+                },
+        )
+        Spacer(Modifier.width(8.dp))
+        Text("loading subagent…", color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp)
+    }
+}
+
+/** A compact step-kind glyph for a tree row (no emoji; box/mono marks only). */
+private fun childGlyph(kind: StepKind): String = when (kind) {
+    StepKind.YOU -> "\u25b8"
+    StepKind.THINKING -> "~"
+    StepKind.TOOL -> "\u203a"
+    StepKind.SUBAGENT -> "\u00bb"
+    StepKind.QUESTION -> "?"
+    StepKind.ASSISTANT -> "\u2261"
+}
+
+/** The lower-case word used when a tree row has no label. */
+private fun childKindName(kind: StepKind): String = when (kind) {
+    StepKind.YOU -> "you"
+    StepKind.THINKING -> "thinking"
+    StepKind.TOOL -> "tool"
+    StepKind.SUBAGENT -> "subagent"
+    StepKind.QUESTION -> "question"
+    StepKind.ASSISTANT -> "answer"
+}
+
+/** Tint a tree row by its step kind, drawn from the prism spectrum. */
+private fun childTint(child: UiStep, colors: LumenColors): Color = when {
+    child.failed -> colors.danger()
+    child.running -> colors.water
+    child.kind == StepKind.SUBAGENT -> colors.spectrum.getOrElse(0) { colors.accent }
+    child.kind == StepKind.TOOL -> colors.water
+    child.kind == StepKind.ASSISTANT -> colors.spectrum.getOrElse(3) { colors.water }
+    else -> colors.faint
+}
+
+/**
+ * The live todo board, pinned above the composer next to the changes card. It
+ * stays hidden until the session has a list, shows the done/total count on one
+ * line, and expands to a checklist with a per-status glyph. Pure hoisted state.
+ */
+@Composable
+private fun TodoBoard(todos: List<TodoItem>, colors: LumenColors, pulse: Float) {
+    if (todos.isEmpty()) return
+    var expanded by remember { mutableStateOf(false) }
+    val done = todos.count { it.status == TodoStatus.DONE }
+    val edge = colors.spectrum.getOrElse(3) { colors.water }
+    val shape = RoundedCornerShape(12.dp)
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(shape)
+            .background(colors.surface)
+            .border(1.dp, edge.copy(alpha = 0.22f), shape),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 12.dp, vertical = 9.dp)
+                .testTag("todo-toggle"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(8.dp).clip(WaterShapes.droplet(tail = 0.55f)).background(edge))
+            Spacer(Modifier.width(9.dp))
+            Text(
+                "${if (expanded) "\u25be" else "\u25b8"} $done/${todos.size} tasks",
+                color = colors.fg, fontFamily = Mono, fontSize = 11.5.sp, letterSpacing = 0.4.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag("todo-summary"),
+            )
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
+            exit = shrinkVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut(),
+        ) {
+            Column(
+                Modifier
+                    .heightIn(max = 220.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+            ) {
+                todos.forEachIndexed { i, todo ->
+                    val (glyph, tint) = when (todo.status) {
+                        TodoStatus.PENDING -> "\u25cb" to colors.faint
+                        TodoStatus.IN_PROGRESS -> "\u25d0" to colors.water.copy(alpha = 0.35f + 0.65f * pulse)
+                        TodoStatus.DONE -> "\u2713" to colors.spectrum.getOrElse(3) { colors.water }
+                        TodoStatus.CANCELLED -> "\u2715" to colors.faint
+                    }
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .testTag("todo-item-$i"),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Text(glyph, color = tint, fontFamily = Mono, fontSize = 12.sp)
+                        Spacer(Modifier.width(9.dp))
+                        Text(
+                            todo.content,
+                            color = when (todo.status) {
+                                TodoStatus.DONE -> colors.dim
+                                TodoStatus.CANCELLED -> colors.faint
+                                else -> colors.fg
+                            },
+                            fontFamily = Mono, fontSize = 11.5.sp, lineHeight = 16.sp,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
         }
     }
 }
