@@ -9,7 +9,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import dev.lumen.app.ChatViewModel
@@ -89,7 +89,8 @@ class FileReferenceTest {
         val link = compose.onNodeWithText("src/App.kt:42", substring = true).fetchSemanticsNode()
         assertTrue(link.config.contains(SemanticsActions.OnClick), "reference should be clickable")
 
-        compose.onNodeWithText("src/App.kt:42", substring = true).performClick()
+        compose.onNodeWithText("src/App.kt:42", substring = true)
+            .performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
 
         val peek = vm.state.value.peek
