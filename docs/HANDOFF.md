@@ -38,7 +38,7 @@ for i in $(seq 1 30); do out=$(bash /root/ci.sh); echo "$out" | head -1
 ```
 `ci.sh` can print a stale run first — always match `sha=$SHA`.
 
-## 3. Architecture (all green up to `e8b2277`)
+## 3. Architecture (all green up to `ae6ee1d`)
 
 Modules: `:core` (pure JVM: model, agent loop, events, SPIs, markdown parser,
 references resolver, revert engine, UI math), `:sandbox` (TarGz + InAppProxy),
@@ -60,40 +60,21 @@ Key capabilities already working on device:
   websearch tool, session search/fork UI, storage manager, diagnostics log.
 - Tool inspector: `durationMs` + tool metadata carried into `UiStep.toolMetadata`
   and shown in the tool card body.
+- Background resilience: `RunService` (ongoing notification + partial wake lock)
+  keeps long runs alive; `Session.state` is persisted across RUNNING/IDLE/ERROR
+  and orphaned RUNNING sessions are reconciled to IDLE on cold start.
+- Indirect changes: `WorkspaceWatcher` polls the workspace during a run and folds
+  script-made writes into the Changes view.
+- Budget: `AgentEvent.BudgetWarning` fires once at `ContextBudget.warnAtFraction`
+  (and at the ceiling). Not user-configured yet, so dormant in practice.
+- Adaptive two-pane: files cockpit shows list + editor side by side on >=600dp.
 
-## 4. KNOWN RED — fix first (`c310455` pushed, CI failing)
+## 4. CI status — all green
 
-`app/src/test/kotlin/dev/lumen/app/ui/ComposerCompletionTest.kt`
-test `the peek overlay renders a backlinks section that can jump`.
-
-- Failure: `AssertionError at ComposerCompletionTest.kt:110`
-  = `compose.onNodeWithTag("peek-backlinks").assertExists()`.
-- Meaning: the `peek-backlinks` node is **not in the semantics tree** even though
-  the test passes `peek = FilePeek(...)` and
-  `onBacklinks = { listOf(Backlink(0, "ASSISTANT", "see src/App.kt", true)) }`.
-- Status of prior attempts (all still red):
-  `assertIsDisplayed` → "not displayed"; `assertExists` → absent; added
-  `waitForIdle()` (no change); `useUnmergedTree=true` on the text lookups
-  (no change — the tag itself is absent).
-- Production wiring looks correct (`LumenChatScreen.kt` ~L262 `onBacklinks`
-  param; ~L517 `peek?.let { FilePeekOverlay(... backlinks = remember(p.path,
-  steps, touchedPaths){ onBacklinks(p.path) } ...) }`; overlay ~L2045;
-  `PeekBacklinks` ~L2158 with `if (backlinks.isNotEmpty())`).
-- **Suspects to check next session:**
-  1. `AndroidEnvironment`/`ChatViewModel` background writes are NOT involved
-     here (pure UI test), but confirm the test isn't missing `Dispatchers`
-     setup needed by `LumenChatScreen`'s other effects.
-  2. The `remember(p.path, steps, touchedPaths)` key omits `onBacklinks`; try
-     removing `remember` (compute inline) to rule out stale capture.
-  3. Verify the overlay actually composes under Robolectric: temporarily assert
-     `onNodeWithTag("file-peek")` (the overlay root tag) to see if the whole
-     overlay is missing (then the issue is the `peek` param not reaching it).
-  4. If the overlay is simply too tall/clipped in the test viewport, scroll or
-     shrink the peek body; but `assertExists` should not depend on layout, so
-     suspect #3 first.
-- Fastest path: pull the `unit-test-reports` artifact for the failing run and
-  read the exact stack/assertion (`/root/log.sh` for job log; use `.ref/getart.pl`
-  for the report zip).
+The previous KNOWN RED (`ComposerCompletionTest` peek backlinks) is fixed:
+`peek-backlinks`/`backlink-0` are merged away by the peek sheet's
+`Modifier.clickable`, so the test asserts through `useUnmergedTree = true`.
+Head `ae6ee1d`: `jvm backend` + `android app (robolectric)` both success.
 
 ## 5. Deferred UI polish (user explicitly parked to the end)
 

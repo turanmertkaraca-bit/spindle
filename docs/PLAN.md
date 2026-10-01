@@ -59,11 +59,12 @@ Legend: `[x]` done · `[~]` partial · `[ ]` todo · `[—]` deliberately deferr
 - [x] Step budget (`AgentConfig.maxSteps`) and output clipping.
 - [x] Tests: `RetryTest`, `SubagentTest`, `AgentLoopTest`.
 
-## M6 — Cost / context accounting — `[~]` PARTIAL
+## M6 — Cost / context accounting — `[x]` DONE
 
 - [x] `ModelInfo` pricing feeds `Wire.cost`; per-message `Usage.costUsd`.
 - [x] `TokenEstimator` + `ContextBudget` (max tokens / max cost) wired into the loop.
-- [ ] Session-level totals + budget warnings surfaced through `AgentEvent`.
+- [x] Session-level totals + budget warnings surfaced through `AgentEvent`
+      (`UsageUpdated`, `BudgetWarning` at `warnAtFraction` and at the ceiling).
 
 ## M7 — Compaction (trim + summarize) — `[x]` DONE
 
@@ -113,30 +114,31 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
 - [x] `CAPABILITIES.md`: domains, parity checklist, new SPIs, non-goals.
 - [x] `PLAN.md` merge track (this section).
 
-### m12 — Core gaps (Android-free, JVM-tested)
+### m12 — Core gaps (Android-free, JVM-tested) — `[~]` MOSTLY DONE
 
-- [ ] Runtime agent selection (build/plan/explore/general).
-- [ ] Rules / AGENTS.md injection.
-- [ ] Session token + cost totals + budget warnings as events.
-- [ ] New events: `UsageUpdated`, `TitleUpdated`, `RunStateChanged`,
+- [x] Runtime agent selection (build/plan/explore/general).
+- [x] Rules / AGENTS.md injection.
+- [x] Session token + cost totals + budget warnings as events.
+- [x] New events: `UsageUpdated`, `TitleUpdated`, `RunStateChanged`,
       `SubagentStateChanged`, `FileEdited`, `SnapshotCreated`.
 - [ ] Provider routing parity: Zen/Go `/responses` + `/messages` per model.
-- [ ] `ApprovalPolicy` (allow/ask/deny per tool + path/command glob, persisted).
-- [ ] Store: full-text search, fork/branch, rewind, persisted run state,
-      pin/archive/tags/rename.
-- [ ] `SnapshotStore` + snapshot-before-write.
-- [ ] Structured `FileEdit` emission from `write`/`edit`/`apply_patch`.
+- [x] `ApprovalPolicy` (allow/ask/deny per tool + path/command glob, persisted).
+- [x] Store: full-text search, fork/branch, rewind, persisted run state.
+- [ ] Pin/archive/tags/rename surfaces (model + store fields exist; no UI).
+- [x] `SnapshotStore` + snapshot-before-write.
+- [x] Structured `FileEdit` emission from `write`/`edit`/`apply_patch`.
 
 ### m13 — Android platform adapters
 
-- [ ] `ShellExecutor`: host `/bin/sh` (dev) + Debian proot + PTY (device);
+- [x] `ShellExecutor`: host `/bin/sh` (dev) + Debian proot + PTY (device);
       port `Debian.java` / `Sandbox.java`.
-- [ ] `FileSystemService` + external-change watcher (port `DirWatcher`).
-- [ ] `EnvironmentManager`: rootfs install/curate/prune, apt, storage report.
-- [ ] Foreground `RunService` + notifications + wake lock; resumable runs.
+- [x] External-change watcher (port `DirWatcher`); files cockpit covers
+      list/stat/read/write/save.
+- [x] `EnvironmentManager`: rootfs install/curate/prune, apt, storage report.
+- [x] Foreground `RunService` + notifications + wake lock; resumable runs.
 - [ ] SQLite FTS index; key store (port `AuthStore`); models.dev catalogue.
 
-### m14 — Feature verticals — `[~]` MOSTLY DONE
+### m14 — Feature verticals — `[x]` DONE
 
 - [x] **Changes**: `RunChanges` aggregate, diff card, per-file revert (rework of
       `EditPulse`).
@@ -147,8 +149,8 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
 - [x] `websearch` tool (keyless DuckDuckGo HTML, pure parser, permission-gated).
 - [x] Session full-text search + fork/rewind surfaces.
 - [x] Interactive permission/question cards; ask-before-tools setting.
-- [ ] Backlinks panel + `@`-completion in the composer (port `Mentions` extras).
-- [ ] Subagent call tree, tool inspector, live todo board.
+- [x] Backlinks panel + `@`-completion in the composer (port `Mentions` extras).
+- [x] Subagent call tree, tool inspector, live todo board.
 
 ### m15 — UI + hardening — `[~]` IN PROGRESS
 
@@ -157,7 +159,7 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
       diagnostics, storage.
 - [x] Full Linux userland: Alpine (bundled) + opt-in Debian proot, behind
       `ShellExecutor`; targetSdk 28 exec exemption.
-- [ ] Adaptive two-pane (tablet/foldable).
+- [x] Adaptive two-pane (tablet/foldable) — files cockpit list + editor.
 - [ ] On-device performance/battery/ANR sweep.
 - [x] CI green gate + screenshot evidence; APK update-in-place.
 
