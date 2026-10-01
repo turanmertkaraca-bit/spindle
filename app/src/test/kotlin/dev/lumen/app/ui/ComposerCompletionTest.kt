@@ -105,6 +105,7 @@ class ComposerCompletionTest {
                 onJumpToStep = { jumped = it },
             )
         }
+        compose.waitForIdle()
 
         compose.onNodeWithTag("peek-backlinks").assertExists()
         compose.onNodeWithText("backlinks").assertExists()
