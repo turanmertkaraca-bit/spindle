@@ -124,7 +124,9 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
 - [ ] Provider routing parity: Zen/Go `/responses` + `/messages` per model.
 - [x] `ApprovalPolicy` (allow/ask/deny per tool + path/command glob, persisted).
 - [x] Store: full-text search, fork/branch, rewind, persisted run state.
-- [ ] Pin/archive/tags/rename surfaces (model + store fields exist; no UI).
+- [x] Pin / archive / rename session surfaces (Home row actions; archived
+      hidden behind a toggle).
+- [ ] Session tags (model + store fields exist; no UI yet).
 - [x] `SnapshotStore` + snapshot-before-write.
 - [x] Structured `FileEdit` emission from `write`/`edit`/`apply_patch`.
 
