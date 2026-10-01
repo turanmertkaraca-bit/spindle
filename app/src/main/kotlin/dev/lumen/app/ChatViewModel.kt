@@ -682,7 +682,7 @@ class ChatViewModel(
     private fun surfaceFilesError(message: String, dir: String = _state.value.files?.dir.orEmpty()) {
         val current = _state.value.files
         _state.value = _state.value.copy(
-            files = (current ?: FilesState(dir = dir)).copy(error = message),
+            files = (current ?: FilesState(dir = dir, entries = emptyList())).copy(error = message),
         )
     }
 
