@@ -30,6 +30,19 @@ import kotlinx.serialization.modules.polymorphic
 import kotlinx.serialization.modules.subclass
 
 /**
+ * Escape an FTS5 MATCH query the same way for the index and for any test:
+ * lowercase, split on non-word characters, and prefix-match each token
+ * (`foo bar` -> `foo* bar*`). Returns null when there is nothing to match.
+ */
+internal fun ftsMatch(query: String): String? {
+    val tokens = query.lowercase()
+        .split(Regex("[^\\p{L}\\p{N}_]+"))
+        .filter { it.isNotBlank() }
+    if (tokens.isEmpty()) return null
+    return tokens.joinToString(" ") { "$it*" }
+}
+
+/**
  * A durable [SessionStore] on Android's own SQLite.
  *
  * WHY THIS EXISTS: the backend's `:store-sqlite` uses `org.xerial:sqlite-jdbc`,
@@ -88,6 +101,67 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
             """CREATE TABLE IF NOT EXISTS todos(
                  id TEXT PRIMARY KEY, session_id TEXT, ord INTEGER, content TEXT, status TEXT)""",
         )
+        setupFts()
+    }
+
+    /**
+     * A best-effort FTS5 index over message text. Android's bundled SQLite may
+     * not have FTS5 (it historically shipped FTS3/4), so this is entirely
+     * optional: if the virtual table cannot be created we stay on the linear
+     * scan and search still works. When the index exists it is kept in sync and
+     * backfilled once.
+     */
+    private var ftsReady = false
+
+    private fun setupFts() {
+        try {
+            db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(message_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, body)")
+            ftsReady = true
+        } catch (_: Throwable) {
+            ftsReady = false
+            return
+        }
+        try {
+            val indexed = db.rawQuery("SELECT COUNT(*) FROM message_fts", null).use { c ->
+                if (c.moveToFirst()) c.getInt(0) else 0
+            }
+            if (indexed == 0) backfillFts()
+        } catch (_: Throwable) {
+            // A backfill failure is non-fatal; insert/delete keep it in sync going forward.
+        }
+    }
+
+    private fun backfillFts() {
+        val ids = db.rawQuery("SELECT id FROM messages", null).use { c ->
+            buildList { while (c.moveToNext()) add(c.getString(0)) }
+        }
+        for (id in ids) {
+            ftsInsert(id)
+        }
+    }
+
+    private fun ftsRow(message: Message) {
+        if (!ftsReady) return
+        runCatching {
+            db.delete("message_fts", "message_id=?", arrayOf(message.id.value))
+            val body = messageSearchText(message)
+            if (body.isNotBlank()) {
+                db.execSQL(
+                    "INSERT INTO message_fts(message_id, session_id, role, body) VALUES(?,?,?,?)",
+                    arrayOf(message.id.value, message.sessionId.value, message.role.name, body),
+                )
+            }
+        }
+    }
+
+    private fun ftsDeleteMessage(messageId: String) {
+        if (!ftsReady) return
+        runCatching { db.delete("message_fts", "message_id=?", arrayOf(messageId)) }
+    }
+
+    private fun ftsDeleteSession(sessionId: String) {
+        if (!ftsReady) return
+        runCatching { db.delete("message_fts", "session_id=?", arrayOf(sessionId)) }
     }
 
     /** Add the columns introduced after the first schema, so old DBs migrate forward. */
@@ -161,6 +235,7 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
         db.delete("parts", "session_id=?", arrayOf(id.value))
         db.delete("messages", "session_id=?", arrayOf(id.value))
         db.delete("todos", "session_id=?", arrayOf(id.value))
+        ftsDeleteSession(id.value)
         db.delete("sessions", "id=?", arrayOf(id.value))
     }
 
@@ -202,6 +277,7 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
         for (m in tail) {
             db.delete("parts", "message_id=?", arrayOf(m.id.value))
             db.delete("messages", "id=?", arrayOf(m.id.value))
+            ftsDeleteMessage(m.id.value)
         }
         tail.size
     }
@@ -222,6 +298,7 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
             ),
         )
         writeParts(message)
+        ftsRow(message)
     }
 
     override suspend fun updateMessage(message: Message) = mutex.withLock {
@@ -235,6 +312,7 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
             ),
         )
         writeParts(message)
+        ftsRow(message)
     }
 
     private fun writeParts(message: Message) {
@@ -276,6 +354,47 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
     override suspend fun search(query: String, limit: Int): List<SearchHit> = mutex.withLock {
         val needle = query.trim()
         if (needle.isEmpty()) return@withLock emptyList()
+        if (ftsReady) {
+            ftsSearch(needle, limit)?.let { return@withLock it }
+        }
+        scanSearch(needle, limit)
+    }
+
+    /**
+     * FTS5 MATCH search. Returns null when the index cannot answer (so the
+     * caller falls back to the scan); an empty list is a real "no hits".
+     */
+    private fun ftsSearch(needle: String, limit: Int): List<SearchHit>? {
+        val match = ftsMatch(needle) ?: return emptyList()
+        return try {
+            db.rawQuery(
+                "SELECT f.message_id AS mid, f.session_id AS sid, f.role AS role, " +
+                    "snippet(message_fts, 3, '[', ']', '…', 12) AS snip, m.created_at AS at " +
+                    "FROM message_fts f JOIN messages m ON m.id = f.message_id " +
+                    "WHERE message_fts MATCH ? ORDER BY bm25(message_fts) LIMIT ?",
+                arrayOf(match, limit.toString()),
+            ).use { c ->
+                buildList {
+                    while (c.moveToNext()) {
+                        add(
+                            SearchHit(
+                                sessionId = SessionId(c.getString(c.getColumnIndexOrThrow("sid"))),
+                                messageId = c.getString(c.getColumnIndexOrThrow("mid")),
+                                role = c.getString(c.getColumnIndexOrThrow("role")),
+                                snippet = c.getString(c.getColumnIndexOrThrow("snip")) ?: "",
+                                at = c.getLong(c.getColumnIndexOrThrow("at")),
+                            ),
+                        )
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    /** Linear fallback used when FTS is unavailable. */
+    private fun scanSearch(needle: String, limit: Int): List<SearchHit> {
         val hits = ArrayList<SearchHit>()
         db.rawQuery("SELECT * FROM messages ORDER BY created_at DESC", null).use { c ->
             while (c.moveToNext() && hits.size < limit) {
@@ -292,7 +411,7 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
                 }
             }
         }
-        hits
+        return hits
     }
 
     // ---- todos ----

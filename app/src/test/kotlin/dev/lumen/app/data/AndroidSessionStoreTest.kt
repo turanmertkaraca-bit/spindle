@@ -119,4 +119,39 @@ class AndroidSessionStoreTest {
             assertEquals(0, store.messages(SessionId("ses5")).size)
         }
     }
+
+    @Test
+    fun `search finds message text and forgets deleted sessions`() = runTest {
+        newStore().use { store ->
+            store.createSession(Session(SessionId("ses6"), "t", "/tmp", 0, 0))
+            store.appendMessage(
+                Message(
+                    MessageId("s1"), SessionId("ses6"), Role.ASSISTANT, createdAt = 1,
+                    parts = listOf(Part.Text(PartId("sp1"), "the needle is here")),
+                ),
+            )
+            val hits = store.search("needle")
+            assertEquals(1, hits.size, "a token in message text must be found")
+            assertEquals("s1", hits.single().messageId)
+            assertTrue(hits.single().snippet.contains("needle"), hits.single().snippet)
+
+            store.deleteSession(SessionId("ses6"))
+            assertTrue(store.search("needle").isEmpty(), "the index drops deleted sessions")
+        }
+    }
+
+    @Test
+    fun `updating a message reindexes its text`() = runTest {
+        newStore().use { store ->
+            store.createSession(Session(SessionId("ses7"), "t", "/tmp", 0, 0))
+            val m = Message(
+                MessageId("s2"), SessionId("ses7"), Role.ASSISTANT, createdAt = 1,
+                parts = listOf(Part.Text(PartId("sp2"), "alpha")),
+            )
+            store.appendMessage(m)
+            store.updateMessage(m.copy(parts = listOf(Part.Text(PartId("sp3"), "bravo"))))
+            assertTrue(store.search("alpha").isEmpty(), "the old text is gone from the index")
+            assertEquals(1, store.search("bravo").size, "the new text is searchable")
+        }
+    }
 }

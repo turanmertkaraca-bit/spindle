@@ -138,7 +138,9 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
       list/stat/read/write/save.
 - [x] `EnvironmentManager`: rootfs install/curate/prune, apt, storage report.
 - [x] Foreground `RunService` + notifications + wake lock; resumable runs.
-- [ ] SQLite FTS index; key store (port `AuthStore`); models.dev catalogue.
+- [x] SQLite FTS index on the app store (`message_fts`, FTS5 with a linear-scan
+      fallback when the platform SQLite lacks FTS5); key store ported; models.dev
+      catalogue still to port.
 
 ### m14 — Feature verticals — `[x]` DONE
 

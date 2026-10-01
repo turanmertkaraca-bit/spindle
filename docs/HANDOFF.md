@@ -73,6 +73,22 @@ Key capabilities already working on device:
 - On-device perf probe: `PerfSampler` samples frame jank + heap during a run and
   appends a `perf:` line to diagnostics (copyable). First sweep is clean; a
   stopped run no longer logs a cancellation error.
+- Search: the app's `AndroidSessionStore` now maintains an FTS5 `message_fts`
+  index (kept in sync on insert/update/rewind/delete) and falls back to the old
+  linear scan when the platform SQLite lacks FTS5.
+
+## 3a. Pending on-device retest (user, next session)
+
+A stop-mid-run then immediate re-send crashed with a duplicate `LazyColumn` key,
+and a build task appeared to "do nothing" then `cannot open index.html`. Fixed
+in `df63624` (replace the optimistic row on send; rebuild on StateChanged idle;
+`StepMapper.dedupeById` last-wins; refuse to start a run while the previous
+coroutine is still alive). The user has the new APK and will retest. When they
+send the diagnostics log, check: is there a `tool:` line, and does a `perf:`
+line appear? No `tool:`+`perf:` present = the model narrated without calling a
+tool (UI needs progress feedback); no `perf:` at all = the run coroutine is
+blocked. The first-use rootfs install running inline inside `prompt` is the
+prime suspect for a long "working with no output" stall.
 
 ## 4. CI status — all green
 
@@ -82,7 +98,6 @@ The previous KNOWN RED (`ComposerCompletionTest` peek backlinks) is fixed:
 Head `ae6ee1d`: `jvm backend` + `android app (robolectric)` both success.
 
 ## 5. Deferred UI polish (user explicitly parked to the end)
-
 See `docs/UI-POLISH.md`. Headline: composer/input-box feel, and the top-bar
 `fork`/`files`/`shell` buttons look plain. Do NOT regress the already-fixed
 items listed there.
