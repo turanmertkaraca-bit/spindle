@@ -26,10 +26,14 @@ object StepMapper {
             when (m.role) {
                 Role.USER -> {
                     val text = m.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }.trim()
-                    if (text.isNotBlank()) {
+                    val images = m.parts.filterIsInstance<Part.File>().map { f ->
+                        UiImage(name = f.path, mime = f.mime ?: "image/*", base64 = f.dataBase64.orEmpty())
+                    }
+                    if (text.isNotBlank() || images.isNotEmpty()) {
                         out += UiStep(
                             id = m.id.value, kind = StepKind.YOU, label = "YOU", tag = tag(m.id.value),
-                            summary = oneLine(text), body = text, messageId = m.id.value,
+                            summary = if (text.isNotBlank()) oneLine(text) else oneLine(images.first().name),
+                            body = text, images = images, messageId = m.id.value,
                         )
                     }
                 }

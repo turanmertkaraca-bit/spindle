@@ -15,6 +15,7 @@ import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.dp
 import dev.lumen.app.ui.model.StepKind
+import dev.lumen.app.ui.model.UiImage
 import dev.lumen.app.ui.model.UiStep
 import dev.spindle.core.model.FileEdit
 import dev.spindle.core.model.RunChanges
@@ -150,6 +151,48 @@ class LumenChatScreenTest {
         compose.onNodeWithTag("tool-row-1").assertIsDisplayed()
         compose.onNodeWithText("compile").assertIsDisplayed()
         compose.onNodeWithText("verify").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a tool card starts collapsed and reveals raw output only when expanded`() {
+        val raw = "failed: [exit 159] uname -a\n=== System Info ===\nLinux localhost 5.10.0 aarch64"
+        val s = listOf(
+            UiStep(
+                "t", StepKind.TOOL, "BASH", "x",
+                summary = "uname -a", body = raw, failed = true,
+            ),
+        )
+        compose.setContent {
+            LumenChatScreen(s, input = "", busy = false, error = null, modifier = viewport, ambient = false)
+        }
+        // A distinct card with a header; the raw body stays hidden.
+        compose.onNodeWithTag("tool-card").assertIsDisplayed()
+        compose.onNodeWithTag("tool-status", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("uname -a").assertIsDisplayed()
+        check(compose.onAllNodesWithText("System Info", substring = true).fetchSemanticsNodes().isEmpty()) {
+            "collapsed tool card must not render its raw output"
+        }
+        // Expand: the raw output is the only place it shows.
+        compose.onNodeWithTag("tools-toggle").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        compose.onNodeWithText("System Info", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun `a user message with an image part shows an image indicator`() {
+        compose.setContent {
+            LumenChatScreen(
+                listOf(
+                    UiStep(
+                        "u", StepKind.YOU, "YOU", "x", "look at this", "look at this",
+                        images = listOf(UiImage("photo.png", "image/png", "!!!not-base64!!!")),
+                    ),
+                ),
+                input = "", busy = false, error = null, modifier = viewport, ambient = false,
+            )
+        }
+        compose.onNodeWithTag("msg-image", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("photo.png").assertIsDisplayed()
     }
 
     @Test

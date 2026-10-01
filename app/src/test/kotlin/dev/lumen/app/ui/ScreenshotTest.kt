@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import dev.lumen.app.ui.model.StepKind
+import dev.lumen.app.ui.model.UiImage
 import dev.lumen.app.ui.model.UiStep
 import dev.spindle.core.model.FileEdit
 import dev.spindle.core.model.RunChanges
@@ -118,6 +119,27 @@ class ScreenshotTest {
         )
     }
 
+    /** A failed tool with raw output, for the collapsed/expanded card fixtures. */
+    private fun toolFixture(): List<UiStep> = listOf(
+        UiStep("u1", StepKind.YOU, "YOU", "a1b2c3", "whats your env", "whats your env"),
+        UiStep(
+            "t1", StepKind.TOOL, "BASH", "e5f607",
+            "uname -a",
+            "failed: [exit 159] uname -a\n=== System Info ===\nLinux localhost 5.10.0 aarch64\n" +
+                "=== Env ===\nSHELL=/bin/sh\nPATH=/usr/bin:/bin",
+            failed = true,
+        ),
+    )
+
+    /** A rendered PNG as base64, so the image fixture decodes to a real thumbnail. */
+    private fun pngBase64(): String {
+        val bmp = Bitmap.createBitmap(160, 100, Bitmap.Config.ARGB_8888)
+        Canvas(bmp).drawColor(android.graphics.Color.rgb(70, 110, 200))
+        val out = java.io.ByteArrayOutputStream()
+        bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+        return android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+    }
+
     private fun shoot(name: String, content: @Composable () -> Unit) {
         compose.setContent(content)
         val dir = File("build/screenshots").apply { mkdirs() }
@@ -151,13 +173,14 @@ class ScreenshotTest {
         )
     }
 
-    @Test fun light_assistant() = chat(LumenColors.Light, "light_assistant.png", 4)
+    @Test fun light_assistant() = chat(LumenColors.Light, "light_assistant.png")
 
-    @Test fun dark_assistant() = chat(LumenColors.Dark, "dark_assistant.png", 4)
+    @Test fun dark_assistant() = chat(LumenColors.Dark, "dark_assistant.png")
 
-    @Test fun light_merged_tools() = chat(LumenColors.Light, "light_merged_tools.png", 2)
+    /** Tools at rest: compact collapsed cards inside the transcript. */
+    @Test fun light_merged_tools() = chat(LumenColors.Light, "light_merged_tools.png")
 
-    @Test fun dark_subagent() = chat(LumenColors.Dark, "dark_subagent.png", 3)
+    @Test fun dark_subagent() = chat(LumenColors.Dark, "dark_subagent.png")
 
     @Test fun light_early_rope() = chat(LumenColors.Light, "light_early.png", 1)
 
@@ -247,9 +270,38 @@ class ScreenshotTest {
             busy = true,
             error = null,
             colors = LumenColors.Light,
-            forceOpenIndex = 1,
             ambient = false,
             onToggleTheme = {},
+        )
+    }
+
+    /** A tool card at rest: compact header, no raw output. */
+    @Test fun light_tool_collapsed() = shoot("light_tool_collapsed.png") {
+        LumenChatScreen(
+            steps = toolFixture(), input = "", busy = false, error = null,
+            colors = LumenColors.Light, ambient = false, onToggleTheme = {},
+        )
+    }
+
+    /** The same card tapped open: the bounded raw output is revealed. */
+    @Test fun dark_tool_expanded() = shoot("dark_tool_expanded.png") {
+        LumenChatScreen(
+            steps = toolFixture(), input = "", busy = false, error = null,
+            colors = LumenColors.Dark, forceOpenIndex = 1, ambient = false, onToggleTheme = {},
+        )
+    }
+
+    /** A sent image is shown inside the YOU bubble, not only in the composer chips. */
+    @Test fun light_user_image() = shoot("light_user_image.png") {
+        LumenChatScreen(
+            steps = listOf(
+                UiStep(
+                    "u1", StepKind.YOU, "YOU", "a1b2c3", "whats your env", "whats your env",
+                    images = listOf(UiImage("screenshot.png", "image/png", pngBase64())),
+                ),
+            ),
+            input = "", busy = false, error = null,
+            colors = LumenColors.Light, ambient = false, onToggleTheme = {},
         )
     }
 

@@ -4,6 +4,17 @@ package dev.lumen.app.ui.model
 enum class StepKind { YOU, THINKING, TOOL, SUBAGENT, QUESTION, ASSISTANT }
 
 /**
+ * An image attached to a user message, carried so the row can show it inline.
+ * [base64] is the raw inline payload (no data-URL prefix); [name] and [mime]
+ * let the row fall back to a labelled chip when the bytes cannot be decoded.
+ */
+data class UiImage(
+    val name: String,
+    val mime: String,
+    val base64: String,
+)
+
+/**
  * Everything the timeline needs to draw one row, and nothing else. Deliberately
  * a flat view model so tests can construct rows without any backend.
  *
@@ -45,6 +56,8 @@ data class UiStep(
     val childLoading: Boolean = false,
     /** Tool names of the calls folded into this run, for the compact summary. */
     val toolNames: List<String> = emptyList(),
+    /** Images attached to a user turn, rendered inside the YOU bubble. */
+    val images: List<UiImage> = emptyList(),
     /** The store message this row came from; used by rewind. Null for synthetic rows. */
     val messageId: String? = null,
 )

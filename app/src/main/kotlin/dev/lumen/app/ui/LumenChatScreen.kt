@@ -1,5 +1,6 @@
 package dev.lumen.app.ui
 
+import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,6 +24,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -77,8 +79,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -100,6 +104,7 @@ import dev.lumen.app.PendingAsk
 import dev.lumen.app.PendingImage
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
+import dev.lumen.app.ui.model.UiImage
 import dev.lumen.app.ui.model.UiStep
 import dev.spindle.core.model.FileEdit
 import dev.spindle.core.model.RunChanges
@@ -575,132 +580,149 @@ private fun MessageRow(
     }
 
     val isYou = step.kind == StepKind.YOU
+    val isTool = step.kind == StepKind.TOOL || step.kind == StepKind.SUBAGENT
     val htmlPath = remember(step.id, step.body, step.summary, step.rows) {
-        if (isYou) null else firstHtmlPath(step)
+        if (isYou || isTool) null else firstHtmlPath(step)
     }
 
     Row(
         modifier.fillMaxWidth(),
         horizontalArrangement = if (isYou) Arrangement.End else Arrangement.Start,
     ) {
-        val bubbleShape = if (isYou) {
-            RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp)
+        if (isTool) {
+            // Tools and subagents are their own inset card, not an answer bubble:
+            // a leading accent stripe, a compact header and a collapsible body.
+            ToolCard(
+                step = step,
+                colors = colors,
+                pulse = pulse,
+                startExpanded = open,
+                onExpandSubagent = onExpandSubagent,
+                modifier = Modifier.widthIn(max = 328.dp),
+            )
         } else {
-            RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp)
-        }
+            val bubbleShape = if (isYou) {
+                RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp)
+            } else {
+                RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp)
+            }
 
-        Column(
-            Modifier
-                .widthIn(max = 328.dp)
-                .clip(bubbleShape)
-                .then(
-                    if (isYou) {
-                        Modifier
-                            .background(colors.surface, bubbleShape)
-                            .border(1.dp, colors.rule, bubbleShape)
-                    } else {
-                        Modifier
-                            .background(colors.surface, bubbleShape)
-                            .border(1.dp, colors.spectrum.getOrElse(2) { colors.water }.copy(alpha = 0.20f), bubbleShape)
-                    },
-                )
-                .padding(start = if (isYou) 12.dp else 14.dp, end = 12.dp, top = 11.dp, bottom = 11.dp),
-        ) {
-            // role stamp for agent turns (double-tap it to copy the body)
-            if (!isYou) {
-                Row(
-                    Modifier.pointerInput(step.id) {
-                        detectTapGestures(
-                            onDoubleTap = {
-                                clipboard.setText(AnnotatedString(step.body))
-                                copied = true
-                            },
-                            onLongPress = {
-                                if (step.messageId != null) rewindArmed = !rewindArmed
-                            },
-                        )
-                    },
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        if (copied) "copied" else step.label.lowercase(),
-                        color = if (copied) colors.water else colors.dim,
-                        fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 1.2.sp,
+            Column(
+                Modifier
+                    .widthIn(max = 328.dp)
+                    .clip(bubbleShape)
+                    .then(
+                        if (isYou) {
+                            Modifier
+                                .background(colors.surface, bubbleShape)
+                                .border(1.dp, colors.rule, bubbleShape)
+                        } else {
+                            Modifier
+                                .background(colors.surface, bubbleShape)
+                                .border(1.dp, colors.spectrum.getOrElse(2) { colors.water }.copy(alpha = 0.20f), bubbleShape)
+                        },
                     )
-                    if (step.tag.isNotEmpty() && !copied) {
+                    .padding(start = if (isYou) 12.dp else 14.dp, end = 12.dp, top = 11.dp, bottom = 11.dp),
+            ) {
+                // role stamp for agent turns (double-tap it to copy the body)
+                if (!isYou) {
+                    Row(
+                        Modifier.pointerInput(step.id) {
+                            detectTapGestures(
+                                onDoubleTap = {
+                                    clipboard.setText(AnnotatedString(step.body))
+                                    copied = true
+                                },
+                                onLongPress = {
+                                    if (step.messageId != null) rewindArmed = !rewindArmed
+                                },
+                            )
+                        },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
-                            "  ${step.tag}",
-                            color = colors.faint, fontFamily = Mono, fontSize = 10.sp,
+                            if (copied) "copied" else step.label.lowercase(),
+                            color = if (copied) colors.water else colors.dim,
+                            fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 1.2.sp,
+                        )
+                        if (step.tag.isNotEmpty() && !copied) {
+                            Text(
+                                "  ${step.tag}",
+                                color = colors.faint, fontFamily = Mono, fontSize = 10.sp,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
+
+                if (step.think != null) {
+                    ThinkSection(step.think, colors)
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                if (isYou && step.images.isNotEmpty()) {
+                    // A sent image must be visible in the bubble, not only as a
+                    // chip above the composer before sending.
+                    UserImages(step.images, colors)
+                    if (step.body.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            step.body,
+                            color = colors.fg, fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp,
+                        )
+                    }
+                } else if (step.running && step.body.isBlank()) {
+                    Text("thinking…", color = colors.water.copy(alpha = 0.5f + 0.5f * pulse), fontFamily = Mono, fontSize = 14.sp)
+                } else {
+                    val body = step.body.ifBlank { step.summary }
+                    // Assistant prose is markdown; the user's own words and every
+                    // other row stay literal, so "what I typed is what I see".
+                    if (step.kind == StepKind.ASSISTANT) {
+                        MarkdownBody(
+                            markdown = body,
+                            colors = colors,
+                            cwd = cwd,
+                            exists = exists,
+                            touchedPaths = touchedPaths,
+                            onOpenFile = onOpenFile,
+                        )
+                    } else {
+                        Text(
+                            body,
+                            color = colors.fg, fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp,
                         )
                     }
                 }
-                Spacer(Modifier.height(6.dp))
-            }
 
-            if (step.think != null) {
-                ThinkSection(step.think, colors)
-                Spacer(Modifier.height(8.dp))
-            }
-
-            if (step.running && step.body.isBlank()) {
-                Text("thinking…", color = colors.water.copy(alpha = 0.5f + 0.5f * pulse), fontFamily = Mono, fontSize = 14.sp)
-            } else {
-                val body = step.body.ifBlank { step.summary }
-                // Assistant prose is markdown; the user's own words and every
-                // other row stay literal, so "what I typed is what I see".
-                if (step.kind == StepKind.ASSISTANT) {
-                    MarkdownBody(
-                        markdown = body,
-                        colors = colors,
-                        cwd = cwd,
-                        exists = exists,
-                        touchedPaths = touchedPaths,
-                        onOpenFile = onOpenFile,
-                    )
-                } else {
+                val mid = step.messageId
+                if (htmlPath != null) {
+                    Spacer(Modifier.height(8.dp))
                     Text(
-                        body,
-                        color = colors.fg, fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp,
+                        "\u25b6 view",
+                        color = colors.water, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .testTag("canvas-view-${step.id}")
+                            .clip(RoundedCornerShape(6.dp))
+                            .border(1.dp, colors.water.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                            .clickable { onOpenCanvas(htmlPath) }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
                     )
                 }
-            }
-
-            val mid = step.messageId
-            if (htmlPath != null) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "\u25b6 view",
-                    color = colors.water, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .testTag("canvas-view-${step.id}")
-                        .clip(RoundedCornerShape(6.dp))
-                        .border(1.dp, colors.water.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
-                        .clickable { onOpenCanvas(htmlPath) }
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                )
-            }
-            if (rewindArmed && mid != null) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "rewind to here",
-                    color = colors.water, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .border(1.dp, colors.water.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
-                        .clickable {
-                            onRewind(mid)
-                            rewindArmed = false
-                        }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                        .testTag("rewind-${step.id}"),
-                )
-            }
-
-            if (step.rows.isNotEmpty()) {
-                if (step.kind == StepKind.SUBAGENT) {
-                    SubagentBubble(step, colors, onExpandSubagent)
-                } else {
-                    ToolPocket(step, colors, pulse)
+                if (rewindArmed && mid != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "rewind to here",
+                        color = colors.water, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .border(1.dp, colors.water.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                            .clickable {
+                                onRewind(mid)
+                                rewindArmed = false
+                            }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .testTag("rewind-${step.id}"),
+                    )
                 }
             }
         }
@@ -708,74 +730,61 @@ private fun MessageRow(
 }
 
 /**
- * A subagent as its own card inside the message bubble: the task, a live status
- * dot, and the child's steps. Tapping the header loads the full transcript on
- * demand (the collapsed form only carries the first few steps).
+ * The images attached to a user turn, drawn inside the bubble. Each decodes its
+ * base64 to a thumbnail once, memoised on the payload; when the bytes cannot be
+ * decoded it falls back to a labelled chip so the attachment is never invisible.
  */
 @Composable
-private fun SubagentBubble(step: UiStep, colors: LumenColors, onExpand: (UiStep) -> Unit) {
-    val loaded = step.childSteps.isNotEmpty()
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .animateContentSize(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMediumLow,
-                ),
-            )
-            .padding(top = 10.dp),
-    ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(colors.water.copy(alpha = 0.10f))
-                .border(1.dp, colors.water.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
-                .clickable(enabled = step.childId != null) { onExpand(step) }
-                .padding(horizontal = 11.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                Modifier
-                    .size(8.dp)
-                    .clip(WaterShapes.droplet(tail = 0.55f))
-                    .background(
-                        when {
-                            step.failed -> colors.danger()
-                            else -> colors.water
-                        },
-                    ),
-            )
-            Spacer(Modifier.width(9.dp))
-            Text("subagent", color = colors.water, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 1.sp)
-            Spacer(Modifier.weight(1f))
-            Text(
-                when {
-                    step.childLoading -> "loading…"
-                    step.running -> "running…"
-                    else -> if (loaded) "collapse" else "open"
-                },
-                color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp,
-            )
-        }
-        val steps: List<UiStep> = if (loaded) step.childSteps else {
-            step.rows.map { (k, v) ->
-                UiStep(id = "kid:$k:$v", kind = StepKind.TOOL, label = k, tag = "", summary = v, body = v)
+private fun UserImages(images: List<UiImage>, colors: LumenColors) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        for (image in images) {
+            val bitmap = remember(image.base64) {
+                runCatching {
+                    val bytes = Base64.decode(image.base64, Base64.DEFAULT)
+                    if (bytes.isEmpty()) null else BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                }.getOrNull()
             }
-        }
-        Column(Modifier.padding(start = 10.dp, top = 7.dp)) {
-            for (kid in steps) {
-                Row(Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(5.dp).clip(WaterShapes.droplet(tail = 0.5f)).background(colors.faint))
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = image.name,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .widthIn(min = 120.dp, max = 240.dp)
+                        .heightIn(max = 200.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(1.dp, colors.rule, RoundedCornerShape(10.dp))
+                        .testTag("msg-image"),
+                )
+            } else {
+                Row(
+                    Modifier
+                        .widthIn(max = 260.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(colors.bg.copy(alpha = 0.4f))
+                        .border(1.dp, colors.water.copy(alpha = 0.30f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                        .testTag("msg-image"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier
+                            .size(20.dp)
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(colors.water.copy(alpha = 0.16f))
+                            .border(1.dp, colors.water.copy(alpha = 0.45f), RoundedCornerShape(5.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("img", color = colors.water, fontFamily = Mono, fontSize = 7.5.sp)
+                    }
                     Spacer(Modifier.width(9.dp))
-                    Text(kid.label, color = colors.dim, fontFamily = Mono, fontSize = 11.5.sp)
-                    if (kid.summary.isNotEmpty()) {
-                        Spacer(Modifier.width(8.dp))
+                    Column(Modifier.weight(1f)) {
                         Text(
-                            kid.summary, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
+                            image.name,
+                            color = colors.fg, fontFamily = Mono, fontSize = 11.5.sp,
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
+                        Text(image.mime, color = colors.faint, fontFamily = Mono, fontSize = 10.sp)
                     }
                 }
             }
@@ -806,164 +815,229 @@ private fun Droplet(
 }
 
 /**
- * The tool calls for a message, as a compact pocket inside the bubble. Collapsed
- * it is a single "▸ 3 tools · read, edit, bash" line; tapping expands the calls
- * with tight padding and each output preview clamped to two lines.
+ * A tool or subagent call as its own inset card — deliberately unlike an answer
+ * bubble: a leading accent stripe, a compact monospace header (glyph, name, a
+ * one-line summary, a status pill) and a body that stays hidden until tapped.
+ * The expanded body is the only place raw output, rows or a child transcript
+ * show; it is bounded and scrolls in place.
  */
 @Composable
-private fun ToolPocket(step: UiStep, colors: LumenColors, pulse: Float) {
-    var expanded by remember(step.id) { mutableStateOf(false) }
-    val edge = colors.spectrum.getOrElse(2) { colors.water }
+private fun ToolCard(
+    step: UiStep,
+    colors: LumenColors,
+    pulse: Float,
+    startExpanded: Boolean,
+    onExpandSubagent: (UiStep) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember(step.id, startExpanded) { mutableStateOf(startExpanded) }
+    val isSub = step.kind == StepKind.SUBAGENT
+    val accent = when {
+        step.failed -> colors.danger()
+        step.running -> colors.water.copy(alpha = 0.5f + 0.5f * pulse)
+        else -> colors.spectrum.getOrElse(2) { colors.water }
+    }
     val count = step.merged.coerceAtLeast(1)
-    val names = remember(step.toolNames, step.rows, step.label) {
-        step.toolNames.ifEmpty { step.rows.map { it.first.lowercase() } }
+    val names = remember(step.toolNames, step.rows, step.label, isSub) {
+        step.toolNames.ifEmpty { if (isSub) emptyList() else step.rows.map { it.first.lowercase() } }
             .asSequence()
             .map { it.lowercase() }
             .filter { it.isNotBlank() }
             .distinct()
             .take(4)
             .toList()
-            .ifEmpty { listOf(step.label.lowercase()) }
     }
-    val summary = buildString {
-        append(if (expanded) "\u25be " else "\u25b8 ")
-        append(if (count > 1) "$count tools" else "1 tool")
-        if (names.isNotEmpty()) append(" · " + names.joinToString(", "))
+    val summary = remember(count, names, step.summary, step.label, isSub) {
+        when {
+            count > 1 && names.isNotEmpty() -> "$count tools · " + names.joinToString(", ")
+            count > 1 -> "$count tools"
+            isSub -> step.summary.ifBlank { "subagent" }
+            step.summary.isNotBlank() -> step.summary
+            else -> step.label.lowercase()
+        }
     }
+    val title = (if (isSub) step.label.ifBlank { "subagent" } else step.label.ifBlank { "tool" }).lowercase()
+    val shape = RoundedCornerShape(12.dp)
+
     Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(top = 8.dp)
+        modifier
+            .clip(shape)
+            .background(colors.surface)
+            .border(1.dp, accent.copy(alpha = 0.30f), shape)
             .drawBehind {
+                val x = 1.5.dp.toPx()
                 drawLine(
-                    color = edge.copy(alpha = 0.22f),
-                    start = Offset(0f, 0f),
-                    end = Offset(size.width, 0f),
-                    strokeWidth = 1.dp.toPx(),
-                    pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
-                        floatArrayOf(4.dp.toPx(), 4.dp.toPx()),
-                    ),
+                    color = accent,
+                    start = Offset(x, 0f),
+                    end = Offset(x, size.height),
+                    strokeWidth = 3.dp.toPx(),
                 )
             }
-            .padding(top = 3.dp),
+            .testTag("tool-card"),
     ) {
+        if (step.think != null) {
+            Box(Modifier.padding(start = 10.dp, end = 10.dp, top = 8.dp)) {
+                ThinkSection(step.think, colors)
+            }
+        }
         Row(
             Modifier
                 .fillMaxWidth()
-                .heightIn(min = 30.dp)
-                .clip(RoundedCornerShape(9.dp))
-                .clickable { expanded = !expanded }
-                .padding(horizontal = 9.dp, vertical = 4.dp)
+                .clickable {
+                    if (!expanded && isSub && step.childId != null && step.childSteps.isEmpty()) {
+                        onExpandSubagent(step)
+                    }
+                    expanded = !expanded
+                }
+                .padding(start = 11.dp, end = 10.dp, top = 8.dp, bottom = 8.dp)
                 .testTag("tools-toggle"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ToolStateMark(step.failed, step.running, pulse, colors)
+            ToolGlyph(accent, step.failed, step.running)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                title,
+                color = colors.fg, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
             Spacer(Modifier.width(8.dp))
             Text(
                 summary,
-                color = when {
-                    step.failed -> colors.danger()
-                    step.running -> colors.water.copy(alpha = 0.5f + 0.5f * pulse)
-                    else -> colors.water
-                },
-                fontFamily = Mono, fontSize = 11.sp, letterSpacing = 0.6.sp,
+                color = if (step.failed) colors.danger() else colors.dim,
+                fontFamily = Mono, fontSize = 10.5.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f).testTag("tools-summary"),
             )
-            if (step.running) {
-                Spacer(Modifier.width(8.dp))
-                Text("running", color = colors.faint, fontFamily = Mono, fontSize = 10.sp)
-            }
+            Spacer(Modifier.width(8.dp))
+            ToolStatusPill(step.failed, step.running, step.childLoading, colors)
         }
         AnimatedVisibility(
             visible = expanded,
             enter = expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
             exit = shrinkVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut(),
         ) {
-            // The ONE internal scroll left in the chat: expanded tool output can
-            // be arbitrarily long, so it is bounded here and scrolls in place.
-            // Everything else (user, assistant, reasoning) renders inline and
-            // lets a drag scroll the transcript.
-            val toolScroll = rememberScrollState()
-            val atToolBottom by remember {
-                derivedStateOf { toolScroll.value >= toolScroll.maxValue - 2 }
-            }
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 240.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .nestedScroll(BlockScrollChaining),
-            ) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(toolScroll)
-                        .padding(top = 2.dp, bottom = 8.dp),
-                ) {
-                    for ((k, r) in step.rows.withIndex()) {
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(colors.bg.copy(alpha = 0.35f))
-                                .padding(horizontal = 9.dp, vertical = 4.dp)
-                                .testTag("tool-row-$k"),
-                            verticalAlignment = Alignment.Top,
-                        ) {
-                            Text(
-                                if (step.failed) "\u00d7" else "\u2713",
-                                color = if (step.failed) colors.danger() else colors.water,
-                                fontFamily = Mono, fontSize = 10.5.sp,
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(r.first, color = colors.fg, fontFamily = Mono, fontSize = 11.5.sp)
-                                if (r.second.isNotEmpty()) {
-                                    Text(
-                                        r.second, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
-                                        lineHeight = 15.sp,
-                                        modifier = Modifier.testTag("tool-output-$k"),
-                                    )
-                                }
-                            }
-                        }
-                        if (k != step.rows.lastIndex) Spacer(Modifier.height(3.dp))
-                    }
-                }
-                // Gentle hint that the bounded output scrolls further.
-                if (!atToolBottom) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(22.dp)
-                            .align(Alignment.BottomCenter)
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(colors.surface.copy(alpha = 0f), colors.surface),
-                                ),
-                            ),
-                    )
-                }
-            }
+            ToolCardBody(step, colors, isSub)
         }
     }
 }
 
-/** A small state dot for a tool run: danger when failed, pulsing while running. */
+/**
+ * The expanded tool/subagent body: a bounded scroll region holding the parsed
+ * rows (or the child transcript for a subagent), falling back to the raw output
+ * when there are no rows. This is the only place raw output is drawn.
+ */
 @Composable
-private fun ToolStateMark(failed: Boolean, running: Boolean, pulse: Float, colors: LumenColors) {
-    val shape = WaterShapes.droplet(tail = 0.55f)
+private fun ToolCardBody(step: UiStep, colors: LumenColors, isSub: Boolean) {
+    val toolScroll = rememberScrollState()
+    val atBottom by remember { derivedStateOf { toolScroll.value >= toolScroll.maxValue - 2 } }
+    val entries: List<Pair<String, String>> = if (isSub && step.childSteps.isNotEmpty()) {
+        step.childSteps.map { it.label to it.summary }
+    } else {
+        step.rows
+    }
     Box(
         Modifier
-            .size(9.dp)
-            .then(
-                when {
-                    failed -> Modifier.background(colors.danger(), shape)
-                    running -> Modifier.background(colors.water.copy(alpha = 0.35f + 0.5f * pulse), shape)
-                    else -> Modifier.background(colors.water.copy(alpha = 0.85f), shape)
-                },
-            ),
+            .fillMaxWidth()
+            .heightIn(max = 240.dp)
+            .nestedScroll(BlockScrollChaining),
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(toolScroll)
+                .padding(start = 12.dp, end = 10.dp, top = 2.dp, bottom = 10.dp),
+        ) {
+            if (entries.isEmpty()) {
+                Text(
+                    step.body.ifBlank { step.summary },
+                    color = colors.dim, fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp,
+                    modifier = Modifier.testTag("tool-output-0"),
+                )
+            } else {
+                for ((k, r) in entries.withIndex()) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(colors.bg.copy(alpha = 0.35f))
+                            .padding(horizontal = 9.dp, vertical = 4.dp)
+                            .testTag("tool-row-$k"),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        Text(
+                            if (step.failed) "\u00d7" else "\u2713",
+                            color = if (step.failed) colors.danger() else colors.water,
+                            fontFamily = Mono, fontSize = 10.5.sp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(r.first, color = colors.fg, fontFamily = Mono, fontSize = 11.5.sp)
+                            if (r.second.isNotEmpty() && r.second != r.first) {
+                                Text(
+                                    r.second, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
+                                    lineHeight = 15.sp,
+                                    modifier = Modifier.testTag("tool-output-$k"),
+                                )
+                            }
+                        }
+                    }
+                    if (k != entries.lastIndex) Spacer(Modifier.height(3.dp))
+                }
+            }
+        }
+        // Gentle hint that the bounded output scrolls further.
+        if (!atBottom) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(22.dp)
+                    .align(Alignment.BottomCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(colors.surface.copy(alpha = 0f), colors.surface),
+                        ),
+                    ),
+            )
+        }
+    }
+}
+
+/** A small rounded tool glyph: a mono chevron, tinted by state. */
+@Composable
+private fun ToolGlyph(accent: Color, failed: Boolean, running: Boolean) {
+    Box(
+        Modifier
+            .size(16.dp)
+            .clip(RoundedCornerShape(5.dp))
+            .background(accent.copy(alpha = if (running) 0.14f else 0.12f))
+            .border(1.dp, accent.copy(alpha = 0.50f), RoundedCornerShape(5.dp)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            if (failed) "!" else "\u203a",
+            color = accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Bold,
+        )
+    }
+}
+
+/** A compact status pill: failed (danger), running (water) or ok (mint). */
+@Composable
+private fun ToolStatusPill(failed: Boolean, running: Boolean, loading: Boolean, colors: LumenColors) {
+    val (label, tint) = when {
+        failed -> "failed" to colors.danger()
+        running -> "running" to colors.water
+        loading -> "loading" to colors.faint
+        else -> "ok" to colors.spectrum.getOrElse(3) { colors.water }
+    }
+    Text(
+        label,
+        color = tint, fontFamily = Mono, fontSize = 9.5.sp, letterSpacing = 0.6.sp,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(tint.copy(alpha = 0.14f))
+            .border(1.dp, tint.copy(alpha = 0.35f), RoundedCornerShape(50))
+            .padding(horizontal = 7.dp, vertical = 2.dp)
+            .testTag("tool-status"),
     )
 }
 
