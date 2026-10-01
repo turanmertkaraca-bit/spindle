@@ -107,6 +107,7 @@ class MainActivity : ComponentActivity() {
                     peek = state.peek,
                     onClosePeek = viewModel::closePeek,
                     onOpenFile = viewModel::openFile,
+                    onRevert = viewModel::revert,
                     cwd = viewModel.workspacePath,
                     exists = viewModel::fileExists,
                     touchedPaths = state.changes.byFile().keys,

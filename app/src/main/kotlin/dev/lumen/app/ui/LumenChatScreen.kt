@@ -95,6 +95,7 @@ import dev.lumen.app.PendingAsk
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
+import dev.spindle.core.model.FileEdit
 import dev.spindle.core.model.RunChanges
 import dev.spindle.core.model.Usage
 import java.util.Locale
@@ -226,6 +227,8 @@ fun LumenChatScreen(
     onClosePeek: () -> Unit = {},
     /** Open a referenced file in the peek sheet, optionally at a 1-based line. */
     onOpenFile: (String, Int?) -> Unit = { _, _ -> },
+    /** Revert a changed file to its pre-edit snapshot. */
+    onRevert: (FileEdit) -> Unit = {},
     /** Workspace root handed to the pure [dev.spindle.core.refs.ReferenceResolver]. */
     cwd: String = "",
     /** Existence gate handed to the resolver: cwd-relative path -> is a file. */
@@ -394,7 +397,7 @@ fun LumenChatScreen(
                 ErrorNotice(error, colors, onEditKey)
             }
             if (changes.editCount > 0) {
-                ChangesCard(changes, colors)
+                ChangesCard(changes, colors, onRevert, onOpenFile)
             }
             UsageMeter(usage, colors)
             ask?.let {
@@ -947,7 +950,12 @@ private fun oneLine(s: String): String =
  * each file opens to its unified diff in a monospace block.
  */
 @Composable
-private fun ChangesCard(changes: RunChanges, colors: LumenColors) {
+private fun ChangesCard(
+    changes: RunChanges,
+    colors: LumenColors,
+    onRevert: (FileEdit) -> Unit = {},
+    onOpenFile: (String, Int?) -> Unit = { _, _ -> },
+) {
     val clipboard = LocalClipboardManager.current
     var expanded by remember { mutableStateOf(false) }
     var openFile by remember { mutableStateOf<String?>(null) }
@@ -1008,10 +1016,25 @@ private fun ChangesCard(changes: RunChanges, colors: LumenColors) {
                         Text(
                             path, color = colors.dim, fontFamily = Mono, fontSize = 11.5.sp,
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { onOpenFile(path, null) }
+                                .padding(vertical = 2.dp)
+                                .testTag("changes-file-$path"),
                         )
                         Spacer(Modifier.width(8.dp))
                         Text("+$added −$removed", color = colors.water, fontFamily = Mono, fontSize = 11.sp)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "revert",
+                            color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { edits.lastOrNull()?.let(onRevert) }
+                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                                .testTag("changes-revert-$path"),
+                        )
                     }
                     AnimatedVisibility(visible = fileOpen) {
                         val diff = edits.joinToString("\n") { it.unifiedDiff }.trim()

@@ -24,6 +24,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -96,6 +97,31 @@ class LumenChatScreenTest {
         compose.onNodeWithText("BODY 0 full text").assertIsDisplayed()
         compose.onNodeWithText("BODY 3 full text").assertIsDisplayed()
         compose.onNodeWithTag("composer").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a changed file row reverts and opens the peek`() {
+        val changes = mutableStateOf(sampleChanges())
+        var reverted: FileEdit? = null
+        var opened: String? = null
+        compose.setContent {
+            LumenChatScreen(
+                steps(1), input = "", busy = false, error = null, modifier = viewport, ambient = false,
+                changes = changes.value,
+                onRevert = { reverted = it },
+                onOpenFile = { path, _ -> opened = path },
+            )
+        }
+        compose.onNodeWithTag("changes-toggle").performClick()
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("changes-revert-RopeLayout.kt", useUnmergedTree = true).performClick()
+        compose.waitForIdle()
+        assertEquals("RopeLayout.kt", reverted?.path)
+
+        compose.onNodeWithTag("changes-file-StepMapper.kt", useUnmergedTree = true).performClick()
+        compose.waitForIdle()
+        assertEquals("StepMapper.kt", opened)
     }
 
     @Test

@@ -11,8 +11,11 @@ import dev.lumen.app.platform.AndroidShellExecutor
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
+import dev.spindle.core.model.FileEdit
 import dev.spindle.core.model.RunChanges
 import dev.spindle.core.model.Usage
+import dev.spindle.core.store.RevertResult
+import dev.spindle.core.store.Reverter
 import dev.spindle.core.store.SnapshotStore
 import dev.spindle.core.tool.ShellExecutor
 import dev.spindle.tool.HostShellExecutor
@@ -442,6 +445,35 @@ class ChatViewModel(
     fun closePeek() {
         _state.value = _state.value.copy(peek = null)
     }
+
+    // ---- revert ----
+
+    /**
+     * Undo the latest recorded edit of [edit]'s path: restore its pre-edit
+     * snapshot to disk and drop every change row for that path. A missing
+     * snapshot store or a failed restore surfaces as [ChatState.error].
+     */
+    fun revert(edit: FileEdit) {
+        val snapshots = snapshots
+        if (snapshots == null) {
+            _state.value = _state.value.copy(error = "revert unavailable")
+            return
+        }
+        viewModelScope.launch {
+            val session = _state.value.currentSessionId ?: edit.sessionId.value
+            when (val result = Reverter.revertLatest(snapshots, SessionId(session), edit.path, workspace)) {
+                is RevertResult.Restored -> _state.value = _state.value.copy(
+                    changes = RunChanges(edits = _state.value.changes.edits.filterNot { it.path == edit.path }),
+                    error = null,
+                )
+                is RevertResult.Failed -> _state.value =
+                    _state.value.copy(error = "revert failed: ${result.reason}")
+            }
+        }
+    }
+
+    /** Open a changed file in the peek sheet (workspace-relative path). */
+    fun openChangedFile(path: String) = openFile(path)
 
     // ---- chat ----
 
