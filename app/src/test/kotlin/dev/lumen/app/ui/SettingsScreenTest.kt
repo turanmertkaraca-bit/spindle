@@ -2,11 +2,11 @@ package dev.lumen.app.ui
 
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.dp
 import org.junit.Rule
 import org.junit.Test
@@ -48,11 +48,11 @@ class SettingsScreenTest {
             )
         }
 
-        compose.onNodeWithTag("budget-2").performScrollTo().performClick()
+        compose.onNodeWithTag("budget-2").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         assertEquals(2.0, picked)
 
-        compose.onNodeWithTag("budget-off").performScrollTo().performClick()
+        compose.onNodeWithTag("budget-off").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         assertEquals(0.0, picked)
 
