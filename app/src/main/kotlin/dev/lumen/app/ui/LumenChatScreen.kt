@@ -90,6 +90,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.lumen.app.FilePeek
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
@@ -218,6 +219,18 @@ fun LumenChatScreen(
     usage: Usage = Usage(),
     /** Structured file changes for this run; the card hides when empty. */
     changes: RunChanges = RunChanges.EMPTY,
+    /** The file currently shown in the peek sheet, or null when closed. */
+    peek: FilePeek? = null,
+    /** Dismiss the peek sheet (tap outside or the close affordance). */
+    onClosePeek: () -> Unit = {},
+    /** Open a referenced file in the peek sheet, optionally at a 1-based line. */
+    onOpenFile: (String, Int?) -> Unit = { _, _ -> },
+    /** Workspace root handed to the pure [dev.spindle.core.refs.ReferenceResolver]. */
+    cwd: String = "",
+    /** Existence gate handed to the resolver: cwd-relative path -> is a file. */
+    exists: (String) -> Boolean = { false },
+    /** Paths changed this run; references to them get a stronger style. */
+    touchedPaths: Set<String> = emptySet(),
     /** Off in tests/CI so the "answer landed" haptic never fires there. */
     haptics: Boolean = true,
 ) {
@@ -294,83 +307,90 @@ fun LumenChatScreen(
         }
     }
 
-    Column(modifier.fillMaxSize().background(colors.bg).imePadding()) {
-        // Prism bloom: soft iridescent washes rather than a flat page.
-        Box(Modifier.fillMaxWidth().weight(1f)) {
-            Bloom(colors, Modifier.matchParentSize())
-            Column(Modifier.fillMaxSize()) {
-                if (onHome != null) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(start = 10.dp, end = 16.dp, top = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "‹",
-                            color = colors.dim, fontFamily = Mono, fontSize = 20.sp,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { onHome() }
-                                .padding(horizontal = 8.dp, vertical = 2.dp)
-                                .testTag("home"),
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            title.ifBlank { "chat" },
-                            color = colors.fg, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-                Box(Modifier.weight(1f).fillMaxWidth()) {
-                    if (count == 0) {
-                        EmptyState(colors, Modifier.align(Alignment.Center))
-                    } else {
-                        LazyColumn(
-                            state = listState,
-                            flingBehavior = flingBehavior,
-                            contentPadding = PaddingValues(start = 8.dp, end = 12.dp, top = 12.dp, bottom = 14.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.fillMaxSize().testTag("timeline"),
+    Box(modifier.fillMaxSize().background(colors.bg).imePadding()) {
+        Column(Modifier.fillMaxSize()) {
+            // Prism bloom: soft iridescent washes rather than a flat page.
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                Bloom(colors, Modifier.matchParentSize())
+                Column(Modifier.fillMaxSize()) {
+                    if (onHome != null) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 10.dp, end = 16.dp, top = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            itemsIndexed(display, key = { _, s -> s.id }) { index, step ->
-                                MessageRow(
-                                    step = step,
-                                    colors = colors,
-                                    pulse = pulse,
-                                    open = forceOpenIndex == index,
-                                    onExpandSubagent = onExpandSubagent,
-                                    modifier = Modifier.animateItem(),
-                                )
-                            }
+                            Text(
+                                "‹",
+                                color = colors.dim, fontFamily = Mono, fontSize = 20.sp,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { onHome() }
+                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                                    .testTag("home"),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                title.ifBlank { "chat" },
+                                color = colors.fg, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
                         }
                     }
-                    // "new content below" cue: floats above the composer and
-                    // scrolls to the newest bubble on tap; hides once at the tail.
-                    if (showNewCue) {
-                        Box(
-                            Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 10.dp),
-                        ) {
-                            NewCue(colors) {
-                                showNewCue = false
-                                scope.launch { listState.animateScrollToItem((count - 1).coerceAtLeast(0)) }
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        if (count == 0) {
+                            EmptyState(colors, Modifier.align(Alignment.Center))
+                        } else {
+                            LazyColumn(
+                                state = listState,
+                                flingBehavior = flingBehavior,
+                                contentPadding = PaddingValues(start = 8.dp, end = 12.dp, top = 12.dp, bottom = 14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                modifier = Modifier.fillMaxSize().testTag("timeline"),
+                            ) {
+                                itemsIndexed(display, key = { _, s -> s.id }) { index, step ->
+                                    MessageRow(
+                                        step = step,
+                                        colors = colors,
+                                        pulse = pulse,
+                                        open = forceOpenIndex == index,
+                                        onExpandSubagent = onExpandSubagent,
+                                        cwd = cwd,
+                                        exists = exists,
+                                        touchedPaths = touchedPaths,
+                                        onOpenFile = onOpenFile,
+                                        modifier = Modifier.animateItem(),
+                                    )
+                                }
+                            }
+                        }
+                        // "new content below" cue: floats above the composer and
+                        // scrolls to the newest bubble on tap; hides once at the tail.
+                        if (showNewCue) {
+                            Box(
+                                Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 10.dp),
+                            ) {
+                                NewCue(colors) {
+                                    showNewCue = false
+                                    scope.launch { listState.animateScrollToItem((count - 1).coerceAtLeast(0)) }
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        if (error != null) {
-            ErrorNotice(error, colors, onEditKey)
+            if (error != null) {
+                ErrorNotice(error, colors, onEditKey)
+            }
+            if (changes.editCount > 0) {
+                ChangesCard(changes, colors)
+            }
+            UsageMeter(usage, colors)
+            Composer(input, busy, colors, onInput, onSend, onStop, onToggleTheme, onEditKey)
         }
-        if (changes.editCount > 0) {
-            ChangesCard(changes, colors)
-        }
-        UsageMeter(usage, colors)
-        Composer(input, busy, colors, onInput, onSend, onStop, onToggleTheme, onEditKey)
+        peek?.let { FilePeekOverlay(it, colors, onClosePeek) }
     }
 }
 
@@ -435,6 +455,10 @@ private fun MessageRow(
     pulse: Float,
     open: Boolean,
     onExpandSubagent: (UiStep) -> Unit = {},
+    cwd: String = "",
+    exists: (String) -> Boolean = { false },
+    touchedPaths: Set<String> = emptySet(),
+    onOpenFile: (String, Int?) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
@@ -513,7 +537,14 @@ private fun MessageRow(
                 // Assistant prose is markdown; the user's own words and every
                 // other row stay literal, so "what I typed is what I see".
                 if (step.kind == StepKind.ASSISTANT) {
-                    MarkdownBody(body, colors)
+                    MarkdownBody(
+                        markdown = body,
+                        colors = colors,
+                        cwd = cwd,
+                        exists = exists,
+                        touchedPaths = touchedPaths,
+                        onOpenFile = onOpenFile,
+                    )
                 } else {
                     Text(
                         body,
@@ -1120,6 +1151,111 @@ private fun Composer(
                     color = if (busy || canSend) colors.bg else colors.faint,
                     fontFamily = Mono, fontSize = if (busy) 13.sp else 18.sp, fontWeight = FontWeight.Bold,
                 )
+            }
+        }
+    }
+}
+
+/**
+ * A dismissible file peek: a bottom sheet showing the referenced path, a
+ * scrollable monospace body with 1-based line numbers, and the highlighted line
+ * tinted with the accent. Tapping the scrim or "close" dismisses it; the capped
+ * body notes truncation.
+ */
+@Composable
+private fun FilePeekOverlay(peek: FilePeek, colors: LumenColors, onClose: () -> Unit) {
+    val listState = rememberLazyListState()
+    val highlight = peek.highlight
+    LaunchedEffect(peek.path, highlight) {
+        if (highlight != null && highlight in 1..peek.lines.size) {
+            listState.scrollToItem(highlight - 1)
+        }
+    }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = if (colors.dark) 0.62f else 0.38f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClose,
+            )
+            .testTag("file-peek"),
+    ) {
+        Column(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
+                .background(colors.surface)
+                .border(
+                    1.dp,
+                    colors.spectrum.getOrElse(2) { colors.water }.copy(alpha = 0.25f),
+                    RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
+                )
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) {}
+                .padding(bottom = 10.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 12.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    peek.path,
+                    color = colors.fg, fontFamily = Mono, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).testTag("peek-path"),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "close",
+                    color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { onClose() }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .testTag("peek-close"),
+                )
+            }
+            if (peek.truncated) {
+                Text(
+                    "truncated at ${peek.lines.size} lines",
+                    color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.4.sp,
+                    modifier = Modifier
+                        .padding(start = 16.dp, end = 16.dp, bottom = 6.dp)
+                        .testTag("peek-truncated"),
+                )
+            }
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp).testTag("peek-body"),
+            ) {
+                itemsIndexed(peek.lines) { index, line ->
+                    val n = index + 1
+                    val hl = n == peek.highlight
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(if (hl) colors.accent.copy(alpha = 0.16f) else Color.Transparent)
+                            .then(if (hl) Modifier.testTag("peek-highlight") else Modifier)
+                            .padding(horizontal = 16.dp, vertical = 1.dp),
+                    ) {
+                        Text(
+                            n.toString().padStart(4),
+                            color = if (hl) colors.accent else colors.faint,
+                            fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp,
+                            modifier = Modifier.width(42.dp),
+                        )
+                        Text(
+                            line.ifEmpty { " " },
+                            color = if (hl) colors.fg else colors.dim,
+                            fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp,
+                        )
+                    }
+                }
             }
         }
     }

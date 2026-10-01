@@ -337,6 +337,30 @@ class ScreenshotTest {
         )
     }
 
+    /** A linked file reference inside assistant prose (the peek is not opened). */
+    @Test fun light_file_reference() = shoot("light_file_reference.png") {
+        LumenChatScreen(
+            steps = listOf(
+                UiStep("u1", StepKind.YOU, "YOU", "a1b2c3", "where is the fix", "where is the fix?"),
+                UiStep(
+                    "a1", StepKind.ASSISTANT, "ASSISTANT", "d1e2f3", "the fix is in App.kt",
+                    "The fix lands in **src/App.kt:42** — set the cookie before the redirect, " +
+                        "then see `src/App.kt:12` for the surrounding context.",
+                ),
+            ),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Light,
+            ambient = false,
+            onToggleTheme = {},
+            onEditKey = {},
+            cwd = "/workspace",
+            exists = { true },
+            onOpenFile = { _, _ -> },
+        )
+    }
+
     /** A very long regular message renders fully inline, with no nested scroll. */
     @Test fun light_long_inline_no_scroll() = shoot("light_long_inline.png") {
         LumenChatScreen(

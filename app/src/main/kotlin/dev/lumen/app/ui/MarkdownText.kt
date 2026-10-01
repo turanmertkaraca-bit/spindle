@@ -2,6 +2,7 @@ package dev.lumen.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,42 +16,71 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.spindle.core.refs.ReferenceResolver
+import dev.spindle.core.refs.tag
 import dev.spindle.core.text.Markdown
 import dev.spindle.core.text.MdBlock
 import dev.spindle.core.text.MdSpan
 
 private val MdMono = FontFamily.Monospace
 
+/** Annotation tags the linked runs carry; both sit on the reference range. */
+private const val FILE_TAG = "file"
+private const val FILE_LINE_TAG = "file-line"
+
 /**
  * Renders assistant prose as markdown using [LumenColors] only. The parse is
  * pure and memoised on the source string, so streaming updates re-parse at most
  * once per body change. User turns and reasoning stay plain text elsewhere.
+ *
+ * When [cwd] is non-empty, inline spans are scanned by [ReferenceResolver] and
+ * every existing file reference becomes an accent-underlined tap target calling
+ * [onOpenFile]. Fenced code blocks stay inert (they are rendered raw, never
+ * scanned). [exists] gates candidates (no dead taps); [touchedPaths] marks
+ * references to files changed this run with a subtly stronger weight.
  */
 @Composable
-fun MarkdownBody(markdown: String, colors: LumenColors, modifier: Modifier = Modifier) {
+fun MarkdownBody(
+    markdown: String,
+    colors: LumenColors,
+    modifier: Modifier = Modifier,
+    cwd: String = "",
+    exists: (String) -> Boolean = { false },
+    touchedPaths: Set<String> = emptySet(),
+    onOpenFile: (String, Int?) -> Unit = { _, _ -> },
+) {
     val blocks = remember(markdown) { Markdown.parse(markdown) }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         for (block in blocks) {
             when (block) {
                 is MdBlock.Heading -> MarkdownHeading(block, colors)
-                is MdBlock.Paragraph -> MarkdownParagraph(block.spans, colors)
-                is MdBlock.Bullet -> MarkdownList(block.items, colors, ordered = false)
-                is MdBlock.Ordered -> MarkdownList(block.items, colors, ordered = true)
+                is MdBlock.Paragraph -> MarkdownParagraph(block.spans, colors, cwd, exists, touchedPaths, onOpenFile)
+                is MdBlock.Bullet -> MarkdownList(block.items, colors, ordered = false, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile)
+                is MdBlock.Ordered -> MarkdownList(block.items, colors, ordered = true, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile)
                 is MdBlock.Code -> MarkdownCode(block, colors)
             }
         }
@@ -77,18 +107,33 @@ private fun MarkdownHeading(block: MdBlock.Heading, colors: LumenColors) {
 }
 
 @Composable
-private fun MarkdownParagraph(spans: List<MdSpan>, colors: LumenColors) {
-    Text(
-        markdownAnnotated(spans, colors),
-        color = colors.fg,
-        fontFamily = MdMono,
+private fun MarkdownParagraph(
+    spans: List<MdSpan>,
+    colors: LumenColors,
+    cwd: String,
+    exists: (String) -> Boolean,
+    touchedPaths: Set<String>,
+    onOpenFile: (String, Int?) -> Unit,
+) {
+    LinkedText(
+        text = markdownAnnotated(spans, colors, cwd, exists, touchedPaths),
+        colors = colors,
         fontSize = 14.sp,
         lineHeight = 21.sp,
+        onOpenFile = onOpenFile,
     )
 }
 
 @Composable
-private fun MarkdownList(items: List<List<MdSpan>>, colors: LumenColors, ordered: Boolean) {
+private fun MarkdownList(
+    items: List<List<MdSpan>>,
+    colors: LumenColors,
+    ordered: Boolean,
+    cwd: String,
+    exists: (String) -> Boolean,
+    touchedPaths: Set<String>,
+    onOpenFile: (String, Int?) -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         for ((index, item) in items.withIndex()) {
             Row(Modifier.fillMaxWidth()) {
@@ -100,12 +145,12 @@ private fun MarkdownList(items: List<List<MdSpan>>, colors: LumenColors, ordered
                     lineHeight = 21.sp,
                 )
                 Spacer(Modifier.width(8.dp))
-                Text(
-                    markdownAnnotated(item, colors),
-                    color = colors.fg,
-                    fontFamily = MdMono,
+                LinkedText(
+                    text = markdownAnnotated(item, colors, cwd, exists, touchedPaths),
+                    colors = colors,
                     fontSize = 14.sp,
                     lineHeight = 21.sp,
+                    onOpenFile = onOpenFile,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -147,23 +192,114 @@ private fun MarkdownCode(block: MdBlock.Code, colors: LumenColors) {
     }
 }
 
-/** Builds the annotated run for a list of inline spans, palette-aware. */
-private fun markdownAnnotated(spans: List<MdSpan>, colors: LumenColors): AnnotatedString =
-    buildAnnotatedString {
-        for (span in spans) {
-            val link = span.linkUrl != null
-            val style = SpanStyle(
-                fontWeight = if (span.bold) FontWeight.Bold else null,
-                fontStyle = if (span.italic) FontStyle.Italic else null,
-                fontFamily = if (span.code) FontFamily.Monospace else null,
-                color = when {
-                    link -> colors.accent
-                    span.code -> colors.water
-                    else -> Color.Unspecified
-                },
-                background = if (span.code) colors.bg.copy(alpha = 0.6f) else Color.Unspecified,
-                textDecoration = if (link) TextDecoration.Underline else null,
-            )
-            withStyle(style) { append(span.text) }
+/**
+ * A markdown run that may carry file-reference annotations. Taps are mapped
+ * back to the tapped character offset through the [TextLayoutResult], so only
+ * the reference range responds; when nothing is linked this is a plain [Text].
+ * A click semantics action is exposed so the link is reachable (and testable)
+ * from accessibility even though it is not a separate node.
+ */
+@Composable
+private fun LinkedText(
+    text: AnnotatedString,
+    colors: LumenColors,
+    onOpenFile: (String, Int?) -> Unit,
+    modifier: Modifier = Modifier,
+    fontSize: TextUnit = 14.sp,
+    lineHeight: TextUnit = 21.sp,
+) {
+    val refs = text.getStringAnnotations(FILE_TAG, 0, text.length)
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+
+    fun refAt(offset: Int): Pair<String, Int?>? {
+        val path = text.getStringAnnotations(FILE_TAG, offset, offset).firstOrNull()?.item ?: return null
+        val line = text.getStringAnnotations(FILE_LINE_TAG, offset, offset).firstOrNull()?.item?.toIntOrNull()
+        return path to line
+    }
+
+    val openFirst: () -> Boolean = {
+        val first = refs.firstOrNull()
+        if (first == null) {
+            false
+        } else {
+            val line = text.getStringAnnotations(FILE_LINE_TAG, first.start, first.end)
+                .firstOrNull()?.item?.toIntOrNull()
+            onOpenFile(first.item, line)
+            true
         }
     }
+
+    Text(
+        text = text,
+        color = colors.fg,
+        fontFamily = MdMono,
+        fontSize = fontSize,
+        lineHeight = lineHeight,
+        onTextLayout = { layout = it },
+        modifier = modifier.then(
+            if (refs.isEmpty()) {
+                Modifier
+            } else {
+                Modifier
+                    .pointerInput(text) {
+                        detectTapGestures { pos ->
+                            val l = layout ?: return@detectTapGestures
+                            refAt(l.getOffsetForPosition(pos))?.let { (path, line) -> onOpenFile(path, line) }
+                        }
+                    }
+                    .semantics { onClick(label = "open file reference") { openFirst() } }
+            },
+        ),
+    )
+}
+
+/**
+ * Builds the annotated run for a list of inline spans, palette-aware. Each span
+ * is scanned independently for file references (so offsets stay local), then
+ * the matches are underlined, annotated with their cwd-relative path + line,
+ * and — for files touched this run — given a slightly heavier weight.
+ */
+private fun markdownAnnotated(
+    spans: List<MdSpan>,
+    colors: LumenColors,
+    cwd: String,
+    exists: (String) -> Boolean,
+    touchedPaths: Set<String>,
+): AnnotatedString = buildAnnotatedString {
+    for (span in spans) {
+        val spanStart = length
+        val link = span.linkUrl != null
+        val style = SpanStyle(
+            fontWeight = if (span.bold) FontWeight.Bold else null,
+            fontStyle = if (span.italic) FontStyle.Italic else null,
+            fontFamily = if (span.code) FontFamily.Monospace else null,
+            color = when {
+                link -> colors.accent
+                span.code -> colors.water
+                else -> Color.Unspecified
+            },
+            background = if (span.code) colors.bg.copy(alpha = 0.6f) else Color.Unspecified,
+            textDecoration = if (link) TextDecoration.Underline else null,
+        )
+        withStyle(style) { append(span.text) }
+
+        if (cwd.isEmpty() || span.text.isEmpty()) continue
+        val refs = tag(ReferenceResolver.resolve(span.text, cwd, exists), touchedPaths)
+        for (ref in refs) {
+            val from = spanStart + ref.start
+            val to = spanStart + ref.end
+            if (from < 0 || to > length || from >= to) continue
+            addStyle(
+                SpanStyle(
+                    color = colors.accent,
+                    textDecoration = TextDecoration.Underline,
+                    fontWeight = if (ref.touched) FontWeight.SemiBold else null,
+                ),
+                from,
+                to,
+            )
+            addStringAnnotation(FILE_TAG, ref.path, from, to)
+            addStringAnnotation(FILE_LINE_TAG, ref.line?.toString() ?: "", from, to)
+        }
+    }
+}

@@ -35,6 +35,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import java.nio.file.Path
 
 /** One row on the home screen. */
@@ -43,6 +45,18 @@ data class SessionRow(
     val title: String,
     val updatedAt: Long,
     val preview: String,
+)
+
+/**
+ * The file shown in the peek sheet. [lines] is UTF-8, split without a trailing
+ * newline artifact, and capped at [MAX_PEEK_LINES] (see [truncated]); [highlight]
+ * is the 1-based line the reference pointed at, or null.
+ */
+data class FilePeek(
+    val path: String,
+    val lines: List<String>,
+    val highlight: Int? = null,
+    val truncated: Boolean = false,
 )
 
 /** What the screens need to draw, in one immutable snapshot. */
@@ -65,6 +79,8 @@ data class ChatState(
     val usage: Usage = Usage(),
     /** Structured file changes the agent made in this session. */
     val changes: RunChanges = RunChanges.EMPTY,
+    /** The file currently shown in the peek sheet, or null when closed. */
+    val peek: FilePeek? = null,
 )
 
 /**
@@ -197,6 +213,7 @@ class ChatViewModel(
             error = null,
             usage = Usage(),
             changes = RunChanges.EMPTY,
+            peek = null,
         )
     }
 
@@ -216,6 +233,74 @@ class ChatViewModel(
             SessionRow(s.id.value, s.title.ifBlank { "chat" }, s.updatedAt, preview)
         }
         _state.value = _state.value.copy(sessions = rows)
+    }
+
+    // ---- file peek ----
+
+    /** The workspace root as a string, for the markdown reference resolver. */
+    val workspacePath: String get() = workspace.toString()
+
+    /**
+     * Resolve a candidate against the workspace and refuse anything that
+     * escapes it (absolute paths outside the root, or `..` climbs). Returns the
+     * normalized absolute path, or null.
+     */
+    private fun inWorkspace(path: String): Path? {
+        val base = workspace.toAbsolutePath().normalize()
+        val resolved = runCatching { base.resolve(path).normalize() }.getOrNull() ?: return null
+        return if (resolved.startsWith(base)) resolved else null
+    }
+
+    /** True when [rel] resolves to a real file inside the workspace. */
+    fun fileExists(rel: String): Boolean {
+        val target = inWorkspace(rel) ?: return false
+        return Files.isRegularFile(target)
+    }
+
+    /**
+     * Open [path] (relative to the workspace, or absolute under it) in the peek
+     * sheet, highlighting the 1-based [line] when supplied. Escapes are refused
+     * and failures surface as [ChatState.error] without opening anything.
+     */
+    fun openFile(path: String, line: Int? = null) {
+        val target = inWorkspace(path)
+        if (target == null) {
+            _state.value = _state.value.copy(error = "cannot open $path")
+            return
+        }
+        try {
+            val lines = ArrayList<String>()
+            var truncated = false
+            Files.newBufferedReader(target, StandardCharsets.UTF_8).use { reader ->
+                while (true) {
+                    val l = reader.readLine() ?: break
+                    if (lines.size >= MAX_PEEK_LINES) {
+                        truncated = true
+                        break
+                    }
+                    lines.add(l)
+                }
+            }
+            val rel = runCatching {
+                workspace.toAbsolutePath().normalize().relativize(target).toString().replace('\\', '/')
+            }.getOrDefault(path)
+            _state.value = _state.value.copy(
+                peek = FilePeek(
+                    path = rel,
+                    lines = lines,
+                    highlight = line?.takeIf { it > 0 },
+                    truncated = truncated,
+                ),
+                error = null,
+            )
+        } catch (t: Throwable) {
+            _state.value = _state.value.copy(error = t.message ?: "cannot open $path")
+        }
+    }
+
+    /** Dismiss the peek sheet. */
+    fun closePeek() {
+        _state.value = _state.value.copy(peek = null)
     }
 
     // ---- chat ----
@@ -372,6 +457,9 @@ class ChatViewModel(
         s.replace(Regex("\\s+"), " ").trim().let { if (it.length > max) it.take(max) + "…" else it }
 
     companion object {
+        /** Upper bound on peeked lines; longer files are truncated with a note. */
+        const val MAX_PEEK_LINES = 2000
+
         fun Factory(context: Context, workspace: java.io.File): androidx.lifecycle.ViewModelProvider.Factory =
             object : androidx.lifecycle.ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")

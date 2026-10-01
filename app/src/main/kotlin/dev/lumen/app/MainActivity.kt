@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity() {
 
             BackHandler(enabled = route != "home" || state.currentSessionId != null) {
                 when {
+                    state.peek != null -> viewModel.closePeek()
                     route == "settings" -> route = "home"
                     route == "chat" -> {
                         viewModel.closeChat()
@@ -103,6 +104,12 @@ class MainActivity : ComponentActivity() {
                     onExpandSubagent = viewModel::expandSubagent,
                     usage = state.usage,
                     changes = state.changes,
+                    peek = state.peek,
+                    onClosePeek = viewModel::closePeek,
+                    onOpenFile = viewModel::openFile,
+                    cwd = viewModel.workspacePath,
+                    exists = viewModel::fileExists,
+                    touchedPaths = state.changes.byFile().keys,
                 )
                 route == "settings" -> SettingsScreen(
                     colors = colors,
