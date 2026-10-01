@@ -147,6 +147,7 @@ class MainActivity : ComponentActivity() {
                     },
                     onExpandSubagent = viewModel::expandSubagent,
                     usage = state.usage,
+                    budgetUsd = state.maxCostUsd,
                     changes = state.changes,
                     todos = state.todos,
                     peek = state.peek,
@@ -267,6 +268,8 @@ class MainActivity : ComponentActivity() {
                     modifier = modifier,
                     askBeforeTools = state.askBeforeTools,
                     onAskBeforeTools = viewModel::setAskBeforeTools,
+                    maxCostUsd = state.maxCostUsd,
+                    onMaxCost = viewModel::setMaxCost,
                     onStorage = { route = "storage" },
                     onDiagnostics = { route = "diagnostics" },
                 )

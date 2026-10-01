@@ -50,6 +50,9 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
     askBeforeTools: Boolean = false,
     onAskBeforeTools: (Boolean) -> Unit = {},
+    /** Per-session cost ceiling in USD; 0 means unlimited. */
+    maxCostUsd: Double = 0.0,
+    onMaxCost: (Double) -> Unit = {},
     /** Open the storage manager. */
     onStorage: () -> Unit = {},
     /** Open the diagnostics screen (Linux environment + event log). */
@@ -126,6 +129,21 @@ fun SettingsScreen(
             chip(colors, "system", theme == "system", "theme-system") { onTheme("system") }
             chip(colors, "light", theme == "light", "theme-light") { onTheme("light") }
             chip(colors, "dark", theme == "dark", "theme-dark") { onTheme("dark") }
+        }
+
+        Spacer(Modifier.height(24.dp))
+        Text("budget", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "stop a session before it spends more than this",
+            color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            chip(colors, "off", maxCostUsd <= 0.0, "budget-off") { onMaxCost(0.0) }
+            chip(colors, "\$0.50", maxCostUsd == 0.5, "budget-050") { onMaxCost(0.5) }
+            chip(colors, "\$2", maxCostUsd == 2.0, "budget-2") { onMaxCost(2.0) }
+            chip(colors, "\$5", maxCostUsd == 5.0, "budget-5") { onMaxCost(5.0) }
         }
 
         Spacer(Modifier.height(24.dp))

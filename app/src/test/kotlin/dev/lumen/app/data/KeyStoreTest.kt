@@ -43,4 +43,14 @@ class KeyStoreTest {
         store.agentMode = "plan"
         assertEquals("plan", newStore().agentMode, "a new instance sees the persisted mode")
     }
+
+    @Test
+    fun `max cost defaults to unlimited and round-trips`() {
+        val store = newStore()
+        assertEquals(0.0, store.maxCostUsd, "unlimited is the default")
+        store.maxCostUsd = 2.0
+        assertEquals(2.0, newStore().maxCostUsd, "a new instance sees the persisted ceiling")
+        store.maxCostUsd = 0.0
+        assertEquals(0.0, newStore().maxCostUsd)
+    }
 }

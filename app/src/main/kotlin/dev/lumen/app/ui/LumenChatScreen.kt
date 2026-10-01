@@ -250,6 +250,8 @@ fun LumenChatScreen(
     ambient: Boolean = true,
     /** Rolled-up session token/cost totals; the meter hides until non-zero. */
     usage: Usage = Usage(),
+    /** Per-session cost ceiling in USD; 0 means no limit (meter shows spend only). */
+    budgetUsd: Double = 0.0,
     /** Structured file changes for this run; the card hides when empty. */
     changes: RunChanges = RunChanges.EMPTY,
     /** Live todo list for the current session; the board hides when empty. */
@@ -502,7 +504,7 @@ fun LumenChatScreen(
                 ChangesCard(changes, colors, onRevert, onOpenFile)
             }
             TodoBoard(todos, colors, pulse)
-            UsageMeter(usage, colors)
+            UsageMeter(usage, budgetUsd, colors)
             ask?.let {
                 AskCard(it, colors, onAnswerPermission, onAnswerQuestion, onSkipQuestion)
             }
@@ -1591,17 +1593,26 @@ private fun ChangesCard(
 }
 
 /**
- * A thin usage footer: rolled-up context tokens and, when known, cost. Hidden
- * entirely until the session has spent tokens, so an idle chat stays clean.
+ * A thin usage footer: rolled-up context tokens, cost, and — when a budget is
+ * set — spend against the ceiling. Hidden entirely until the session has spent
+ * tokens, so an idle chat stays clean.
  */
 @Composable
-private fun UsageMeter(usage: Usage, colors: LumenColors) {
+private fun UsageMeter(usage: Usage, budgetUsd: Double, colors: LumenColors) {
     if (usage.totalTokens <= 0) return
     val tokens = String.format(Locale.US, "%.1fk tok", usage.totalTokens / 1000.0)
     val cost = if (usage.costUsd > 0.0) String.format(Locale.US, " · \$%.4f", usage.costUsd) else ""
+    val cap = if (budgetUsd > 0.0) {
+        val pct = (usage.costUsd / budgetUsd * 100).coerceIn(0.0, 999.0)
+        String.format(Locale.US, " / \$%.2f (%.0f%%)", budgetUsd, pct)
+    } else {
+        ""
+    }
+    val over = budgetUsd > 0.0 && usage.costUsd >= budgetUsd
     Text(
-        tokens + cost,
-        color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.5.sp,
+        tokens + cost + cap,
+        color = if (over) colors.accent else colors.faint,
+        fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.5.sp,
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = 16.dp, end = 16.dp, top = 3.dp, bottom = 1.dp)

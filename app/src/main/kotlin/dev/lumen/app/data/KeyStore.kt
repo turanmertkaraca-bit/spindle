@@ -42,6 +42,16 @@ class KeyStore(context: Context) {
         set(value) = prefs.edit().putBoolean("askBeforeTools", value).apply()
 
     /**
+     * Per-session cost ceiling in USD. `0.0` means unlimited (the default), so
+     * the loop runs year-round unless the user opts into a budget. When set, the
+     * loop emits a `BudgetWarning` as spend approaches it and stops a run that
+     * would exceed it.
+     */
+    var maxCostUsd: Double
+        get() = prefs.getFloat("maxCostUsd", 0f).toDouble()
+        set(value) = prefs.edit().putFloat("maxCostUsd", value.toFloat()).apply()
+
+    /**
      * Scope keys (tool name, or a bash command's first token / file path) the
      * user chose "always allow" for. Stored as a single delimited string; an
      * empty or missing value means nothing has been remembered yet.

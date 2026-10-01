@@ -25,6 +25,7 @@ import dev.spindle.core.store.SnapshotStore
 import dev.spindle.core.tool.ShellExecutor
 import dev.spindle.tool.HostShellExecutor
 import dev.spindle.core.agent.AgentLoop
+import dev.spindle.core.agent.ContextBudget
 import dev.spindle.core.agent.PermissionGate
 import dev.spindle.core.agent.QuestionGate
 import dev.spindle.core.event.AgentEvent
@@ -219,6 +220,9 @@ data class ChatState(
     val theme: String = "system",
     /** Running session token/cost totals, rolled up from each message. */
     val usage: Usage = Usage(),
+
+    /** Per-session cost ceiling in USD; 0 means unlimited. */
+    val maxCostUsd: Double = 0.0,
     /** Structured file changes the agent made in this session. */
     val changes: RunChanges = RunChanges.EMPTY,
     /** The current session's live todo list, refreshed on each rebuild. */
@@ -281,6 +285,7 @@ class ChatViewModel(
             theme = keys.theme,
             askBeforeTools = keys.askBeforeTools,
             agentMode = keys.agentMode,
+            maxCostUsd = keys.maxCostUsd,
         ),
     )
     val state: StateFlow<ChatState> = _state.asStateFlow()
@@ -404,6 +409,13 @@ class ChatViewModel(
     fun setAskBeforeTools(on: Boolean) {
         keys.askBeforeTools = on
         _state.value = _state.value.copy(askBeforeTools = on)
+    }
+
+    /** Set the per-session cost ceiling in USD (0 = unlimited) and persist it. */
+    fun setMaxCost(usd: Double) {
+        val value = if (usd.isFinite() && usd > 0) usd else 0.0
+        keys.maxCostUsd = value
+        _state.value = _state.value.copy(maxCostUsd = value)
     }
 
     /** Drop every pending prompt and wake its waiter with cancellation. */
@@ -1631,7 +1643,10 @@ class ChatViewModel(
             )
             try {
                 withContext(Dispatchers.IO) { runCatching { watcher?.start() } }
-                loop.prompt(sid, text, keys.model, _state.value.agentMode)
+                loop.prompt(
+                    sid, text, keys.model, _state.value.agentMode,
+                    budget = ContextBudget(maxCostUsd = _state.value.maxCostUsd.takeIf { it > 0 }),
+                )
                 diag("run finished")
             } catch (t: Throwable) {
                 diag("error: " + (t.message ?: t.toString()))
