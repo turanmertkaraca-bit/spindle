@@ -65,8 +65,10 @@ Key capabilities already working on device:
   and orphaned RUNNING sessions are reconciled to IDLE on cold start.
 - Indirect changes: `WorkspaceWatcher` polls the workspace during a run and folds
   script-made writes into the Changes view.
-- Budget: `AgentEvent.BudgetWarning` fires once at `ContextBudget.warnAtFraction`
-  (and at the ceiling). Not user-configured yet, so dormant in practice.
+- Budget: per-session cost ceiling is configurable in Settings (off / $0.50 /
+  $2 / $5, persisted in KeyStore). The loop emits `AgentEvent.BudgetWarning` at
+  `ContextBudget.warnAtFraction`, stops at the ceiling, and the usage meter shows
+  spend against the limit.
 - Adaptive two-pane: files cockpit shows list + editor side by side on >=600dp.
 
 ## 4. CI status — all green
