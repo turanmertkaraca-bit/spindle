@@ -50,6 +50,10 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
     askBeforeTools: Boolean = false,
     onAskBeforeTools: (Boolean) -> Unit = {},
+    /** Open the storage manager. */
+    onStorage: () -> Unit = {},
+    /** Open the diagnostics screen (Linux environment + event log). */
+    onDiagnostics: () -> Unit = {},
 ) {
     Column(
         modifier.fillMaxSize().background(colors.bg).imePadding()
@@ -156,6 +160,13 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(24.dp))
+        Text("system", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
+        Spacer(Modifier.height(8.dp))
+        SettingsLink(colors, "storage", "what is using space · clear safe caches", "settings-storage", onStorage)
+        Spacer(Modifier.height(6.dp))
+        SettingsLink(colors, "diagnostics", "linux environment · event log", "settings-diagnostics", onDiagnostics)
+
+        Spacer(Modifier.height(24.dp))
         Box(
             Modifier.fillMaxWidth()
                 .clip(RoundedCornerShape(50))
@@ -167,6 +178,33 @@ fun SettingsScreen(
         ) {
             Text("update api key", color = colors.fg, fontFamily = Mono, fontSize = 14.sp)
         }
+    }
+}
+
+@Composable
+private fun SettingsLink(
+    colors: LumenColors,
+    label: String,
+    subtitle: String,
+    tag: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, colors.rule, RoundedCornerShape(12.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 11.dp)
+            .testTag(tag),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(label, color = colors.fg, fontFamily = Mono, fontSize = 14.sp)
+            Spacer(Modifier.height(2.dp))
+            Text(subtitle, color = colors.dim, fontFamily = Mono, fontSize = 11.sp)
+        }
+        Text("›", color = colors.accent, fontFamily = Mono, fontSize = 18.sp)
     }
 }
 

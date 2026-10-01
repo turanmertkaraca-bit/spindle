@@ -24,12 +24,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import dev.lumen.app.ui.CanvasScreen
+import dev.lumen.app.ui.DiagnosticsScreen
 import dev.lumen.app.ui.FilesScreen
 import dev.lumen.app.ui.HomeScreen
 import dev.lumen.app.ui.KeyScreen
 import dev.lumen.app.ui.LumenChatScreen
 import dev.lumen.app.ui.LumenColors
 import dev.lumen.app.ui.SettingsScreen
+import dev.lumen.app.ui.StorageScreen
 import dev.lumen.app.ui.TerminalScreen
 import java.io.File
 
@@ -91,6 +93,7 @@ class MainActivity : ComponentActivity() {
                         viewModel.closeTerminal()
                         route = terminalReturn
                     }
+                    route == "storage" || route == "diagnostics" -> route = "settings"
                     route == "settings" -> route = "home"
                     route == "chat" -> {
                         viewModel.closeChat()
@@ -220,6 +223,31 @@ class MainActivity : ComponentActivity() {
                         modifier = modifier,
                     )
                 }
+                route == "storage" -> {
+                    LaunchedEffect(Unit) { viewModel.scanStorage() }
+                    StorageScreen(
+                        colors = colors,
+                        storage = state.storage,
+                        onRescan = viewModel::scanStorage,
+                        onClear = viewModel::clearStorageCategory,
+                        onClearAll = viewModel::clearCache,
+                        onBack = { route = "settings" },
+                        modifier = modifier,
+                    )
+                }
+                route == "diagnostics" -> {
+                    LaunchedEffect(Unit) { viewModel.refreshLinuxEnvironment() }
+                    DiagnosticsScreen(
+                        colors = colors,
+                        diag = state.diag,
+                        linux = state.linux,
+                        onInstallDebian = viewModel::installDebian,
+                        onRefreshLinux = viewModel::refreshLinuxEnvironment,
+                        onClear = viewModel::clearDiagnostics,
+                        onBack = { route = "settings" },
+                        modifier = modifier,
+                    )
+                }
                 route == "settings" -> SettingsScreen(
                     colors = colors,
                     provider = state.provider,
@@ -236,6 +264,8 @@ class MainActivity : ComponentActivity() {
                     modifier = modifier,
                     askBeforeTools = state.askBeforeTools,
                     onAskBeforeTools = viewModel::setAskBeforeTools,
+                    onStorage = { route = "storage" },
+                    onDiagnostics = { route = "diagnostics" },
                 )
                 else -> HomeScreen(
                     colors = colors,

@@ -7,8 +7,10 @@ import dev.lumen.app.data.AndroidSessionStore
 import dev.lumen.app.data.AndroidSnapshotStore
 import dev.lumen.app.data.KeyStore
 import dev.lumen.app.data.ProviderCatalogue
+import dev.lumen.app.platform.AndroidEnvironment
 import dev.lumen.app.platform.AndroidShellExecutor
 import dev.lumen.app.platform.AndroidTerminal
+import dev.lumen.app.platform.DebianEnvironment
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
@@ -40,11 +42,14 @@ import dev.spindle.core.store.SessionSearch
 import dev.spindle.core.store.SessionStore
 import dev.spindle.tool.DefaultTools
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.io.File
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -116,6 +121,35 @@ data class TerminalState(
     val error: String? = null,
 )
 
+/** One measured area of app storage. [bytes] is always non-negative. */
+data class StorageCategory(
+    val name: String,
+    val bytes: Long,
+    val clearable: Boolean,
+)
+
+/**
+ * The storage breakdown. [scanning] is true while a scan is in flight so the
+ * screen can show progress without blanking the previous numbers.
+ */
+data class StorageReport(
+    val total: Long,
+    val categories: List<StorageCategory>,
+    val scanning: Boolean,
+)
+
+/** One timestamped diagnostics line. [at] is epoch milliseconds. */
+data class DiagLine(val at: Long, val text: String)
+
+/** Alpine/Debian readiness plus the in-flight install state for the UI. */
+data class LinuxEnvironmentState(
+    val alpineReady: Boolean = false,
+    val debianReady: Boolean = false,
+    val debianActive: Boolean = false,
+    val installing: Boolean = false,
+    val progress: String? = null,
+)
+
 /**
  * A gate prompt waiting on the user. [Permission] maps to the approval policy's
  * ASK branch; [Question] maps to the `question` tool. Each carries its own id so
@@ -185,6 +219,12 @@ data class ChatState(
     val attachments: List<PendingImage> = emptyList(),
     /** A soft, non-fatal notice shown above the composer (e.g. no vision). */
     val hint: String? = null,
+    /** The last storage scan, or null before the first one. */
+    val storage: StorageReport? = null,
+    /** Timestamped diagnostics, oldest first, capped at [MAX_DIAG_LINES]. */
+    val diag: List<DiagLine> = emptyList(),
+    /** Alpine/Debian readiness and the Debian install progress. */
+    val linux: LinuxEnvironmentState = LinuxEnvironmentState(),
 )
 
 /**
@@ -200,6 +240,11 @@ class ChatViewModel(
     private val snapshots: SnapshotStore? = null,
     private val ownedSnapshots: AutoCloseable? = null,
     private val shell: ShellExecutor? = null,
+    private val context: Context? = null,
+    private val environment: AndroidEnvironment? = null,
+    private val debian: DebianEnvironment? = null,
+    /** Dispatcher for storage scans, cache clears and the Debian install. */
+    private val io: CoroutineDispatcher = Dispatchers.IO,
 ) : ViewModel() {
 
     private val bus = EventBus()
@@ -330,9 +375,254 @@ class ChatViewModel(
         }
     }
 
+    /** Diagnostics are appended from several threads, so the ring is guarded. */
+    private val diagLines = ArrayDeque<DiagLine>()
+    private val diagLock = Any()
+
     init {
         viewModelScope.launch { refreshSessions() }
         viewModelScope.launch { collectEvents() }
+        refreshLinuxEnvironment()
+    }
+
+    // ---- diagnostics ----
+
+    /** Append one diagnostics line (name/timing only — never tool arguments). */
+    private fun diag(text: String) {
+        val snapshot = synchronized(diagLock) {
+            diagLines.addLast(DiagLine(System.currentTimeMillis(), text))
+            while (diagLines.size > MAX_DIAG_LINES) diagLines.removeFirst()
+            diagLines.toList()
+        }
+        _state.value = _state.value.copy(diag = snapshot)
+    }
+
+    /** Test/teardown seam: record a diagnostics line without a full run. */
+    internal fun recordDiagnostic(text: String) = diag(text)
+
+    /** Drop every recorded diagnostics line. */
+    fun clearDiagnostics() {
+        synchronized(diagLock) { diagLines.clear() }
+        _state.value = _state.value.copy(diag = emptyList())
+    }
+
+    // ---- storage manager ----
+
+    /** Recompute the storage breakdown; always runs on [io], never the main thread. */
+    fun scanStorage() {
+        _state.value = _state.value.copy(
+            storage = (_state.value.storage ?: StorageReport(0, emptyList(), true)).copy(scanning = true),
+        )
+        viewModelScope.launch(io) { publishStorage(measureStorage(scanDeadline())) }
+    }
+
+    /**
+     * Remove ONLY regenerable caches: the app cache dir, the Alpine apk/tmp
+     * caches and the Debian apt/tmp/cache dirs. Project source, the lumen.db
+     * stores, snapshots and keys are never touched. Re-scans afterwards.
+     */
+    fun clearCache() {
+        _state.value = _state.value.copy(
+            storage = (_state.value.storage ?: StorageReport(0, emptyList(), true)).copy(scanning = true),
+        )
+        viewModelScope.launch(io) {
+            runCatching { safeCacheTargets().forEach { deleteTree(it) } }
+            publishStorage(measureStorage(scanDeadline()))
+        }
+    }
+
+    /** Clear only the safe part of [name]; unknown or kept categories are a no-op. */
+    fun clearStorageCategory(name: String) {
+        val targets = safeTargetsFor(name) ?: return
+        _state.value = _state.value.copy(
+            storage = (_state.value.storage ?: StorageReport(0, emptyList(), true)).copy(scanning = true),
+        )
+        viewModelScope.launch(io) {
+            runCatching { targets.forEach { deleteTree(it) } }
+            publishStorage(measureStorage(scanDeadline()))
+        }
+    }
+
+    private fun publishStorage(report: StorageReport) {
+        _state.value = _state.value.copy(storage = report.copy(scanning = false))
+    }
+
+    private fun scanDeadline(): Long = System.currentTimeMillis() + SCAN_BUDGET_MS
+
+    /** Walk the real trees and label them. Pure; call off the main thread. */
+    private fun measureStorage(deadline: Long): StorageReport {
+        val categories = ArrayList<StorageCategory>()
+        categories += StorageCategory(STORAGE_WORKSPACE, sizeOf(workspace.toFile(), deadline), false)
+        environment?.let { categories += StorageCategory(STORAGE_ALPINE, sizeOf(it.rootfs, deadline), true) }
+        debian?.let { categories += StorageCategory(STORAGE_DEBIAN, sizeOf(it.rootfs, deadline), true) }
+        environment?.let { categories += StorageCategory(STORAGE_WRAPPERS, sizeOf(it.wrappersDir, deadline), false) }
+        context?.let { ctx ->
+            categories += StorageCategory(STORAGE_STORES, storeBytes(ctx), false)
+            categories += StorageCategory(STORAGE_LOGS, sizeOfLogs(ctx, deadline), true)
+            categories += StorageCategory(STORAGE_CACHE, sizeOf(ctx.cacheDir, deadline), true)
+        }
+        return StorageReport(categories.sumOf { it.bytes }, categories, false)
+    }
+
+    /** The safe targets behind the "all caches" clear. */
+    private fun safeCacheTargets(): List<File> = buildList {
+        context?.cacheDir?.let { add(it) }
+        environment?.let {
+            add(File(it.rootfs, "var/cache/apk"))
+            add(File(it.rootfs, "tmp"))
+        }
+        debian?.let {
+            val root = it.rootfs
+            add(File(root, "var/cache/apt/archives"))
+            add(File(root, "var/lib/apt/lists"))
+            add(File(root, "tmp"))
+            add(File(root, "root/.cache"))
+            add(File(root, "root/.npm"))
+            add(it.tmpDir)
+        }
+    }
+
+    /** Per-category clear; returns null for anything not safe to clear. */
+    private fun safeTargetsFor(name: String): List<File>? = when (name) {
+        STORAGE_CACHE -> context?.let { listOf(it.cacheDir) }
+        STORAGE_LOGS -> context?.let { ctx ->
+            buildList {
+                ctx.filesDir.listFiles()
+                    ?.filter { it.isFile && it.name.endsWith(".log") }
+                    ?.forEach { add(it) }
+                val logsDir = File(ctx.filesDir, "logs")
+                if (logsDir.isDirectory) add(logsDir)
+            }
+        }
+        STORAGE_ALPINE -> environment?.let {
+            listOf(File(it.rootfs, "var/cache/apk"), File(it.rootfs, "tmp"))
+        }
+        STORAGE_DEBIAN -> debian?.let {
+            val root = it.rootfs
+            listOf(
+                File(root, "var/cache/apt/archives"),
+                File(root, "var/lib/apt/lists"),
+                File(root, "tmp"),
+                File(root, "root/.cache"),
+                File(root, "root/.npm"),
+                it.tmpDir,
+            )
+        }
+        else -> null
+    }
+
+    /** Sum the `lumen.db*` store files (main DB plus its WAL/SHM siblings). */
+    private fun storeBytes(ctx: Context): Long =
+        ctx.filesDir.listFiles()
+            ?.filter { it.isFile && it.name.startsWith("lumen.db") }
+            ?.sumOf { it.length() } ?: 0
+
+    /** Top-level `*.log` files in filesDir plus a `logs` folder when present. */
+    private fun sizeOfLogs(ctx: Context, deadline: Long): Long {
+        var total = ctx.filesDir.listFiles()
+            ?.filter { it.isFile && it.name.endsWith(".log") }
+            ?.sumOf { it.length() } ?: 0
+        val logsDir = File(ctx.filesDir, "logs")
+        if (logsDir.isDirectory) total += sizeOf(logsDir, deadline)
+        return total
+    }
+
+    /** Bounded, symlink-skipping recursive size. Never throws. */
+    private fun sizeOf(f: File, deadline: Long): Long =
+        sizeOf(f, 0, deadline, HashSet())
+
+    private fun sizeOf(f: File, depth: Int, deadline: Long, seen: MutableSet<String>): Long {
+        if (depth > MAX_SCAN_DEPTH || System.currentTimeMillis() > deadline) return 0
+        return try {
+            if (Files.isSymbolicLink(f.toPath())) return 0
+            when {
+                f.isFile -> f.length()
+                !f.isDirectory -> 0L
+                else -> {
+                    val canonical = runCatching { f.canonicalPath }.getOrDefault(f.absolutePath)
+                    if (seen.size > MAX_SCAN_NODES || !seen.add(canonical)) return 0
+                    f.listFiles()?.sumOf { sizeOf(it, depth + 1, deadline, seen) } ?: 0L
+                }
+            }
+        } catch (t: Throwable) {
+            0L
+        }
+    }
+
+    /** Recursive delete that never follows symlinks. Never throws. */
+    private fun deleteTree(f: File) {
+        try {
+            if (Files.isSymbolicLink(f.toPath())) {
+                f.delete()
+                return
+            }
+            if (f.isDirectory) f.listFiles()?.forEach { deleteTree(it) }
+            f.delete()
+        } catch (ignored: Throwable) {
+        }
+    }
+
+    // ---- linux environment ----
+
+    /** Re-read Alpine/Debian readiness off the main thread. */
+    fun refreshLinuxEnvironment() {
+        viewModelScope.launch(io) {
+            _state.value = _state.value.copy(
+                linux = _state.value.linux.copy(
+                    alpineReady = environment?.ready() ?: false,
+                    debianReady = debian?.ready() ?: false,
+                    debianActive = debian?.active() ?: false,
+                ),
+            )
+        }
+    }
+
+    /**
+     * Explicit opt-in Debian install. Never auto-downloads; runs on [io] with
+     * per-step progress reported into both [linux] and [diag]. On success the
+     * state is refreshed and the proot probe re-run.
+     */
+    fun installDebian() {
+        val env = debian ?: return
+        if (_state.value.linux.installing) return
+        _state.value = _state.value.copy(
+            linux = _state.value.linux.copy(installing = true, progress = "starting…"),
+        )
+        diag("debian install: requested")
+        viewModelScope.launch(io) {
+            try {
+                val ok = env.install { message ->
+                    diag("debian install: $message")
+                    _state.value = _state.value.copy(linux = _state.value.linux.copy(progress = message))
+                }
+                if (ok) {
+                    runCatching { env.probe() }
+                    diag("debian install: complete")
+                } else {
+                    diag("debian install: not active — alpine stays the shell")
+                }
+            } catch (t: Throwable) {
+                diag("debian install failed: " + (t.message ?: t.toString()))
+            } finally {
+                _state.value = _state.value.copy(
+                    linux = _state.value.linux.copy(
+                        alpineReady = environment?.ready() ?: false,
+                        debianReady = env.ready(),
+                        debianActive = env.active(),
+                        installing = false,
+                        progress = null,
+                    ),
+                )
+            }
+        }
+    }
+
+    /** Best description of the shell the next run will use, for [diag]. */
+    private fun shellKind(): String = when {
+        debian?.active() == true -> "debian (proot)"
+        environment?.ready() == true -> "alpine"
+        environment != null -> "alpine (installs on first use)"
+        else -> "system shell (fallback)"
     }
 
     // ---- key + settings ----
@@ -974,7 +1264,11 @@ class ChatViewModel(
                 }
                 is AgentEvent.PartUpdated -> rebuild(SessionId(current))
                 is AgentEvent.ToolFinished -> rebuild(SessionId(current))
-                is AgentEvent.ToolCallStarted, is AgentEvent.Progress -> {
+                is AgentEvent.ToolCallStarted -> {
+                    diag("tool: " + e.name)
+                    _state.value = _state.value.copy(steps = StepMapper.applyEvent(_state.value.steps, e))
+                }
+                is AgentEvent.Progress -> {
                     _state.value = _state.value.copy(steps = StepMapper.applyEvent(_state.value.steps, e))
                 }
                 is AgentEvent.UsageUpdated -> _state.value = _state.value.copy(usage = e.usage)
@@ -985,7 +1279,10 @@ class ChatViewModel(
                     _state.value = _state.value.copy(busy = busy)
                     if (!busy) refreshSessions()
                 }
-                is AgentEvent.Error -> _state.value = _state.value.copy(error = e.message)
+                is AgentEvent.Error -> {
+                    diag("error: " + e.message)
+                    _state.value = _state.value.copy(error = e.message)
+                }
                 else -> Unit
             }
         }
@@ -1067,6 +1364,9 @@ class ChatViewModel(
         }
         val blind = attachments.isNotEmpty() && !modelSupportsVision()
 
+        diag("run start: " + oneLine(text, 60).ifBlank { "[image]" })
+        diag("shell: " + shellKind())
+
         // Optimistic echo + busy, both SYNCHRONOUS with the tap, so the user
         // sees their own bubble and the stop affordance instantly instead of
         // waiting for the agent's first event round-trip.
@@ -1116,7 +1416,9 @@ class ChatViewModel(
             )
             try {
                 loop.prompt(sid, text, keys.model, _state.value.agentMode)
+                diag("run finished")
             } catch (t: Throwable) {
+                diag("error: " + (t.message ?: t.toString()))
                 _state.value = _state.value.copy(error = t.message ?: t.toString(), busy = false)
             }
             refreshSessions()
@@ -1126,6 +1428,7 @@ class ChatViewModel(
     fun stop() {
         runJob?.cancel()
         clearAsks()
+        diag("run stopped")
         _state.value = _state.value.copy(busy = false, ask = null)
     }
 
@@ -1152,6 +1455,22 @@ class ChatViewModel(
         /** Upper bound on an HTML page loaded into the canvas: 2 MB, UTF-8. */
         const val MAX_CANVAS_BYTES = 2L * 1024 * 1024
 
+        /** Upper bound on retained diagnostics lines. */
+        const val MAX_DIAG_LINES = 300
+
+        /** Storage scan budget, shared across every measured tree. */
+        private const val SCAN_BUDGET_MS = 20_000L
+        private const val MAX_SCAN_DEPTH = 40
+        private const val MAX_SCAN_NODES = 200_000
+
+        const val STORAGE_WORKSPACE = "project workspace"
+        const val STORAGE_ALPINE = "alpine rootfs"
+        const val STORAGE_DEBIAN = "debian rootfs"
+        const val STORAGE_WRAPPERS = "command wrappers"
+        const val STORAGE_STORES = "session store (lumen.db)"
+        const val STORAGE_LOGS = "logs"
+        const val STORAGE_CACHE = "app cache"
+
         fun Factory(context: Context, workspace: java.io.File): androidx.lifecycle.ViewModelProvider.Factory =
             object : androidx.lifecycle.ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
@@ -1166,6 +1485,9 @@ class ChatViewModel(
                         snapshots = snapshots,
                         ownedSnapshots = snapshots,
                         shell = AndroidShellExecutor(context),
+                        context = context,
+                        environment = AndroidEnvironment(context),
+                        debian = DebianEnvironment(context),
                     ) as T
                 }
             }
