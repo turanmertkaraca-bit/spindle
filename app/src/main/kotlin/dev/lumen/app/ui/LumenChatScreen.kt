@@ -95,7 +95,10 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -955,6 +958,14 @@ private fun ToolCardBody(step: UiStep, colors: LumenColors, isSub: Boolean, puls
                 .verticalScroll(toolScroll)
                 .padding(start = 12.dp, end = 10.dp, top = 2.dp, bottom = 10.dp),
         ) {
+            // The structured inspector sits above the raw output: a compact,
+            // labelled summary of what the tool reported (exit code, duration,
+            // path, counts…). Rows render as today after it.
+            val inspector = remember(step.toolMetadata) { toolInspector(step.toolMetadata) }
+            if (inspector.isNotEmpty()) {
+                InspectorBlock(inspector, colors)
+                Spacer(Modifier.height(7.dp))
+            }
             when {
                 // A subagent's child transcript renders as an indented call tree;
                 // while it is being read, a small spinner row stands in.
@@ -1010,6 +1021,70 @@ private fun ToolCardBody(step: UiStep, colors: LumenColors, isSub: Boolean, puls
                             listOf(colors.surface.copy(alpha = 0f), colors.surface),
                         ),
                     ),
+            )
+        }
+    }
+}
+
+/** Keys the loop uses for bookkeeping, or that the inspector draws elsewhere. */
+private val INTERNAL_METADATA_KEYS = setOf("callId", "toolCallId", "sessionId", "timeout", "timedOut")
+
+/** Friendly labels for the metadata keys we know how to read. */
+private val METADATA_LABELS = mapOf(
+    "exitCode" to "exit",
+    "durationMs" to "duration",
+    "timeoutMs" to "timeout",
+    "path" to "path",
+    "replacements" to "replacements",
+    "files" to "files",
+    "count" to "count",
+)
+
+/**
+ * Turn raw tool metadata into the ordered (label, value) inspector rows. Keys we
+ * know float to the front; duplicates and empty values are dropped; a timeout is
+ * only shown when the call actually timed out.
+ */
+private fun toolInspector(metadata: Map<String, String>): List<Pair<String, String>> {
+    if (metadata.isEmpty()) return emptyList()
+    val timedOut = metadata["timeout"] == "true" || metadata["timedOut"] == "true"
+    val order = listOf("exitCode", "durationMs", "path", "replacements", "files", "count")
+    val out = LinkedHashMap<String, Pair<String, String>>()
+    for (key in order.filter { it in metadata } + metadata.keys.filter { it !in order }) {
+        val raw = metadata[key] ?: continue
+        if (key in INTERNAL_METADATA_KEYS) continue
+        if (key == "timeoutMs" && !timedOut) continue
+        out[key] = (METADATA_LABELS[key] ?: key) to when (key) {
+            "durationMs" -> formatDuration(raw)
+            else -> raw
+        }
+    }
+    return out.values.toList()
+}
+
+private fun formatDuration(raw: String): String {
+    val ms = raw.toLongOrNull() ?: return raw
+    val tenths = (ms + 50) / 100
+    return "${tenths / 10}.${tenths % 10}s"
+}
+
+/** A compact, monospace metadata block drawn above a tool's raw output. */
+@Composable
+private fun InspectorBlock(rows: List<Pair<String, String>>, colors: LumenColors) {
+    Column(Modifier.fillMaxWidth().testTag("tool-inspector")) {
+        for ((i, row) in rows.withIndex()) {
+            Text(
+                text = buildAnnotatedString {
+                    withStyle(SpanStyle(color = colors.dim)) { append(row.first) }
+                    append(" ")
+                    withStyle(SpanStyle(color = colors.fg)) { append(row.second) }
+                },
+                fontFamily = Mono, fontSize = 10.5.sp, lineHeight = 15.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 1.dp)
+                    .testTag("tool-inspector-$i"),
             )
         }
     }

@@ -318,13 +318,22 @@ class AgentLoop(
         gate: PermissionGate,
         agent: AgentConfig,
     ) {
+        val startedAt = clock()
         val tool = tools.get(part.call.name)
         updatePart(sessionId, messageId, part.copy(state = ToolState.RUNNING))
 
         if (tool == null) {
             finishTool(
                 sessionId, messageId,
-                part.copy(state = ToolState.ERROR, result = ToolResult(part.call.id, "Unknown tool: ${part.call.name}", isError = true)),
+                part.copy(
+                    state = ToolState.ERROR,
+                    result = ToolResult(
+                        part.call.id,
+                        "Unknown tool: ${part.call.name}",
+                        isError = true,
+                        metadata = durationMetadata(emptyMap(), startedAt),
+                    ),
+                ),
             )
             return
         }
@@ -338,6 +347,7 @@ class AgentLoop(
                         part.call.id,
                         "Tool not permitted for agent ${agent.name}: ${part.call.name}",
                         isError = true,
+                        metadata = durationMetadata(emptyMap(), startedAt),
                     ),
                 ),
             )
@@ -356,14 +366,14 @@ class AgentLoop(
         var policyApproved = false
         when (approval.decide(request)) {
             ApprovalDecision.DENY -> {
-                finishTool(sessionId, messageId, deniedPart(part, "denied by approval policy"))
+                finishTool(sessionId, messageId, deniedPart(part, "denied by approval policy", startedAt))
                 return
             }
             ApprovalDecision.ASK -> {
                 val ok = gate.request(request.tool, request.detail, request.pattern)
                 approval.remember(request, if (ok) ApprovalDecision.ALLOW else ApprovalDecision.DENY)
                 if (!ok) {
-                    finishTool(sessionId, messageId, deniedPart(part, "denied by user"))
+                    finishTool(sessionId, messageId, deniedPart(part, "denied by user", startedAt))
                     return
                 }
                 policyApproved = true
@@ -371,6 +381,7 @@ class AgentLoop(
             ApprovalDecision.ALLOW -> policyApproved = true
         }
 
+        val runStartedAt = clock()
         val outcome: ToolOutcome = try {
             val ctx = LoopToolContext(
                 sessionId = sessionId,
@@ -401,7 +412,13 @@ class AgentLoop(
             sessionId, messageId,
             part.copy(
                 state = if (outcome.isError) ToolState.ERROR else ToolState.DONE,
-                result = ToolResult(part.call.id, clipped, outcome.isError, outcome.diff, outcome.metadata),
+                result = ToolResult(
+                    part.call.id,
+                    clipped,
+                    outcome.isError,
+                    outcome.diff,
+                    durationMetadata(outcome.metadata, runStartedAt),
+                ),
             ),
         )
 
@@ -419,10 +436,19 @@ class AgentLoop(
         }
     }
 
-    private fun deniedPart(part: Part.Tool, message: String): Part.Tool = part.copy(
+    private fun deniedPart(part: Part.Tool, message: String, startedAt: Long): Part.Tool = part.copy(
         state = ToolState.ERROR,
-        result = ToolResult(part.call.id, message, isError = true),
+        result = ToolResult(part.call.id, message, isError = true, metadata = durationMetadata(emptyMap(), startedAt)),
     )
+
+    /**
+     * Stamp the loop's wall-clock duration into a result's metadata. A tool that
+     * already reported its own [DURATION_KEY] is left untouched; otherwise the
+     * loop measures from [startedAt] and adds it.
+     */
+    private fun durationMetadata(metadata: Map<String, String>, startedAt: Long): Map<String, String> =
+        if (metadata.containsKey(DURATION_KEY)) metadata
+        else metadata + (DURATION_KEY to (clock() - startedAt).toString())
 
     private fun approvalDetail(input: JsonObject): String {
         for (key in listOf("command", "path", "url", "patchText")) {
@@ -549,5 +575,6 @@ class AgentLoop(
         const val COMPACT_MARKER = "[compacted]"
         const val AGENTS_FILE = "AGENTS.md"
         const val MAX_RULES_CHARS = 8_192
+        const val DURATION_KEY = "durationMs"
     }
 }

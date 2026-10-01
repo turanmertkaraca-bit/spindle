@@ -181,6 +181,45 @@ class LumenChatScreenTest {
     }
 
     @Test
+    fun `an expanded tool card shows the structured inspector above its output`() {
+        val s = listOf(
+            UiStep(
+                "t", StepKind.TOOL, "BASH", "x",
+                summary = "uname -a", body = "Linux localhost 5.10.0 aarch64",
+                toolMetadata = mapOf("exitCode" to "0", "durationMs" to "1200"),
+            ),
+        )
+        compose.setContent {
+            LumenChatScreen(s, input = "", busy = false, error = null, modifier = viewport, ambient = false)
+        }
+        // Collapsed: the header only, no inspector.
+        check(compose.onAllNodesWithTag("tool-inspector").fetchSemanticsNodes().isEmpty()) {
+            "a collapsed tool card must not render its inspector"
+        }
+        compose.onNodeWithTag("tools-toggle").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        compose.onNodeWithText("exit 0", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("duration 1.2s", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Linux localhost", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun `a tool card without metadata renders only its output`() {
+        val s = listOf(
+            UiStep("t", StepKind.TOOL, "BASH", "x", summary = "echo hi", body = "raw output line"),
+        )
+        compose.setContent {
+            LumenChatScreen(s, input = "", busy = false, error = null, modifier = viewport, ambient = false)
+        }
+        compose.onNodeWithTag("tools-toggle").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        check(compose.onAllNodesWithTag("tool-inspector").fetchSemanticsNodes().isEmpty()) {
+            "a metadata-free card must not render an inspector"
+        }
+        compose.onNodeWithText("raw output line", substring = true).assertIsDisplayed()
+    }
+
+    @Test
     fun `a user message with an image part shows an image indicator`() {
         compose.setContent {
             LumenChatScreen(

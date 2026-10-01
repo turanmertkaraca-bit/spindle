@@ -68,6 +68,30 @@ class AgentLoopTest {
         override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome = ToolOutcome("ok")
     }
 
+    /** A tool that advances an injected clock so the loop's timing is observable. */
+    private class ClockAdvancingTool(private val onRun: () -> Unit) : Tool {
+        override val spec = ToolSpec(
+            name = "timed",
+            description = "advances the clock",
+            parametersJson = """{"type":"object","properties":{}}""",
+        )
+        override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
+            onRun()
+            return ToolOutcome("done", metadata = mapOf("path" to "src/App.kt"))
+        }
+    }
+
+    /** A tool that reports its own duration, which the loop must not overwrite. */
+    private class SelfTimedTool : Tool {
+        override val spec = ToolSpec(
+            name = "self",
+            description = "reports its own duration",
+            parametersJson = """{"type":"object","properties":{}}""",
+        )
+        override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome =
+            ToolOutcome("done", metadata = mapOf("durationMs" to "42"))
+    }
+
     private fun store() = InMemorySessionStore()
 
     private suspend fun newSession(store: InMemorySessionStore, id: String) {
@@ -230,6 +254,63 @@ class AgentLoopTest {
         assertEquals(FinishReason.ERROR, result.finish)
         assertEquals("boom", result.error)
         assertEquals("partial", result.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+    }
+
+    @Test
+    fun `a tool call records its wall-clock duration in the result metadata`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_1", "timed"),
+                ProviderEvent.ToolCallArgsDelta(0, "{}"),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            listOf(ProviderEvent.TextDelta("done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        var now = 1_000L
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(ClockAdvancingTool { now += 500 })),
+            store = store,
+            bus = EventBus(),
+            clock = { now },
+        )
+        newSession(store, "ses_dur")
+
+        loop.prompt(SessionId("ses_dur"), "go", "fake/fake-1")
+
+        val result = store.messages(SessionId("ses_dur"))
+            .flatMap { it.parts }.filterIsInstance<Part.Tool>().single().result
+        assertEquals("500", result?.metadata?.get("durationMs"))
+        assertEquals("src/App.kt", result?.metadata?.get("path"))
+    }
+
+    @Test
+    fun `a tool that reports its own duration is not overwritten`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_1", "self"),
+                ProviderEvent.ToolCallArgsDelta(0, "{}"),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            listOf(ProviderEvent.TextDelta("done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        var now = 0L
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(SelfTimedTool())),
+            store = store,
+            bus = EventBus(),
+            clock = { now++ },
+        )
+        newSession(store, "ses_self")
+
+        loop.prompt(SessionId("ses_self"), "go", "fake/fake-1")
+
+        val result = store.messages(SessionId("ses_self"))
+            .flatMap { it.parts }.filterIsInstance<Part.Tool>().single().result
+        assertEquals("42", result?.metadata?.get("durationMs"))
     }
 
     @Test

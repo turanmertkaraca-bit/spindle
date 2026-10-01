@@ -70,6 +70,7 @@ object StepMapper {
                                     running = p.state == ToolState.RUNNING || p.state == ToolState.PENDING,
                                     failed = p.state == ToolState.ERROR,
                                     childId = if (isSub) p.result?.metadata?.get("sessionId") else null,
+                                    toolMetadata = p.result?.metadata.orEmpty(),
                                     messageId = m.id.value,
                                 )
                             }
@@ -158,6 +159,7 @@ object StepMapper {
             body = a.body + "\n\n" + b.body,
             rows = a.rows + b.rows,
             toolNames = a.toolNames + b.toolNames,
+            toolMetadata = a.toolMetadata + b.toolMetadata,
             running = a.running || b.running,
             failed = a.failed || b.failed,
         )

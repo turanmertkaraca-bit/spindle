@@ -60,4 +60,9 @@ data class UiStep(
     val images: List<UiImage> = emptyList(),
     /** The store message this row came from; used by rewind. Null for synthetic rows. */
     val messageId: String? = null,
+    /**
+     * Structured metadata reported by the tool result (duration, exit code, path,
+     * counts…), shown in the expanded card's inspector. Empty for non-tool rows.
+     */
+    val toolMetadata: Map<String, String> = emptyMap(),
 )
