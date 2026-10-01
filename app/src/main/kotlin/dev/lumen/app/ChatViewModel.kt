@@ -48,6 +48,7 @@ import dev.spindle.core.store.SearchHit
 import dev.spindle.core.store.SessionSearch
 import dev.spindle.core.store.SessionStore
 import dev.spindle.tool.DefaultTools
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -1706,6 +1707,10 @@ class ChatViewModel(
                     budget = ContextBudget(maxCostUsd = _state.value.maxCostUsd.takeIf { it > 0 }),
                 )
                 diag("run finished")
+            } catch (e: CancellationException) {
+                // A user stop (or a superseding run) is an expected end, not an
+                // error; never paint it as one. Cancellation must still propagate.
+                throw e
             } catch (t: Throwable) {
                 diag("error: " + (t.message ?: t.toString()))
                 _state.value = _state.value.copy(error = t.message ?: t.toString(), busy = false)
