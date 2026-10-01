@@ -28,7 +28,7 @@ class RunServiceTest {
         val controller = Robolectric.buildService(RunService::class.java)
         controller.create()
 
-        controller.startCommand(startIntent(), 0, 1)
+        controller.get().onStartCommand(startIntent(), 0, 1)
 
         val manager = assertNotNull(context.getSystemService(NotificationManager::class.java))
         assertNotNull(
@@ -43,9 +43,9 @@ class RunServiceTest {
     fun `stop command tears down without throwing`() {
         val controller = Robolectric.buildService(RunService::class.java)
         controller.create()
-        controller.startCommand(startIntent(), 0, 1)
+        controller.get().onStartCommand(startIntent(), 0, 1)
 
-        controller.startCommand(
+        controller.get().onStartCommand(
             Intent(context, RunService::class.java).setAction(RunService.ACTION_STOP),
             0,
             2,
