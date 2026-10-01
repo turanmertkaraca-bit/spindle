@@ -16,6 +16,7 @@ object DefaultTools {
             GrepTool(),
             TodoWriteTool(),
             WebFetchTool(),
+            WebSearchTool(),
             QuestionTool(),
             TaskTool(),
         ),

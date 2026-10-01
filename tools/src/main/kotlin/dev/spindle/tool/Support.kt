@@ -10,6 +10,9 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import java.net.InetSocketAddress
+import java.net.ProxySelector
+import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -23,6 +26,44 @@ internal object Limits {
     const val BINARY_SNIFF_BYTES = 8000
     const val BASH_MAX_OUTPUT_CHARS = 50_000
     const val WEB_MAX_CHARS = 20_000
+    const val WEBSEARCH_MAX_CHARS = 12_000
+}
+
+/** Honour the sandbox proxy from the ambient environment when present. */
+internal fun ambientProxySelector(): ProxySelector? {
+    val raw = System.getenv("https_proxy")
+        ?: System.getenv("HTTPS_PROXY")
+        ?: System.getenv("http_proxy")
+        ?: System.getenv("HTTP_PROXY")
+    if (raw.isNullOrBlank()) return null
+    return try {
+        val uri = URI(if (raw.contains("://")) raw else "http://$raw")
+        val host = uri.host ?: return null
+        val port = if (uri.port > 0) uri.port else 80
+        ProxySelector.of(InetSocketAddress(host, port))
+    } catch (e: Exception) {
+        null
+    }
+}
+
+/** Decode the small set of HTML entities that appear in scraped markup. */
+internal fun unescapeHtmlEntities(text: String): String {
+    var result = text
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+    result = Regex("&#([0-9]+);").replace(result) { match ->
+        match.groupValues[1].toIntOrNull()?.let { String(Character.toChars(it)) } ?: match.value
+    }
+    result = Regex("&#[xX]([0-9a-fA-F]+);").replace(result) { match ->
+        match.groupValues[1].toIntOrNull(16)?.let { String(Character.toChars(it)) } ?: match.value
+    }
+    result = Regex("&[a-zA-Z][a-zA-Z0-9]*;").replace(result, "")
+    return result
 }
 
 /**

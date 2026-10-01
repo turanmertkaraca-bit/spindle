@@ -7,8 +7,6 @@ import dev.spindle.core.tool.ToolOutcome
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
-import java.net.InetSocketAddress
-import java.net.ProxySelector
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -59,7 +57,7 @@ class WebFetchTool : Tool {
         val builder = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.NORMAL)
             .connectTimeout(Duration.ofSeconds(15))
-        proxySelector()?.let { builder.proxy(it) }
+        ambientProxySelector()?.let { builder.proxy(it) }
         val client = builder.build()
 
         val request = HttpRequest.newBuilder(uri)
@@ -97,23 +95,6 @@ class WebFetchTool : Tool {
         )
     }
 
-    /** Honour the sandbox proxy from the ambient environment when present. */
-    private fun proxySelector(): ProxySelector? {
-        val raw = System.getenv("https_proxy")
-            ?: System.getenv("HTTPS_PROXY")
-            ?: System.getenv("http_proxy")
-            ?: System.getenv("HTTP_PROXY")
-        if (raw.isNullOrBlank()) return null
-        return try {
-            val uri = URI(if (raw.contains("://")) raw else "http://$raw")
-            val host = uri.host ?: return null
-            val port = if (uri.port > 0) uri.port else 80
-            ProxySelector.of(InetSocketAddress(host, port))
-        } catch (e: Exception) {
-            null
-        }
-    }
-
     private fun stripTags(html: String): String =
         Regex("(?s)<[^>]*>").replace(html, "")
 
@@ -121,7 +102,7 @@ class WebFetchTool : Tool {
         var text = removeNonContent(html)
         text = Regex("(?i)<(br|/p|/div|/li|/tr|/h[1-6])[^>]*>").replace(text, "\n")
         text = stripTags(text)
-        text = unescapeEntities(text)
+        text = unescapeHtmlEntities(text)
         text = Regex("[ \\t\\x0B\\f\\r]+").replace(text, " ")
         text = Regex(" *\\n *").replace(text, "\n")
         text = Regex("\\n{3,}").replace(text, "\n\n")
@@ -144,7 +125,7 @@ class WebFetchTool : Tool {
         text = Regex("(?i)<li[^>]*>").replace(text, "\n- ")
         text = Regex("(?i)<(br|/p|/div|/tr)[^>]*>").replace(text, "\n")
         text = stripTags(text)
-        text = unescapeEntities(text)
+        text = unescapeHtmlEntities(text)
         text = Regex("[ \\t\\x0B\\f\\r]+").replace(text, " ")
         text = Regex(" *\\n *").replace(text, "\n")
         text = Regex("\\n{3,}").replace(text, "\n\n")
@@ -156,25 +137,6 @@ class WebFetchTool : Tool {
         text = Regex("(?is)<style[^>]*>.*?</style>").replace(text, "")
         text = Regex("(?is)<!--.*?-->").replace(text, "")
         return text
-    }
-
-    private fun unescapeEntities(text: String): String {
-        var result = text
-            .replace("&nbsp;", " ")
-            .replace("&amp;", "&")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&#39;", "'")
-            .replace("&apos;", "'")
-        result = Regex("&#([0-9]+);").replace(result) { match ->
-            match.groupValues[1].toIntOrNull()?.let { String(Character.toChars(it)) } ?: match.value
-        }
-        result = Regex("&#[xX]([0-9a-fA-F]+);").replace(result) { match ->
-            match.groupValues[1].toIntOrNull(16)?.let { String(Character.toChars(it)) } ?: match.value
-        }
-        result = Regex("&[a-zA-Z][a-zA-Z0-9]*;").replace(result, "")
-        return result
     }
 
     private companion object {

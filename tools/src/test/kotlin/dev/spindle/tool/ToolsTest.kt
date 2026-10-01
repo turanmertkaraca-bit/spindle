@@ -586,11 +586,11 @@ class ToolsTest {
         assertEquals(
             setOf(
                 "read", "write", "edit", "bash", "apply_patch", "glob",
-                "grep", "todowrite", "webfetch", "question", "task",
+                "grep", "todowrite", "webfetch", "websearch", "question", "task",
             ),
             names,
         )
-        assertEquals(11, specs.size)
+        assertEquals(12, specs.size)
         for (spec in specs) {
             assertTrue(spec.description.isNotBlank(), "blank description for ${spec.name}")
             assertTrue(spec.parametersJson.isNotBlank(), "blank schema for ${spec.name}")
