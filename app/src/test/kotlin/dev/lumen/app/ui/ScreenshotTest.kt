@@ -71,6 +71,27 @@ class ScreenshotTest {
         ),
     )
 
+    /** An assistant turn exercising every markdown block the renderer supports. */
+    private fun markdownSample(): List<UiStep> = listOf(
+        UiStep(
+            "u1", StepKind.YOU, "YOU", "a1b2c3",
+            "how do I fix the redirect",
+            "how do I fix the login redirect loop?",
+        ),
+        UiStep(
+            "a1", StepKind.ASSISTANT, "ASSISTANT", "d1e2f3",
+            "set the cookie first",
+            buildString {
+                append("## The fix\n\n")
+                append("Write the **session cookie** *before* calling `res.redirect()`.\n\n")
+                append("- set the `Set-Cookie` header first\n")
+                append("- then redirect the browser\n")
+                append("- keep the original status code\n\n")
+                append("```kotlin\nres.setHeader(\"Set-Cookie\", cookie)\nres.redirect(\"/\")\n```")
+            },
+        ),
+    )
+
     /** Two files, +12/−3, with real diff bodies so the card has something to open. */
     private fun sampleChanges(): RunChanges {
         val sid = SessionId("ses1")
@@ -261,7 +282,7 @@ class ScreenshotTest {
         LumenChatScreen(
             steps = sample() + UiStep(
                 "long", StepKind.ASSISTANT, "ASSISTANT", "f00d12", "a long answer",
-                (1..40).joinToString("\n") { "line $it — a long assistant answer that has to scroll inside the panel." },
+                (1..40).joinToString("\n") { "line $it — a long assistant answer rendered fully inline without an inner scroll." },
             ),
             input = "",
             busy = false,
@@ -277,13 +298,61 @@ class ScreenshotTest {
         LumenChatScreen(
             steps = sample() + UiStep(
                 "long", StepKind.ASSISTANT, "ASSISTANT", "f00d12", "a long answer",
-                (1..40).joinToString("\n") { "line $it — a long assistant answer that has to scroll inside the panel." },
+                (1..40).joinToString("\n") { "line $it — a long assistant answer rendered fully inline without an inner scroll." },
             ),
             input = "",
             busy = false,
             error = null,
             colors = LumenColors.Light,
             forceOpenIndex = 5,
+            ambient = false,
+            onToggleTheme = {},
+        )
+    }
+
+    /** The markdown renderer: heading, bold/italic, bullets and a code block. */
+    @Test fun light_markdown() = shoot("light_markdown.png") {
+        LumenChatScreen(
+            steps = markdownSample(),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Light,
+            ambient = false,
+            onToggleTheme = {},
+            onEditKey = {},
+        )
+    }
+
+    @Test fun dark_markdown() = shoot("dark_markdown.png") {
+        LumenChatScreen(
+            steps = markdownSample(),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Dark,
+            ambient = false,
+            onToggleTheme = {},
+            onEditKey = {},
+        )
+    }
+
+    /** A very long regular message renders fully inline, with no nested scroll. */
+    @Test fun light_long_inline_no_scroll() = shoot("light_long_inline.png") {
+        LumenChatScreen(
+            steps = listOf(
+                UiStep("u1", StepKind.YOU, "YOU", "a1b2c3", "summarise", "summarise the whole file"),
+                UiStep(
+                    "a1", StepKind.ASSISTANT, "ASSISTANT", "d1e2f3", "long answer",
+                    (1..60).joinToString("\n") {
+                        "line $it — a long regular assistant message rendered inline without an inner scroll region."
+                    },
+                ),
+            ),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Light,
             ambient = false,
             onToggleTheme = {},
         )

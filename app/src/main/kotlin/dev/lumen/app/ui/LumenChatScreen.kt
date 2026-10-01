@@ -75,6 +75,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -116,6 +119,15 @@ private fun calmFling(friction: Float = FLING_FRICTION): FlingBehavior = object 
         }
         return 0f
     }
+}
+
+/**
+ * Keeps a nested scroll local. After the inner scrollable has done all it can,
+ * the leftover delta is consumed here, so hitting the top (or bottom) of the
+ * bounded tool output never chains a drag into the transcript behind it.
+ */
+private val BlockScrollChaining = object : NestedScrollConnection {
+    override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset = available
 }
 
 /** The "failed" colour — an explicit red, independent of the spectrum. */
@@ -317,7 +329,7 @@ fun LumenChatScreen(
                         LazyColumn(
                             state = listState,
                             flingBehavior = flingBehavior,
-                            contentPadding = PaddingValues(start = 8.dp, end = 14.dp, top = 12.dp, bottom = 14.dp),
+                            contentPadding = PaddingValues(start = 8.dp, end = 12.dp, top = 12.dp, bottom = 14.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier.fillMaxSize().testTag("timeline"),
                         ) {
@@ -448,7 +460,7 @@ private fun MessageRow(
 
         Column(
             Modifier
-                .widthIn(max = 300.dp)
+                .widthIn(max = 328.dp)
                 .clip(bubbleShape)
                 .then(
                     if (isYou) {
@@ -461,7 +473,7 @@ private fun MessageRow(
                             .border(1.dp, colors.spectrum.getOrElse(2) { colors.water }.copy(alpha = 0.20f), bubbleShape)
                     },
                 )
-                .padding(start = if (isYou) 14.dp else 16.dp, end = 14.dp, top = 11.dp, bottom = 11.dp),
+                .padding(start = if (isYou) 12.dp else 14.dp, end = 12.dp, top = 11.dp, bottom = 11.dp),
         ) {
             // role stamp for agent turns (double-tap it to copy the body)
             if (!isYou) {
@@ -498,12 +510,10 @@ private fun MessageRow(
                 Text("thinking…", color = colors.water.copy(alpha = 0.5f + 0.5f * pulse), fontFamily = Mono, fontSize = 14.sp)
             } else {
                 val body = step.body.ifBlank { step.summary }
-                if (body.length > LONG_BODY_CHARS) {
-                    LongBody(
-                        body = body,
-                        header = step.label.lowercase(),
-                        colors = colors,
-                    )
+                // Assistant prose is markdown; the user's own words and every
+                // other row stay literal, so "what I typed is what I see".
+                if (step.kind == StepKind.ASSISTANT) {
+                    MarkdownBody(body, colors)
                 } else {
                     Text(
                         body,
@@ -519,80 +529,6 @@ private fun MessageRow(
                     ToolPocket(step, colors, pulse)
                 }
             }
-        }
-    }
-}
-
-/** Above this many characters, a message gets its own scroll with a pinned header. */
-private const val LONG_BODY_CHARS = 900
-
-/**
- * A long message: its own scroll area with the label pinned to the top and the
- * text fading out under it, so scrolling a wall of text feels anchored instead
- * of pushing the whole timeline.
- */
-@Composable
-private fun LongBody(body: String, header: String, colors: LumenColors) {
-    val scroll = rememberScrollState()
-    val atTop by remember { derivedStateOf { scroll.value <= 2 } }
-    val atBottom by remember {
-        derivedStateOf { scroll.value >= scroll.maxValue - 2 }
-    }
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(max = 460.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(colors.bg.copy(alpha = 0.35f)),
-    ) {
-        Column(Modifier.verticalScroll(scroll)) {
-            // Pinned label; stays legible over the text as it scrolls under it.
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(colors.bg.copy(alpha = 0.95f), colors.bg.copy(alpha = 0f)),
-                        ),
-                    )
-                    .padding(horizontal = 10.dp, vertical = 7.dp),
-            ) {
-                Text(header, color = colors.dim, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 1.2.sp)
-            }
-            Text(
-                body,
-                color = colors.fg, fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-            )
-            Spacer(Modifier.height(8.dp))
-        }
-        // Top fade: the text dissolves as it slides under the pinned label.
-        if (!atTop) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(34.dp)
-                    .align(Alignment.TopCenter)
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(colors.surface, colors.surface.copy(alpha = 0f)),
-                        ),
-                    ),
-            )
-        }
-        // Bottom fade: a gentle hint that more text is below.
-        if (!atBottom) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(28.dp)
-                    .align(Alignment.BottomCenter)
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(colors.surface.copy(alpha = 0f), colors.surface),
-                        ),
-                    ),
-            )
         }
     }
 }
@@ -770,35 +706,70 @@ private fun ToolPocket(step: UiStep, colors: LumenColors, pulse: Float) {
             enter = expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
             exit = shrinkVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut(),
         ) {
-            Column(Modifier.padding(top = 2.dp)) {
-                for ((k, r) in step.rows.withIndex()) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(colors.bg.copy(alpha = 0.35f))
-                            .padding(horizontal = 9.dp, vertical = 4.dp)
-                            .testTag("tool-row-$k"),
-                        verticalAlignment = Alignment.Top,
-                    ) {
-                        Text(
-                            if (step.failed) "\u00d7" else "\u2713",
-                            color = if (step.failed) colors.danger() else colors.water,
-                            fontFamily = Mono, fontSize = 10.5.sp,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(r.first, color = colors.fg, fontFamily = Mono, fontSize = 11.5.sp)
-                            if (r.second.isNotEmpty()) {
-                                Text(
-                                    r.second, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
-                                    lineHeight = 15.sp,
-                                    maxLines = 2, overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.testTag("tool-output-$k"),
-                                )
+            // The ONE internal scroll left in the chat: expanded tool output can
+            // be arbitrarily long, so it is bounded here and scrolls in place.
+            // Everything else (user, assistant, reasoning) renders inline and
+            // lets a drag scroll the transcript.
+            val toolScroll = rememberScrollState()
+            val atToolBottom by remember {
+                derivedStateOf { toolScroll.value >= toolScroll.maxValue - 2 }
+            }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 240.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .nestedScroll(BlockScrollChaining),
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(toolScroll)
+                        .padding(top = 2.dp, bottom = 8.dp),
+                ) {
+                    for ((k, r) in step.rows.withIndex()) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(colors.bg.copy(alpha = 0.35f))
+                                .padding(horizontal = 9.dp, vertical = 4.dp)
+                                .testTag("tool-row-$k"),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            Text(
+                                if (step.failed) "\u00d7" else "\u2713",
+                                color = if (step.failed) colors.danger() else colors.water,
+                                fontFamily = Mono, fontSize = 10.5.sp,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(r.first, color = colors.fg, fontFamily = Mono, fontSize = 11.5.sp)
+                                if (r.second.isNotEmpty()) {
+                                    Text(
+                                        r.second, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
+                                        lineHeight = 15.sp,
+                                        modifier = Modifier.testTag("tool-output-$k"),
+                                    )
+                                }
                             }
                         }
+                        if (k != step.rows.lastIndex) Spacer(Modifier.height(3.dp))
                     }
+                }
+                // Gentle hint that the bounded output scrolls further.
+                if (!atToolBottom) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(22.dp)
+                            .align(Alignment.BottomCenter)
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(colors.surface.copy(alpha = 0f), colors.surface),
+                                ),
+                            ),
+                    )
                 }
             }
         }

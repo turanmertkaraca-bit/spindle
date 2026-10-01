@@ -213,6 +213,27 @@ class LumenChatScreenTest {
     }
 
     @Test
+    fun `assistant markdown renders cleaned text, not raw markers`() {
+        val body = "## hello world\n\nthis is **bold** text\n\n- one\n- two\n\n```kotlin\nval x = 1\n```"
+        compose.setContent {
+            LumenChatScreen(
+                listOf(UiStep("a", StepKind.ASSISTANT, "ASSISTANT", "x", "md", body)),
+                input = "", busy = false, error = null, modifier = viewport, ambient = false,
+            )
+        }
+        compose.onNodeWithText("hello world").assertExists()
+        compose.onNodeWithText("this is bold text").assertExists()
+        compose.onNodeWithText("one").assertExists()
+        compose.onNodeWithText("val x = 1").assertExists()
+        check(compose.onAllNodesWithText("## hello world", substring = true).fetchSemanticsNodes().isEmpty()) {
+            "the raw heading markers should not survive rendering"
+        }
+        check(compose.onAllNodesWithText("**bold**", substring = true).fetchSemanticsNodes().isEmpty()) {
+            "the raw bold markers should not survive rendering"
+        }
+    }
+
+    @Test
     fun `theme toggle is available`() {
         compose.setContent {
             LumenChatScreen(steps(2), input = "", busy = false, error = null, modifier = viewport, ambient = false, onToggleTheme = {})
