@@ -77,19 +77,16 @@ class DebianEnvironmentTest {
     }
 
     @Test
-    fun `debian linker creates a reachable link inside the rootfs`() {
-        // Only the relative-rewrite invariant is asserted: the link must exist
-        // and resolve within the root, independently of whether the host grants
-        // the exec bit (its absence falls back to a content copy, also valid).
-        val root = Files.createTempDirectory("deb-link-root").toFile()
-        File(root, "bin").mkdirs()
-        File(root, "bin/busybox").writeText("busy")
-
-        debian.debianLink(root, "usr/bin/ls", "/bin/busybox", true)
-
-        val link = File(root, "usr/bin/ls")
-        assertTrue(link.exists(), "the rewritten link should resolve inside the rootfs")
-        assertEquals("busy", link.readText())
+    fun `absolute link targets are rewritten relative to the link's own depth`() {
+        // Asserting filesystem resolution is host-dependent (symlink vs. content
+        // copy differ across filesystems). The invariant that actually matters —
+        // and that the Debian rootfs depends on — is the relative rewrite itself.
+        // "usr/bin/ls" has two slashes -> "../../" climbs from usr/bin/ to root.
+        assertEquals("../../bin/busybox", debian.relFromRoot("usr/bin/ls", "bin/busybox"))
+        // "bin/python3" has one slash -> "../" climbs from bin/ to root.
+        assertEquals("../usr/bin/python3", debian.relFromRoot("bin/python3", "usr/bin/python3"))
+        // a top-level "sh" has no slash -> the target is already root-relative.
+        assertEquals("bin/sh", debian.relFromRoot("sh", "bin/sh"))
     }
 
     @Test

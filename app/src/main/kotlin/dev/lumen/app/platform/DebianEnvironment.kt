@@ -303,7 +303,7 @@ class DebianEnvironment(private val context: Context) {
     }
 
     /** "/bin/busybox" for a link at "usr/bin/ls" → "../../bin/busybox". */
-    private fun relFromRoot(linkName: String, rootRel: String): String {
+    internal fun relFromRoot(linkName: String, rootRel: String): String {
         val depth = linkName.count { it == '/' }
         return "../".repeat(depth) + rootRel
     }
