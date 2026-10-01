@@ -136,25 +136,30 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
 - [ ] Foreground `RunService` + notifications + wake lock; resumable runs.
 - [ ] SQLite FTS index; key store (port `AuthStore`); models.dev catalogue.
 
-### m14 — Feature verticals
+### m14 — Feature verticals — `[~]` MOSTLY DONE
 
-- [ ] **Changes**: `RunChanges` aggregate, diff viewer, revert (port/rework
+- [x] **Changes**: `RunChanges` aggregate, diff card, per-file revert (rework of
       `EditPulse`).
-- [ ] **References**: typed resolver, touched-vs-mentioned, backlinks,
-      `@`-completion (port `Mentions` shape rules).
-- [ ] Transparency: step timeline, subagent call tree, tool inspector, todo board.
-- [ ] Canvas + RenderServer port; Vision (image parts, `supportsVision`).
-- [ ] `websearch` tool (properly: result ranking, clipping, citation).
-- [ ] Session/file full-text search + navigation history.
+- [x] **References**: typed resolver (`path:line`/ranges), touched-vs-mentioned,
+      tap-to-peek in chat.
+- [x] Canvas viewer (sandboxed WebView) + Vision (image parts, `supportsVision`,
+      composer attachment).
+- [x] `websearch` tool (keyless DuckDuckGo HTML, pure parser, permission-gated).
+- [x] Session full-text search + fork/rewind surfaces.
+- [x] Interactive permission/question cards; ask-before-tools setting.
+- [ ] Backlinks panel + `@`-completion in the composer (port `Mentions` extras).
+- [ ] Subagent call tree, tool inspector, live todo board.
 
-### m15 — UI + hardening
+### m15 — UI + hardening — `[~]` IN PROGRESS
 
-- [ ] Compose shell consuming the contracts (deck, chat with think-merge + tool
-      + subagent + permission/question surfaces, changes rail, files, terminal,
-      canvas, settings, keys/models, diagnostics, storage).
+- [x] Compose shell: deck/home, chat (think-merge, compact tools, markdown),
+      changes card, files cockpit, terminal, canvas, settings, keys/models,
+      diagnostics, storage.
+- [x] Full Linux userland: Alpine (bundled) + opt-in Debian proot, behind
+      `ShellExecutor`; targetSdk 28 exec exemption.
 - [ ] Adaptive two-pane (tablet/foldable).
-- [ ] Crash guards, on-device performance, battery, ANR avoidance.
-- [ ] CI green gate + screenshot/animation evidence; APK update-in-place.
+- [ ] On-device performance/battery/ANR sweep.
+- [x] CI green gate + screenshot evidence; APK update-in-place.
 
 ## Risks
 
