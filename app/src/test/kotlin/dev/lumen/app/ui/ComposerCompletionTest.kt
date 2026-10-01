@@ -108,8 +108,8 @@ class ComposerCompletionTest {
         compose.waitForIdle()
 
         compose.onNodeWithTag("peek-backlinks").assertExists()
-        compose.onNodeWithText("backlinks").assertExists()
-        compose.onNodeWithText("see src/App.kt").assertExists()
+        compose.onNodeWithText("backlinks", useUnmergedTree = true).assertExists()
+        compose.onNodeWithText("see src/App.kt", useUnmergedTree = true).assertExists()
 
         compose.onNodeWithTag("backlink-0").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
