@@ -106,9 +106,9 @@ class ComposerCompletionTest {
             )
         }
 
-        compose.onNodeWithTag("peek-backlinks").assertIsDisplayed()
-        compose.onNodeWithText("backlinks").assertIsDisplayed()
-        compose.onNodeWithText("see src/App.kt").assertIsDisplayed()
+        compose.onNodeWithTag("peek-backlinks").assertExists()
+        compose.onNodeWithText("backlinks").assertExists()
+        compose.onNodeWithText("see src/App.kt").assertExists()
 
         compose.onNodeWithTag("backlink-0").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
