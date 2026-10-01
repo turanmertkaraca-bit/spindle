@@ -81,55 +81,10 @@ fun FilesScreen(
     var deleteTarget by remember { mutableStateOf<FileEntry?>(null) }
     var pendingSave by remember { mutableStateOf<Pair<String, String>?>(null) }
 
-    Box(modifier.fillMaxSize().background(colors.bg).imePadding()) {
-        Column(Modifier.fillMaxSize()) {
-            FilesHeader(colors, dir, onBack = onBack, onUp = onUp, onNew = { newKind = it })
-
-            Breadcrumb(colors, dir, onOpenDir)
-
-            val listing = files
-            val listingError = listing?.error
-            if (listing == null) {
-                Hint(colors, "loading…")
-            } else if (listingError != null && listing.entries.isEmpty()) {
-                Hint(colors, listingError)
-            } else {
-                LazyColumn(
-                    Modifier.fillMaxWidth().weight(1f).testTag("files-list"),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                ) {
-                    if (listingError != null) {
-                        item(key = "__error") {
-                            Text(
-                                listingError, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp).testTag("files-error"),
-                            )
-                        }
-                    }
-                    if (listing.entries.isEmpty() && listingError == null) {
-                        item(key = "__empty") {
-                            Text(
-                                "empty folder", color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 14.dp),
-                            )
-                        }
-                    }
-                    items(listing.entries, key = { it.path }) { entry ->
-                        EntryRow(
-                            colors = colors,
-                            entry = entry,
-                            onEnter = onEnter,
-                            onRename = { renameTarget = it },
-                            onDelete = { deleteTarget = it },
-                            onOpenCanvas = onOpenCanvas,
-                        )
-                    }
-                }
-            }
-        }
-
-        val openEditor = editor
-        if (openEditor != null) {
+    // The editor is the detail half when a file is open, or null when none is.
+    val openEditor = editor
+    val detailSlot: (@Composable () -> Unit)? = if (openEditor != null) {
+        {
             EditorOverlay(
                 colors = colors,
                 editor = openEditor,
@@ -137,6 +92,65 @@ fun FilesScreen(
                 onSave = { content -> pendingSave = openEditor.path to content },
             )
         }
+    } else {
+        null
+    }
+
+    Box(modifier.fillMaxSize().background(colors.bg).imePadding()) {
+        // On wide screens the selected file's editor renders beside the browser;
+        // on phones the same editor stacks over it, exactly as before. The list
+        // stays composed underneath in both cases, so its scroll position lives on.
+        AdaptiveTwoPane(
+            list = {
+                Column(Modifier.fillMaxSize()) {
+                    FilesHeader(colors, dir, onBack = onBack, onUp = onUp, onNew = { newKind = it })
+
+                    Breadcrumb(colors, dir, onOpenDir)
+
+                    val listing = files
+                    val listingError = listing?.error
+                    if (listing == null) {
+                        Hint(colors, "loading…")
+                    } else if (listingError != null && listing.entries.isEmpty()) {
+                        Hint(colors, listingError)
+                    } else {
+                        LazyColumn(
+                            Modifier.fillMaxWidth().weight(1f).testTag("files-list"),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        ) {
+                            if (listingError != null) {
+                                item(key = "__error") {
+                                    Text(
+                                        listingError, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp).testTag("files-error"),
+                                    )
+                                }
+                            }
+                            if (listing.entries.isEmpty() && listingError == null) {
+                                item(key = "__empty") {
+                                    Text(
+                                        "empty folder", color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 14.dp),
+                                    )
+                                }
+                            }
+                            items(listing.entries, key = { it.path }) { entry ->
+                                EntryRow(
+                                    colors = colors,
+                                    entry = entry,
+                                    onEnter = onEnter,
+                                    onRename = { renameTarget = it },
+                                    onDelete = { deleteTarget = it },
+                                    onOpenCanvas = onOpenCanvas,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            detail = detailSlot,
+            focusDetailOnNarrow = true,
+        )
     }
 
     newKind?.let { kind ->

@@ -11,6 +11,8 @@ import dev.lumen.app.platform.AndroidEnvironment
 import dev.lumen.app.platform.AndroidShellExecutor
 import dev.lumen.app.platform.AndroidTerminal
 import dev.lumen.app.platform.DebianEnvironment
+import dev.lumen.app.platform.RunService
+import dev.lumen.app.platform.WorkspaceWatcher
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
@@ -36,6 +38,7 @@ import dev.spindle.core.model.PartId
 import dev.spindle.core.model.Role
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
+import dev.spindle.core.model.SessionState
 import dev.spindle.core.model.TodoItem
 import dev.spindle.core.provider.SimpleProviderRegistry
 import dev.spindle.core.refs.ReferenceResolver
@@ -51,6 +54,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
 import java.nio.charset.StandardCharsets
@@ -286,6 +290,30 @@ class ChatViewModel(
     /** The one interactive shell behind the terminal screen. */
     private val terminal = AndroidTerminal(workspace.toFile(), shell)
 
+    /**
+     * Polls the workspace during a run so files changed by a script the agent
+     * ran (not through the app's edit tools) still land in the Changes view.
+     * Best-effort: a sandbox without a context runs without it.
+     */
+    private val watcher: WorkspaceWatcher? = context?.let {
+        WorkspaceWatcher(workspace.toFile(), viewModelScope) { changed -> absorbIndirect(changed) }
+    }
+
+    /** Record externally-changed paths as change rows the user can see and open. */
+    private fun absorbIndirect(paths: Set<String>) {
+        val current = _state.value
+        val sid = current.currentSessionId?.let { SessionId(it) } ?: return
+        if (!current.busy) return
+        val known = current.changes.byFile().keys
+        val fresh = paths.filter { it !in known }
+        if (fresh.isEmpty()) return
+        var next = current.changes
+        for (path in fresh) {
+            next += FileEdit(id = Ids.new("chg"), sessionId = sid, path = path, at = System.currentTimeMillis())
+        }
+        _state.value = current.copy(changes = next)
+    }
+
     // ---- interactive gates ----
     //
     // At most one ask is "active" (the one the UI shows). The gates suspend on a
@@ -402,7 +430,21 @@ class ChatViewModel(
     init {
         viewModelScope.launch { refreshSessions() }
         viewModelScope.launch { collectEvents() }
+        viewModelScope.launch { reconcileOrphanRuns() }
         refreshLinuxEnvironment()
+    }
+
+    /**
+     * A run cannot outlive its process in this app, so any session still marked
+     * RUNNING on a cold start is stale and is replayed as idle. Without this, a
+     * killed run would reopen as permanently "busy".
+     */
+    private suspend fun reconcileOrphanRuns() {
+        runCatching {
+            store.sessions(limit = 200, includeChildren = true)
+                .filter { it.state == SessionState.RUNNING }
+                .forEach { store.updateSession(it.copy(state = SessionState.IDLE)) }
+        }
     }
 
     // ---- diagnostics ----
@@ -741,7 +783,7 @@ class ChatViewModel(
                 steps = enrich(StepMapper.fromMessages(messages)),
                 input = "",
                 error = null,
-                busy = false,
+                busy = store.session(sid)?.state == SessionState.RUNNING,
                 usage = messages.fold(Usage()) { acc, m -> acc + m.usage },
                 changes = RunChanges.EMPTY,
                 todos = loadTodos(sid),
@@ -1421,6 +1463,11 @@ class ChatViewModel(
                     _state.value = _state.value.copy(steps = StepMapper.applyEvent(_state.value.steps, e))
                 }
                 is AgentEvent.UsageUpdated -> _state.value = _state.value.copy(usage = e.usage)
+                is AgentEvent.BudgetWarning -> {
+                    val pct = (e.fraction * 100).toInt()
+                    diag("budget: $pct% used")
+                    _state.value = _state.value.copy(hint = "cost budget ${pct}% used")
+                }
                 is AgentEvent.FileEdited -> _state.value =
                     _state.value.copy(changes = _state.value.changes + e.edit)
                 is AgentEvent.StateChanged -> {
@@ -1541,6 +1588,12 @@ class ChatViewModel(
             steps = _state.value.steps + StepMapper.optimisticUser(text),
         )
 
+        // Keep the run alive while backgrounded and visible in the shade.
+        context?.let { ctx ->
+            val title = _state.value.sessions.firstOrNull { it.id == currentId }?.title.orEmpty()
+            runCatching { RunService.start(ctx, currentId, title.ifBlank { "Lumen run" }) }
+        }
+
         runJob = viewModelScope.launch {
             // Title a fresh chat from its first message.
             runCatching {
@@ -1577,11 +1630,15 @@ class ChatViewModel(
                 snapshots = snapshots,
             )
             try {
+                withContext(Dispatchers.IO) { runCatching { watcher?.start() } }
                 loop.prompt(sid, text, keys.model, _state.value.agentMode)
                 diag("run finished")
             } catch (t: Throwable) {
                 diag("error: " + (t.message ?: t.toString()))
                 _state.value = _state.value.copy(error = t.message ?: t.toString(), busy = false)
+            } finally {
+                watcher?.stop()
+                context?.let { ctx -> runCatching { RunService.stop(ctx) } }
             }
             refreshSessions()
         }
@@ -1590,12 +1647,15 @@ class ChatViewModel(
     fun stop() {
         runJob?.cancel()
         clearAsks()
+        watcher?.stop()
+        context?.let { ctx -> runCatching { RunService.stop(ctx) } }
         diag("run stopped")
         _state.value = _state.value.copy(busy = false, ask = null)
     }
 
     override fun onCleared() {
         super.onCleared()
+        watcher?.stop()
         terminal.shutdown()
         runCatching { ownedStore?.close() }
         runCatching { ownedSnapshots?.close() }

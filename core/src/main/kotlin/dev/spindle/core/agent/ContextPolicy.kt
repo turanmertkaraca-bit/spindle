@@ -6,6 +6,8 @@ import dev.spindle.core.model.Usage
 data class ContextBudget(
     val maxInputTokens: Int? = null,
     val maxCostUsd: Double? = null,
+    /** Fraction of [maxCostUsd] at which a one-shot warning is emitted. */
+    val warnAtFraction: Double = 0.8,
 )
 
 enum class OverflowAction { NONE, TRIM, COMPACT }

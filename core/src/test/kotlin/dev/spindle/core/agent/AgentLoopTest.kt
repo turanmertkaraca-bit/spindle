@@ -3,6 +3,8 @@ package dev.spindle.core.agent
 import dev.spindle.core.event.AgentEvent
 import dev.spindle.core.event.EventBus
 import dev.spindle.core.model.FinishReason
+import dev.spindle.core.model.Message
+import dev.spindle.core.model.MessageId
 import dev.spindle.core.model.Part
 import dev.spindle.core.model.Role
 import dev.spindle.core.model.Session
@@ -30,6 +32,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -92,7 +95,33 @@ class AgentLoopTest {
             ToolOutcome("done", metadata = mapOf("durationMs" to "42"))
     }
 
+    /** Captures the session state the loop has persisted when the tool runs. */
+    private class StateCapturingTool(private val onState: (SessionState) -> Unit) : Tool {
+        override val spec = ToolSpec(
+            name = "state_probe",
+            description = "captures the persisted session state",
+            parametersJson = """{"type":"object","properties":{}}""",
+        )
+        override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
+            onState(ctx.session.state)
+            return ToolOutcome("probed")
+        }
+    }
+
     private fun store() = InMemorySessionStore()
+
+    /** Seed a prior assistant turn whose usage already counts against the budget. */
+    private suspend fun seedCost(store: InMemorySessionStore, sessionId: SessionId, cost: Double) {
+        store.appendMessage(
+            Message(
+                id = MessageId("msg_seed"),
+                sessionId = sessionId,
+                role = Role.ASSISTANT,
+                createdAt = 0,
+                usage = Usage(costUsd = cost),
+            ),
+        )
+    }
 
     private suspend fun newSession(store: InMemorySessionStore, id: String) {
         store.createSession(
@@ -333,5 +362,116 @@ class AgentLoopTest {
         loop.prompt(SessionId("ses_3"), "go", "fake/fake-1", agent = AgentConfig(maxSteps = 2))
 
         assertEquals(2, provider.requests.size)
+    }
+
+    @Test
+    fun `budget warning fires once at the threshold and does not repeat`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_1", "echo"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"x\"}"),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            listOf(ProviderEvent.TextDelta("done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = bus,
+        )
+        newSession(store, "ses_budget")
+        seedCost(store, SessionId("ses_budget"), 0.85)
+
+        val events = mutableListOf<AgentEvent>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            bus.events.collect { events += it }
+        }
+        loop.prompt(SessionId("ses_budget"), "go", "fake/fake-1", budget = ContextBudget(maxCostUsd = 1.0))
+        job.cancel()
+
+        val warnings = events.filterIsInstance<AgentEvent.BudgetWarning>()
+        assertEquals(1, warnings.size)
+        assertEquals(1.0, warnings.single().maxUsd)
+        assertEquals(0.85, warnings.single().spentUsd)
+        assertTrue(warnings.single().fraction >= 0.8)
+    }
+
+    @Test
+    fun `over-budget emits a warning at or above 1_0 then throws`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(ProviderEvent.TextDelta("unused"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(emptyList()),
+            store = store,
+            bus = bus,
+        )
+        newSession(store, "ses_over")
+        seedCost(store, SessionId("ses_over"), 1.5)
+
+        val events = mutableListOf<AgentEvent>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            bus.events.collect { events += it }
+        }
+        val error = assertFailsWith<IllegalStateException> {
+            loop.prompt(SessionId("ses_over"), "go", "fake/fake-1", budget = ContextBudget(maxCostUsd = 1.0))
+        }
+        job.cancel()
+
+        assertTrue(error.message!!.contains("session cost budget exceeded"))
+        val warnings = events.filterIsInstance<AgentEvent.BudgetWarning>()
+        assertEquals(1, warnings.size)
+        assertTrue(warnings.single().fraction >= 1.0)
+        assertEquals(SessionState.ERROR, store.session(SessionId("ses_over"))!!.state)
+    }
+
+    @Test
+    fun `session state is RUNNING during a prompt and IDLE after it`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_1", "state_probe"),
+                ProviderEvent.ToolCallArgsDelta(0, "{}"),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            listOf(ProviderEvent.TextDelta("done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        var observed: SessionState? = null
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(StateCapturingTool { observed = it })),
+            store = store,
+            bus = EventBus(),
+        )
+        newSession(store, "ses_state_run")
+
+        val result = loop.prompt(SessionId("ses_state_run"), "go", "fake/fake-1")
+
+        assertEquals(FinishReason.STOP, result.finish)
+        assertEquals(SessionState.RUNNING, observed)
+        assertEquals(SessionState.IDLE, store.session(SessionId("ses_state_run"))!!.state)
+    }
+
+    @Test
+    fun `session state is persisted ERROR on a provider failure`() = runTest {
+        val provider = ScriptedProvider(listOf(ProviderEvent.Failure("boom")))
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(emptyList()),
+            store = store,
+            bus = EventBus(),
+        )
+        newSession(store, "ses_state_err")
+
+        loop.prompt(SessionId("ses_state_err"), "hi", "fake/fake-1")
+
+        assertEquals(SessionState.ERROR, store.session(SessionId("ses_state_err"))!!.state)
     }
 }

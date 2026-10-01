@@ -69,6 +69,14 @@ sealed interface WireEvent {
     ) : WireEvent
 
     @Serializable
+    data class BudgetWarning(
+        override val sessionId: String,
+        val spentUsd: Double,
+        val maxUsd: Double,
+        val fraction: Double,
+    ) : WireEvent
+
+    @Serializable
     data class Title(override val sessionId: String, val title: String) : WireEvent
 
     @Serializable
@@ -109,6 +117,9 @@ sealed interface WireEvent {
             is AgentEvent.PermissionRequested -> Permission(e.sessionId.value, e.tool, e.detail)
             is AgentEvent.UsageUpdated -> Usage(
                 e.sessionId.value, e.usage.inputTokens, e.usage.outputTokens, e.usage.costUsd,
+            )
+            is AgentEvent.BudgetWarning -> BudgetWarning(
+                e.sessionId.value, e.spentUsd, e.maxUsd, e.fraction,
             )
             is AgentEvent.TitleUpdated -> Title(e.sessionId.value, e.title)
             is AgentEvent.FileEdited -> FileEdited(

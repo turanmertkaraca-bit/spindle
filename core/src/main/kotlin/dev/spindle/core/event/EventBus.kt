@@ -76,6 +76,14 @@ sealed interface AgentEvent {
     /** Running token/cost totals for the session, rolled up from each message. */
     data class UsageUpdated(override val sessionId: SessionId, val usage: Usage) : AgentEvent
 
+    /** The session crossed its cost-warning threshold (or hit the ceiling). */
+    data class BudgetWarning(
+        override val sessionId: SessionId,
+        val spentUsd: Double,
+        val maxUsd: Double,
+        val fraction: Double,
+    ) : AgentEvent
+
     /** A session's title was set or auto-generated. */
     data class TitleUpdated(override val sessionId: SessionId, val title: String) : AgentEvent
 

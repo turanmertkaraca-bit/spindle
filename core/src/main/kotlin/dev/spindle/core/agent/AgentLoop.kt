@@ -115,6 +115,8 @@ class AgentLoop(
             ?: throw IllegalArgumentException("Unknown session: $sessionId")
 
         bus.emit(AgentEvent.StateChanged(sessionId, SessionState.RUNNING))
+        persistState(store, sessionId, SessionState.RUNNING)
+        val budgetWarning = BudgetWarningState()
         try {
             store.appendMessage(
                 Message(
@@ -146,7 +148,7 @@ class AgentLoop(
                     OverflowAction.COMPACT -> Compaction.compact(store, sessionId, modelRef, providers, bus)
                     OverflowAction.NONE -> Unit
                 }
-                budgetCheck(budget, store, sessionId)
+                budgetCheck(budget, store, sessionId, budgetWarning)
 
                 val history = store.messages(sessionId)
                 val wire = Wire.toWire(history)
@@ -233,6 +235,7 @@ class AgentLoop(
                     bus.emit(AgentEvent.Error(sessionId, e.message ?: "provider error"))
                     bus.emit(AgentEvent.UsageUpdated(sessionId, store.messages(sessionId).fold(Usage()) { acc, m -> acc + m.usage }))
                     bus.emit(AgentEvent.StateChanged(sessionId, SessionState.ERROR))
+                    persistState(store, sessionId, SessionState.ERROR)
                     return errored
                 }
 
@@ -250,7 +253,8 @@ class AgentLoop(
                 )
                 store.updateMessage(finalized)
                 parts.forEach { bus.emit(AgentEvent.PartUpdated(sessionId, finalized.id.value, it)) }
-                if (sessionId.let { store.session(it) } != null) store.updateSession(session.copy(updatedAt = clock()))
+                // Bump updatedAt only, preserving the RUNNING state persisted above.
+                store.session(sessionId)?.let { store.updateSession(it.copy(updatedAt = clock())) }
                 val sessionUsage = store.messages(sessionId).fold(Usage()) { acc, m -> acc + m.usage }
                 bus.emit(AgentEvent.UsageUpdated(sessionId, sessionUsage))
 
@@ -264,16 +268,19 @@ class AgentLoop(
             }
 
             bus.emit(AgentEvent.StateChanged(sessionId, SessionState.IDLE))
+            persistState(store, sessionId, SessionState.IDLE)
             return store.latestMessage(sessionId)!!
         } catch (e: CancellationException) {
             store.latestMessage(sessionId)?.let {
                 store.updateMessage(it.copy(finish = FinishReason.ERROR, error = "aborted"))
             }
             bus.emit(AgentEvent.StateChanged(sessionId, SessionState.IDLE))
+            persistState(store, sessionId, SessionState.IDLE)
             throw e
         } catch (e: Throwable) {
             bus.emit(AgentEvent.Error(sessionId, e.message ?: e.toString()))
             bus.emit(AgentEvent.StateChanged(sessionId, SessionState.ERROR))
+            persistState(store, sessionId, SessionState.ERROR)
             throw e
         }
     }
@@ -304,10 +311,32 @@ class AgentLoop(
         return Overflow.decide(est, contextWindow, open, alreadyCompacted)
     }
 
-    private suspend fun budgetCheck(budget: ContextBudget, store: SessionStore, sessionId: SessionId) {
+    private suspend fun budgetCheck(
+        budget: ContextBudget,
+        store: SessionStore,
+        sessionId: SessionId,
+        warning: BudgetWarningState,
+    ) {
         val max = budget.maxCostUsd ?: return
         val spent = store.messages(sessionId).sumOf { it.usage.costUsd }
-        if (spent >= max) throw IllegalStateException("session cost budget exceeded: $spent >= $max")
+        val fraction = if (max > 0.0) spent / max else if (spent > 0.0) 1.0 else 0.0
+        if (spent >= max) {
+            if (!warning.warned) {
+                bus.emit(AgentEvent.BudgetWarning(sessionId, spent, max, fraction))
+                warning.warned = true
+            }
+            throw IllegalStateException("session cost budget exceeded: $spent >= $max")
+        }
+        if (!warning.warned && fraction >= budget.warnAtFraction) {
+            bus.emit(AgentEvent.BudgetWarning(sessionId, spent, max, fraction))
+            warning.warned = true
+        }
+    }
+
+    /** Persist a run-state transition; a missing session is a no-op. */
+    private suspend fun persistState(store: SessionStore, sessionId: SessionId, state: SessionState) {
+        val session = store.session(sessionId) ?: return
+        store.updateSession(session.copy(state = state, updatedAt = clock()))
     }
 
     private suspend fun executeTool(
@@ -519,6 +548,9 @@ class AgentLoop(
     }
 
     private class ProviderFailure(override val message: String) : RuntimeException(message)
+
+    /** Ensures the budget warning fires once per prompt invocation, not per step. */
+    private class BudgetWarningState(var warned: Boolean = false)
 
     private class LoopToolContext(
         override val sessionId: SessionId,
