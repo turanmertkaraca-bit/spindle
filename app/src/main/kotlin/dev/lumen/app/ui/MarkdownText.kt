@@ -124,9 +124,10 @@ private fun MarkdownCode(block: MdBlock.Code, colors: LumenColors) {
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = 10.dp, vertical = 8.dp),
     ) {
-        if (block.lang != null) {
+        val lang = block.lang
+        if (lang != null) {
             Text(
-                block.lang,
+                lang,
                 color = colors.faint,
                 fontFamily = MdMono,
                 fontSize = 10.sp,
