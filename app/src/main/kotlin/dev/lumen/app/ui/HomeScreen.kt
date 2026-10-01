@@ -48,6 +48,8 @@ fun HomeScreen(
     onToggleTheme: (() -> Unit)? = null,
     /** Open the project files cockpit, when supplied. */
     onFiles: (() -> Unit)? = null,
+    /** Open the interactive shell, when supplied. */
+    onTerminal: (() -> Unit)? = null,
 ) {
     Column(
         modifier.fillMaxSize().background(colors.bg).imePadding()
@@ -81,6 +83,18 @@ fun HomeScreen(
                             .clickable { onFiles() }
                             .padding(horizontal = 8.dp, vertical = 6.dp)
                             .testTag("files"),
+                    )
+                    Spacer(Modifier.width(2.dp))
+                }
+                if (onTerminal != null) {
+                    Text(
+                        ">_",
+                        color = colors.dim, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { onTerminal() }
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                            .testTag("terminal"),
                     )
                     Spacer(Modifier.width(2.dp))
                 }

@@ -8,6 +8,7 @@ import dev.lumen.app.data.AndroidSnapshotStore
 import dev.lumen.app.data.KeyStore
 import dev.lumen.app.data.ProviderCatalogue
 import dev.lumen.app.platform.AndroidShellExecutor
+import dev.lumen.app.platform.AndroidTerminal
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
@@ -89,6 +90,17 @@ data class EditorState(
 )
 
 /**
+ * The interactive shell's retained output. [lines] are raw UTF-8 chunks in
+ * arrival order (the screen joins and splits them); [running] is false once the
+ * process has exited or been stopped.
+ */
+data class TerminalState(
+    val lines: List<String> = emptyList(),
+    val running: Boolean = false,
+    val error: String? = null,
+)
+
+/**
  * A gate prompt waiting on the user. [Permission] maps to the approval policy's
  * ASK branch; [Question] maps to the `question` tool. Each carries its own id so
  * the UI can key selection state and the view model can resolve the right wait.
@@ -137,6 +149,8 @@ data class ChatState(
     val files: FilesState? = null,
     /** The file open in the files editor, or null when closed. */
     val editor: EditorState? = null,
+    /** The interactive shell's output and lifecycle flag. */
+    val terminal: TerminalState = TerminalState(),
     /** A permission or question prompt awaiting the user, or null when idle. */
     val ask: PendingAsk? = null,
     /** Whether tools are confirmed interactively before running. */
@@ -172,6 +186,9 @@ class ChatViewModel(
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
     private var runJob: Job? = null
+
+    /** The one interactive shell behind the terminal screen. */
+    private val terminal = AndroidTerminal(workspace.toFile(), shell)
 
     // ---- interactive gates ----
     //
@@ -686,6 +703,73 @@ class ChatViewModel(
         )
     }
 
+    // ---- terminal ----
+
+    /**
+     * Start the interactive shell in the workspace, replacing any live one.
+     * The StateFlow flips [TerminalState.running] on immediately so the screen
+     * can draw; failure (no executor, dead cwd) surfaces as an error.
+     */
+    fun openTerminal() {
+        _state.value = _state.value.copy(terminal = TerminalState(running = true))
+        viewModelScope.launch {
+            val started = terminal.open(
+                scope = viewModelScope,
+                onChunk = { appendTerminal(it) },
+                onExit = {
+                    _state.value = _state.value.copy(
+                        terminal = _state.value.terminal.copy(running = false),
+                    )
+                },
+            )
+            if (!started) {
+                _state.value = _state.value.copy(
+                    terminal = TerminalState(running = false, error = "terminal unavailable"),
+                )
+            }
+        }
+    }
+
+    /**
+     * Echo [line] for the user, then hand it to the shell as one command. The
+     * shell is a pipe, not a tty, so without the echo the screen would look
+     * frozen after every send.
+     */
+    fun sendTerminal(line: String) {
+        if (!_state.value.terminal.running) return
+        val command = line.trimEnd('\n')
+        appendTerminal(if (command.isEmpty()) "\n" else command + "\n")
+        viewModelScope.launch { terminal.write(command) }
+    }
+
+    /** Send Ctrl-C to the running shell. */
+    fun interruptTerminal() {
+        viewModelScope.launch { terminal.interrupt() }
+    }
+
+    /** Drop retained output without stopping the shell. */
+    fun clearTerminal() {
+        _state.value = _state.value.copy(
+            terminal = _state.value.terminal.copy(lines = emptyList()),
+        )
+    }
+
+    /** Stop the shell and mark it not running. */
+    fun closeTerminal() {
+        _state.value = _state.value.copy(
+            terminal = _state.value.terminal.copy(running = false),
+        )
+        viewModelScope.launch { terminal.close() }
+    }
+
+    /** Append a raw chunk, retaining only the most recent [MAX_TERMINAL_CHUNKS]. */
+    private fun appendTerminal(chunk: String) {
+        val current = _state.value.terminal
+        val next = current.lines + chunk
+        val capped = if (next.size > MAX_TERMINAL_CHUNKS) next.takeLast(MAX_TERMINAL_CHUNKS) else next
+        _state.value = _state.value.copy(terminal = current.copy(lines = capped))
+    }
+
     // ---- revert ----
 
     /**
@@ -863,6 +947,7 @@ class ChatViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        terminal.shutdown()
         runCatching { ownedStore?.close() }
         runCatching { ownedSnapshots?.close() }
     }
@@ -876,6 +961,9 @@ class ChatViewModel(
 
         /** Upper bound on one folder's listing; extra entries are dropped. */
         const val MAX_FILES_ENTRIES = 2000
+
+        /** Upper bound on retained terminal chunks, so a chatty shell cannot grow forever. */
+        const val MAX_TERMINAL_CHUNKS = 2000
 
         fun Factory(context: Context, workspace: java.io.File): androidx.lifecycle.ViewModelProvider.Factory =
             object : androidx.lifecycle.ViewModelProvider.Factory {

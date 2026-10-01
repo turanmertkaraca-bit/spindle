@@ -29,6 +29,7 @@ import dev.lumen.app.ui.KeyScreen
 import dev.lumen.app.ui.LumenChatScreen
 import dev.lumen.app.ui.LumenColors
 import dev.lumen.app.ui.SettingsScreen
+import dev.lumen.app.ui.TerminalScreen
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -61,6 +62,8 @@ class MainActivity : ComponentActivity() {
             var route by rememberSaveable { mutableStateOf("home") }
             // The route to return to when leaving the files cockpit.
             var filesReturn by rememberSaveable { mutableStateOf("home") }
+            // The route to return to when leaving the terminal.
+            var terminalReturn by rememberSaveable { mutableStateOf("home") }
             val onChat = route == "chat" && state.currentSessionId != null
 
             BackHandler(enabled = route != "home" || state.currentSessionId != null) {
@@ -68,6 +71,10 @@ class MainActivity : ComponentActivity() {
                     state.peek != null -> viewModel.closePeek()
                     state.editor != null -> viewModel.closeEditor()
                     route == "files" -> route = filesReturn
+                    route == "terminal" -> {
+                        viewModel.closeTerminal()
+                        route = terminalReturn
+                    }
                     route == "settings" -> route = "home"
                     route == "chat" -> {
                         viewModel.closeChat()
@@ -111,6 +118,10 @@ class MainActivity : ComponentActivity() {
                         filesReturn = "chat"
                         route = "files"
                     },
+                    onTerminal = {
+                        terminalReturn = "chat"
+                        route = "terminal"
+                    },
                     onExpandSubagent = viewModel::expandSubagent,
                     usage = state.usage,
                     changes = state.changes,
@@ -150,6 +161,23 @@ class MainActivity : ComponentActivity() {
                         modifier = modifier,
                     )
                 }
+                route == "terminal" -> {
+                    LaunchedEffect(Unit) { viewModel.openTerminal() }
+                    TerminalScreen(
+                        colors = colors,
+                        lines = state.terminal.lines,
+                        running = state.terminal.running,
+                        error = state.terminal.error,
+                        onSend = viewModel::sendTerminal,
+                        onInterrupt = viewModel::interruptTerminal,
+                        onClear = viewModel::clearTerminal,
+                        onBack = {
+                            viewModel.closeTerminal()
+                            route = terminalReturn
+                        },
+                        modifier = modifier,
+                    )
+                }
                 route == "settings" -> SettingsScreen(
                     colors = colors,
                     provider = state.provider,
@@ -185,6 +213,10 @@ class MainActivity : ComponentActivity() {
                     onFiles = {
                         filesReturn = "home"
                         route = "files"
+                    },
+                    onTerminal = {
+                        terminalReturn = "home"
+                        route = "terminal"
                     },
                 )
             }

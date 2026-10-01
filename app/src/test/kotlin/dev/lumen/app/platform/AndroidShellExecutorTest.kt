@@ -2,7 +2,11 @@ package dev.lumen.app.platform
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -12,6 +16,7 @@ import java.nio.file.Files
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 /**
  * The executor must always return a [ShellResult] and never throw — even when
@@ -47,5 +52,37 @@ class AndroidShellExecutorTest {
             val result = shell.run("echo hi", bogus.toPath(), 5_000)
             assertNotNull(result)
         }
+    }
+
+    /**
+     * The pragmatic terminal on the JVM fallback: open the pipe shell, write a
+     * line, and see the shell's output arrive. No TTY prompt is assumed — only
+     * that the command's text comes back before the timeout.
+     */
+    @Test
+    fun `openPty streams output for a written line, then completes on close`() = runBlocking {
+        val cwd = Files.createTempDirectory("lumen-pty").toFile()
+        val session = assertNotNull(shell.openPty("", cwd.toPath()))
+
+        val seen = StringBuilder()
+        val sawOutput = CompletableDeferred<Unit>()
+        val pump = launch(Dispatchers.IO) {
+            try {
+                session.output.collect { chunk ->
+                    seen.append(chunk)
+                    if (!sawOutput.isCompleted && seen.contains("lumen")) sawOutput.complete(Unit)
+                }
+            } finally {
+                sawOutput.complete(Unit)
+            }
+        }
+
+        session.write("echo lumen\n")
+        withTimeout(10_000) { sawOutput.await() }
+        assertTrue(seen.contains("lumen"), "output should contain the echoed command: $seen")
+
+        session.close()
+        withTimeout(5_000) { pump.join() }
+        assertTrue(pump.isCompleted, "the output flow should complete once the session is closed")
     }
 }

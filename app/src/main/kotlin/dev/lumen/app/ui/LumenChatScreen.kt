@@ -212,6 +212,8 @@ fun LumenChatScreen(
     onHome: (() -> Unit)? = null,
     /** Open the project files cockpit from the chat top bar, when supplied. */
     onFiles: (() -> Unit)? = null,
+    /** Open the interactive terminal from the chat top bar, when supplied. */
+    onTerminal: (() -> Unit)? = null,
     onInput: (String) -> Unit = {},
     onSend: () -> Unit = {},
     onStop: () -> Unit = {},
@@ -357,6 +359,17 @@ fun LumenChatScreen(
                                         .clickable { onFiles() }
                                         .padding(horizontal = 8.dp, vertical = 4.dp)
                                         .testTag("open-files"),
+                                )
+                            }
+                            if (onTerminal != null) {
+                                Text(
+                                    "shell",
+                                    color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable { onTerminal() }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                        .testTag("open-terminal"),
                                 )
                             }
                         }
