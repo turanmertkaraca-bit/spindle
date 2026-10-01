@@ -1,5 +1,8 @@
 package dev.lumen.app.ui
 
+import android.util.Base64
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -28,6 +31,7 @@ import androidx.compose.foundation.gestures.FlingBehavior
 import androidx.compose.foundation.gestures.ScrollScope
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -80,6 +84,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
@@ -92,6 +97,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.FilePeek
 import dev.lumen.app.PendingAsk
+import dev.lumen.app.PendingImage
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
@@ -255,6 +261,16 @@ fun LumenChatScreen(
     onAnswerQuestion: (List<String>) -> Unit = {},
     /** Skip the question card (first option or an empty selection). */
     onSkipQuestion: () -> Unit = {},
+    /** Images queued to send with the next prompt, shown as chips above the composer. */
+    attachments: List<PendingImage> = emptyList(),
+    /** Drop the queued attachment at this index. */
+    onRemoveAttachment: (Int) -> Unit = {},
+    /** A soft notice rendered above the composer (e.g. model has no vision). */
+    hint: String? = null,
+    /** Open the sandboxed canvas on an `.html` page found in a message. */
+    onOpenCanvas: (String) -> Unit = {},
+    /** Queue an image for vision; when null the attach affordance is hidden. */
+    onAttachImage: ((String, String, String) -> Unit)? = null,
     /** Off in tests/CI so the "answer landed" haptic never fires there. */
     haptics: Boolean = true,
 ) {
@@ -263,6 +279,21 @@ fun LumenChatScreen(
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
     val hapticsActive = haptics && !LocalInspectionMode.current
+
+    // The photo/document picker: bytes are read once and handed up as base64,
+    // so the view model stays free of Android content URIs.
+    val context = LocalContext.current
+    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null && onAttachImage != null) {
+            val resolver = context.contentResolver
+            val mime = resolver.getType(uri) ?: "image/*"
+            val bytes = runCatching { resolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+            if (bytes != null && bytes.isNotEmpty()) {
+                val name = uri.lastPathSegment?.substringAfterLast('/') ?: "image"
+                onAttachImage(name, mime, Base64.encodeToString(bytes, Base64.NO_WRAP))
+            }
+        }
+    }
 
     // A slow spectrum breathe while something is running; off when idle or in tests.
     val running = busy || steps.any { it.running }
@@ -416,6 +447,7 @@ fun LumenChatScreen(
                                         touchedPaths = touchedPaths,
                                         onOpenFile = onOpenFile,
                                         onRewind = onRewind,
+                                        onOpenCanvas = onOpenCanvas,
                                         modifier = Modifier.animateItem(),
                                     )
                                 }
@@ -442,6 +474,9 @@ fun LumenChatScreen(
             if (error != null) {
                 ErrorNotice(error, colors, onEditKey)
             }
+            if (hint != null) {
+                HintNotice(hint, colors)
+            }
             if (changes.editCount > 0) {
                 ChangesCard(changes, colors, onRevert, onOpenFile)
             }
@@ -449,7 +484,12 @@ fun LumenChatScreen(
             ask?.let {
                 AskCard(it, colors, onAnswerPermission, onAnswerQuestion, onSkipQuestion)
             }
-            Composer(input, busy, colors, onInput, onSend, onStop, onToggleTheme, onEditKey, agentMode, onAgentMode)
+            Composer(
+                input, busy, colors, onInput, onSend, onStop, onToggleTheme, onEditKey, agentMode, onAgentMode,
+                attachments = attachments,
+                onRemoveAttachment = onRemoveAttachment,
+                onAttach = onAttachImage?.let { { pickImage.launch("image/*") } },
+            )
         }
         peek?.let { FilePeekOverlay(it, colors, onClosePeek) }
     }
@@ -521,6 +561,7 @@ private fun MessageRow(
     touchedPaths: Set<String> = emptySet(),
     onOpenFile: (String, Int?) -> Unit = { _, _ -> },
     onRewind: (String) -> Unit = {},
+    onOpenCanvas: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
@@ -534,6 +575,9 @@ private fun MessageRow(
     }
 
     val isYou = step.kind == StepKind.YOU
+    val htmlPath = remember(step.id, step.body, step.summary, step.rows) {
+        if (isYou) null else firstHtmlPath(step)
+    }
 
     Row(
         modifier.fillMaxWidth(),
@@ -622,6 +666,19 @@ private fun MessageRow(
             }
 
             val mid = step.messageId
+            if (htmlPath != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "\u25b6 view",
+                    color = colors.water, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .border(1.dp, colors.water.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                        .clickable { onOpenCanvas(htmlPath) }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .testTag("canvas-view-${step.id}"),
+                )
+            }
             if (rewindArmed && mid != null) {
                 Spacer(Modifier.height(8.dp))
                 Text(
@@ -1298,8 +1355,11 @@ private fun Composer(
     onEditKey: (() -> Unit)?,
     agentMode: String,
     onAgentMode: (String) -> Unit,
+    attachments: List<PendingImage> = emptyList(),
+    onRemoveAttachment: (Int) -> Unit = {},
+    onAttach: (() -> Unit)? = null,
 ) {
-    val canSend = input.isNotBlank()
+    val canSend = input.isNotBlank() || attachments.isNotEmpty()
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
@@ -1308,6 +1368,19 @@ private fun Composer(
         label = "send-scale",
     )
     Column {
+        if (attachments.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().background(colors.bg)
+                    .horizontalScroll(rememberScrollState())
+                    .padding(start = 16.dp, end = 14.dp, top = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                attachments.forEachIndexed { index, image ->
+                    AttachmentChip(colors, image, index, onRemoveAttachment)
+                    if (index != attachments.lastIndex) Spacer(Modifier.width(8.dp))
+                }
+            }
+        }
         Row(
             Modifier.fillMaxWidth().background(colors.bg)
                 .padding(start = 16.dp, end = 14.dp, top = 8.dp),
@@ -1335,6 +1408,19 @@ private fun Composer(
                 .padding(start = 16.dp, end = 14.dp, top = 10.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (onAttach != null) {
+                Text(
+                    "image",
+                    color = colors.water, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .border(1.dp, colors.water.copy(alpha = 0.35f), RoundedCornerShape(50))
+                        .clickable { onAttach() }
+                        .padding(horizontal = 9.dp, vertical = 6.dp)
+                        .testTag("attach-image"),
+                )
+                Spacer(Modifier.width(8.dp))
+            }
             Box(
                 Modifier.weight(1f)
                     .clip(RoundedCornerShape(50))
@@ -1399,6 +1485,84 @@ private fun Composer(
             }
         }
     }
+}
+
+/**
+ * A queued image as a removable pill above the composer. The name is clamped so
+ * a long path cannot stretch the row.
+ */
+@Composable
+private fun AttachmentChip(
+    colors: LumenColors,
+    image: PendingImage,
+    index: Int,
+    onRemove: (Int) -> Unit,
+) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(colors.surface)
+            .border(1.dp, colors.water.copy(alpha = 0.30f), RoundedCornerShape(50))
+            .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
+            .testTag("attachment-$index"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            image.name,
+            color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 160.dp),
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            "\u00d7",
+            color = colors.faint, fontFamily = Mono, fontSize = 14.sp,
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .clickable { onRemove(index) }
+                .padding(horizontal = 5.dp, vertical = 1.dp)
+                .testTag("attachment-remove-$index"),
+        )
+    }
+}
+
+/** A soft, neutral notice above the composer — never the danger styling. */
+@Composable
+private fun HintNotice(message: String, colors: LumenColors) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(7.dp).clip(WaterShapes.droplet(tail = 0.55f)).background(colors.faint))
+        Spacer(Modifier.width(8.dp))
+        Text(
+            message, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
+            maxLines = 2, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).testTag("composer-hint"),
+        )
+    }
+}
+
+/** A path-like `*.html`/`*.htm` token, e.g. `pages/demo.html`. */
+private val HtmlPath = Regex("[A-Za-z0-9_./-]+\\.html?\\b")
+
+/**
+ * The first self-contained HTML path a step mentions or produced, or null.
+ * External URLs are skipped: only workspace-relative files can open in canvas.
+ */
+private fun firstHtmlPath(step: UiStep): String? {
+    val hay = buildString {
+        append(step.body)
+        append('\n').append(step.summary)
+        for ((_, value) in step.rows) append('\n').append(value)
+    }
+    for (match in HtmlPath.findAll(hay)) {
+        if (match.value.startsWith("//") || match.value.startsWith("http")) continue
+        val path = match.value.trimStart('.', '/')
+        if (path.isBlank()) continue
+        return path
+    }
+    return null
 }
 
 /** A compact build/plan selector; plan tints with the accent so it reads distinct. */

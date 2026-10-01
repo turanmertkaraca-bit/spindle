@@ -27,8 +27,11 @@ import dev.spindle.core.event.AgentEvent
 import dev.spindle.core.event.DeltaKind
 import dev.spindle.core.event.EventBus
 import dev.spindle.core.model.Ids
+import dev.spindle.core.model.Message
 import dev.spindle.core.model.MessageId
 import dev.spindle.core.model.Part
+import dev.spindle.core.model.PartId
+import dev.spindle.core.model.Role
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.provider.SimpleProviderRegistry
@@ -64,6 +67,17 @@ data class FilePeek(
     val lines: List<String>,
     val highlight: Int? = null,
     val truncated: Boolean = false,
+)
+
+/**
+ * An image the user queued to send with the next prompt. [base64] is the raw
+ * inline payload (no data-URL prefix); [mime] is what the provider adapter
+ * needs to label it.
+ */
+data class PendingImage(
+    val name: String,
+    val mime: String,
+    val base64: String,
 )
 
 /** One row in the project file browser. [path] is workspace-relative, `/`-joined. */
@@ -163,6 +177,14 @@ data class ChatState(
     val ask: PendingAsk? = null,
     /** Whether tools are confirmed interactively before running. */
     val askBeforeTools: Boolean = false,
+    /** The self-contained HTML page shown in the canvas, or null when closed. */
+    val canvas: String? = null,
+    /** Workspace-relative name of the page in the canvas, for the top bar. */
+    val canvasPath: String? = null,
+    /** Images queued to send with the next prompt. */
+    val attachments: List<PendingImage> = emptyList(),
+    /** A soft, non-fatal notice shown above the composer (e.g. no vision). */
+    val hint: String? = null,
 )
 
 /**
@@ -383,6 +405,10 @@ class ChatViewModel(
                 steps = emptyList(),
                 input = "",
                 error = null,
+                hint = null,
+                attachments = emptyList(),
+                canvas = null,
+                canvasPath = null,
                 usage = Usage(),
                 changes = RunChanges.EMPTY,
             )
@@ -414,6 +440,10 @@ class ChatViewModel(
             steps = emptyList(),
             busy = false,
             error = null,
+            hint = null,
+            attachments = emptyList(),
+            canvas = null,
+            canvasPath = null,
             usage = Usage(),
             changes = RunChanges.EMPTY,
             peek = null,
@@ -559,6 +589,63 @@ class ChatViewModel(
     /** Dismiss the peek sheet. */
     fun closePeek() {
         _state.value = _state.value.copy(peek = null)
+    }
+
+    // ---- canvas ----
+
+    /**
+     * Read [path] (workspace-relative, or absolute under it) as UTF-8 HTML for
+     * the interactive canvas, capped at [MAX_CANVAS_BYTES]. The page is rendered
+     * from this string, never from a `file://` URL, so it gets no origin to
+     * reach back through. Escapes and oversized/empty pages are refused.
+     */
+    fun openCanvas(path: String) {
+        val target = inWorkspace(path)
+        if (target == null || !Files.isRegularFile(target)) {
+            _state.value = _state.value.copy(error = "cannot open $path")
+            return
+        }
+        try {
+            if (Files.size(target) > MAX_CANVAS_BYTES) {
+                _state.value = _state.value.copy(error = "page too large")
+                return
+            }
+            val html = String(Files.readAllBytes(target), StandardCharsets.UTF_8)
+            if (html.isBlank()) {
+                _state.value = _state.value.copy(error = "the page is empty")
+                return
+            }
+            _state.value = _state.value.copy(
+                canvas = html,
+                canvasPath = relativeToWorkspace(target),
+                error = null,
+            )
+        } catch (t: Throwable) {
+            _state.value = _state.value.copy(error = t.message ?: "cannot open $path")
+        }
+    }
+
+    /** Dismiss the canvas. */
+    fun closeCanvas() {
+        _state.value = _state.value.copy(canvas = null, canvasPath = null)
+    }
+
+    // ---- image attachments (vision) ----
+
+    /** Queue [base64] (an inline image, no data-URL prefix) for the next send. */
+    fun attachImage(name: String, mime: String, base64: String) {
+        if (base64.isBlank()) return
+        _state.value = _state.value.copy(
+            attachments = _state.value.attachments + PendingImage(name, mime, base64),
+            error = null,
+        )
+    }
+
+    /** Drop the queued image at [index]; out-of-range indices are ignored. */
+    fun removeAttachment(index: Int) {
+        val current = _state.value.attachments
+        if (index !in current.indices) return
+        _state.value = _state.value.copy(attachments = current.filterIndexed { i, _ -> i != index })
     }
 
     // ---- files browser + editor ----
@@ -960,16 +1047,25 @@ class ChatViewModel(
 
     fun onInput(v: String) { _state.value = _state.value.copy(input = v) }
 
+    /** True when the selected model advertises image input; unknown models pass. */
+    private fun modelSupportsVision(): Boolean {
+        val modelId = keys.model.substringAfter('/', keys.model)
+        val info = ProviderCatalogue.defaultModels(keys.provider).firstOrNull { it.id == modelId }
+        return info?.supportsVision ?: true
+    }
+
     fun send() {
         val currentId = _state.value.currentSessionId ?: return
         val sid = SessionId(currentId)
         val text = _state.value.input.trim()
-        if (text.isEmpty() || _state.value.busy) return
+        val attachments = _state.value.attachments
+        if ((text.isEmpty() && attachments.isEmpty()) || _state.value.busy) return
         val key = keys.apiKey
         if (key.isNullOrBlank()) {
             _state.value = _state.value.copy(needsKey = true, input = "")
             return
         }
+        val blind = attachments.isNotEmpty() && !modelSupportsVision()
 
         // Optimistic echo + busy, both SYNCHRONOUS with the tap, so the user
         // sees their own bubble and the stop affordance instantly instead of
@@ -977,7 +1073,9 @@ class ChatViewModel(
         _state.value = _state.value.copy(
             input = "",
             error = null,
+            hint = if (blind) "the selected model may not support images" else null,
             busy = true,
+            attachments = emptyList(),
             steps = _state.value.steps + StepMapper.optimisticUser(text),
         )
 
@@ -987,6 +1085,23 @@ class ChatViewModel(
                 val s = store.session(sid)
                 if (s != null && (s.title == "new chat" || s.title.isBlank())) {
                     store.updateSession(s.copy(title = oneLine(text, 48), updatedAt = System.currentTimeMillis()))
+                }
+            }
+            // Carry the queued images on a dedicated user message; Wire expands
+            // its Part.File parts into WireImage for Role.USER.
+            if (attachments.isNotEmpty()) {
+                runCatching {
+                    store.appendMessage(
+                        Message(
+                            id = MessageId(Ids.new("msg")),
+                            sessionId = sid,
+                            role = Role.USER,
+                            parts = attachments.map { a ->
+                                Part.File(PartId(Ids.new("prt")), path = a.name, mime = a.mime, dataBase64 = a.base64)
+                            },
+                            createdAt = System.currentTimeMillis(),
+                        ),
+                    )
                 }
             }
             val loop = AgentLoop(
@@ -1033,6 +1148,9 @@ class ChatViewModel(
 
         /** Upper bound on retained terminal chunks, so a chatty shell cannot grow forever. */
         const val MAX_TERMINAL_CHUNKS = 2000
+
+        /** Upper bound on an HTML page loaded into the canvas: 2 MB, UTF-8. */
+        const val MAX_CANVAS_BYTES = 2L * 1024 * 1024
 
         fun Factory(context: Context, workspace: java.io.File): androidx.lifecycle.ViewModelProvider.Factory =
             object : androidx.lifecycle.ViewModelProvider.Factory {

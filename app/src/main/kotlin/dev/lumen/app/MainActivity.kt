@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import dev.lumen.app.ui.CanvasScreen
 import dev.lumen.app.ui.FilesScreen
 import dev.lumen.app.ui.HomeScreen
 import dev.lumen.app.ui.KeyScreen
@@ -64,12 +65,27 @@ class MainActivity : ComponentActivity() {
             var filesReturn by rememberSaveable { mutableStateOf("home") }
             // The route to return to when leaving the terminal.
             var terminalReturn by rememberSaveable { mutableStateOf("home") }
+            // The route to return to when leaving the canvas.
+            var canvasReturn by rememberSaveable { mutableStateOf("chat") }
             val onChat = route == "chat" && state.currentSessionId != null
+
+            // Open the canvas only when the page resolved; a refused path stays put.
+            val openCanvas: (String) -> Unit = { path ->
+                viewModel.openCanvas(path)
+                if (viewModel.state.value.canvas != null) {
+                    canvasReturn = if (route == "chat" || route == "files") route else "home"
+                    route = "canvas"
+                }
+            }
 
             BackHandler(enabled = route != "home" || state.currentSessionId != null) {
                 when {
                     state.peek != null -> viewModel.closePeek()
                     state.editor != null -> viewModel.closeEditor()
+                    route == "canvas" -> {
+                        viewModel.closeCanvas()
+                        route = canvasReturn
+                    }
                     route == "files" -> route = filesReturn
                     route == "terminal" -> {
                         viewModel.closeTerminal()
@@ -140,6 +156,11 @@ class MainActivity : ComponentActivity() {
                     onAnswerPermission = viewModel::answerPermission,
                     onAnswerQuestion = viewModel::answerQuestion,
                     onSkipQuestion = viewModel::skipQuestion,
+                    attachments = state.attachments,
+                    onRemoveAttachment = viewModel::removeAttachment,
+                    hint = state.hint,
+                    onOpenCanvas = openCanvas,
+                    onAttachImage = viewModel::attachImage,
                 )
                 route == "files" -> {
                     LaunchedEffect(Unit) { if (state.files == null) viewModel.openFiles() }
@@ -162,6 +183,7 @@ class MainActivity : ComponentActivity() {
                         onRename = viewModel::renameEntry,
                         onDelete = viewModel::deleteEntry,
                         onBack = { route = filesReturn },
+                        onOpenCanvas = openCanvas,
                         modifier = modifier,
                     )
                 }
@@ -178,6 +200,22 @@ class MainActivity : ComponentActivity() {
                         onBack = {
                             viewModel.closeTerminal()
                             route = terminalReturn
+                        },
+                        modifier = modifier,
+                    )
+                }
+                route == "canvas" -> {
+                    // A cold start with no retained HTML falls back to where we came from.
+                    LaunchedEffect(state.canvas) {
+                        if (state.canvas == null) route = canvasReturn
+                    }
+                    CanvasScreen(
+                        html = state.canvas.orEmpty(),
+                        colors = colors,
+                        sourceName = state.canvasPath?.substringAfterLast('/') ?: "page",
+                        onBack = {
+                            viewModel.closeCanvas()
+                            route = canvasReturn
                         },
                         modifier = modifier,
                     )

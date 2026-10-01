@@ -70,6 +70,8 @@ fun FilesScreen(
     onRename: (String, String) -> Unit,
     onDelete: (String, Boolean) -> Unit,
     onBack: () -> Unit,
+    /** Open an `.html`/`.htm` file in the sandboxed canvas. */
+    onOpenCanvas: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val dir = files?.dir.orEmpty()
@@ -119,6 +121,7 @@ fun FilesScreen(
                             onEnter = onEnter,
                             onRename = { renameTarget = it },
                             onDelete = { deleteTarget = it },
+                            onOpenCanvas = onOpenCanvas,
                         )
                     }
                 }
@@ -292,6 +295,7 @@ private fun EntryRow(
     onEnter: (FileEntry) -> Unit,
     onRename: (FileEntry) -> Unit,
     onDelete: (FileEntry) -> Unit,
+    onOpenCanvas: (String) -> Unit = {},
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(
@@ -318,6 +322,18 @@ private fun EntryRow(
         if (!entry.isDir) {
             Spacer(Modifier.width(8.dp))
             Text(humanSize(entry.size), color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp)
+            if (isHtml(entry.name)) {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "\u25b6 view",
+                    color = colors.water, fontFamily = Mono, fontSize = 10.5.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { onOpenCanvas(entry.path) }
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .testTag("view-${entry.path}"),
+                )
+            }
         }
         Box {
             Text(
@@ -527,3 +543,7 @@ private fun humanSize(bytes: Long): String = when {
     bytes < 1024 * 1024 -> "${bytes / 1024}K"
     else -> "${bytes / (1024 * 1024)}M"
 }
+
+/** True for a self-contained page the canvas can render. */
+private fun isHtml(name: String): Boolean =
+    name.endsWith(".html", ignoreCase = true) || name.endsWith(".htm", ignoreCase = true)
