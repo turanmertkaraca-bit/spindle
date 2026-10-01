@@ -112,6 +112,10 @@ class MainActivity : ComponentActivity() {
                     onInput = viewModel::onInput,
                     onSend = viewModel::send,
                     onStop = viewModel::stop,
+                    agentMode = state.agentMode,
+                    onAgentMode = viewModel::setAgentMode,
+                    onFork = { state.currentSessionId?.let(viewModel::forkSession) },
+                    onRewind = viewModel::rewindTo,
                     onToggleTheme = toggleTheme,
                     onEditKey = { route = "settings" },
                     onFiles = {
@@ -207,6 +211,10 @@ class MainActivity : ComponentActivity() {
                         route = "chat"
                     },
                     onDelete = viewModel::deleteSession,
+                    onFork = viewModel::forkSession,
+                    search = state.search,
+                    searchQuery = state.searchQuery,
+                    onSearch = viewModel::searchSessions,
                     onSettings = { route = "settings" },
                     modifier = modifier,
                     onToggleTheme = toggleTheme,

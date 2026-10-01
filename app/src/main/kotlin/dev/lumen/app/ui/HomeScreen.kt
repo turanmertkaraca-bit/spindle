@@ -19,19 +19,25 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.SessionRow
+import dev.spindle.core.store.SearchHit
 
 private val Mono = FontFamily.Monospace
 
@@ -50,6 +56,14 @@ fun HomeScreen(
     onFiles: (() -> Unit)? = null,
     /** Open the interactive shell, when supplied. */
     onTerminal: (() -> Unit)? = null,
+    /** Full-text hits; non-null while a search is active. */
+    search: List<SearchHit>? = null,
+    /** Current search text. */
+    searchQuery: String = "",
+    /** Update the search query (the view model runs the query). */
+    onSearch: (String) -> Unit = {},
+    /** Fork a session at its head into a new child chat. */
+    onFork: (String) -> Unit = {},
 ) {
     Column(
         modifier.fillMaxSize().background(colors.bg).imePadding()
@@ -124,7 +138,58 @@ fun HomeScreen(
         }
         Spacer(Modifier.height(20.dp))
 
-        if (sessions.isEmpty()) {
+        Box(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(50))
+                .background(colors.surface)
+                .border(1.dp, colors.rule, RoundedCornerShape(50))
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+        ) {
+            if (searchQuery.isEmpty()) {
+                Text("search chats…", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
+            }
+            BasicTextField(
+                value = searchQuery,
+                onValueChange = onSearch,
+                singleLine = true,
+                textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 13.sp),
+                cursorBrush = SolidColor(colors.water),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                modifier = Modifier.fillMaxWidth().testTag("search"),
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+
+        if (search != null) {
+            if (search.isEmpty()) {
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    Text("no matches", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
+                }
+            } else {
+                LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("search-results")) {
+                    items(search, key = { it.sessionId.value + ":" + it.messageId }) { hit ->
+                        Column(
+                            Modifier.fillMaxWidth()
+                                .padding(vertical = 2.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { onOpen(hit.sessionId.value) }
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                                .testTag("search-hit-${hit.messageId}"),
+                        ) {
+                            Text(
+                                hit.role.lowercase(), color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp,
+                                letterSpacing = 1.2.sp,
+                            )
+                            Spacer(Modifier.height(3.dp))
+                            Text(
+                                hit.snippet, color = colors.fg, fontFamily = Mono, fontSize = 13.sp,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+        } else if (sessions.isEmpty()) {
             Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(Modifier.size(10.dp).background(colors.faint, WaterShapes.droplet(tail = 0.55f)))
@@ -161,6 +226,16 @@ fun HomeScreen(
                         Spacer(Modifier.width(10.dp))
                         Text(ago(s.updatedAt), color = colors.faint, fontFamily = Mono, fontSize = 11.sp)
                         Spacer(Modifier.width(8.dp))
+                        Text(
+                            "fork",
+                            color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .clickable { onFork(s.id) }
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                .testTag("fork-${s.id}"),
+                        )
+                        Spacer(Modifier.width(4.dp))
                         Text(
                             "×",
                             color = colors.faint, fontFamily = Mono, fontSize = 16.sp,

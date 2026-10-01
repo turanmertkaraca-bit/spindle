@@ -20,7 +20,6 @@ import dev.spindle.core.store.Reverter
 import dev.spindle.core.store.SnapshotStore
 import dev.spindle.core.tool.ShellExecutor
 import dev.spindle.tool.HostShellExecutor
-import dev.spindle.core.agent.AgentConfig
 import dev.spindle.core.agent.AgentLoop
 import dev.spindle.core.agent.PermissionGate
 import dev.spindle.core.agent.QuestionGate
@@ -28,10 +27,13 @@ import dev.spindle.core.event.AgentEvent
 import dev.spindle.core.event.DeltaKind
 import dev.spindle.core.event.EventBus
 import dev.spindle.core.model.Ids
+import dev.spindle.core.model.MessageId
 import dev.spindle.core.model.Part
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.provider.SimpleProviderRegistry
+import dev.spindle.core.store.SearchHit
+import dev.spindle.core.store.SessionSearch
 import dev.spindle.core.store.SessionStore
 import dev.spindle.tool.DefaultTools
 import kotlinx.coroutines.CompletableDeferred
@@ -135,6 +137,12 @@ data class ChatState(
     val needsKey: Boolean = true,
     /** Recent chats, newest first. */
     val sessions: List<SessionRow> = emptyList(),
+    /** Full-text hits for [searchQuery]; null when no search is active. */
+    val search: List<SearchHit>? = null,
+    /** The text currently in the home search field. */
+    val searchQuery: String = "",
+    /** Active primary agent for new prompts: "build" | "plan". */
+    val agentMode: String = "build",
     /** The chat currently open, or null on the home screen. */
     val currentSessionId: String? = null,
     /** "system" | "light" | "dark". */
@@ -181,6 +189,7 @@ class ChatViewModel(
             needsKey = !keys.hasKey,
             theme = keys.theme,
             askBeforeTools = keys.askBeforeTools,
+            agentMode = keys.agentMode,
         ),
     )
     val state: StateFlow<ChatState> = _state.asStateFlow()
@@ -346,6 +355,12 @@ class ChatViewModel(
         _state.value = _state.value.copy(theme = theme)
     }
 
+    /** Switch the active primary agent (build/plan) and persist the choice. */
+    fun setAgentMode(mode: String) {
+        keys.agentMode = mode
+        _state.value = _state.value.copy(agentMode = mode)
+    }
+
     // ---- sessions ----
 
     fun newChat() {
@@ -411,6 +426,60 @@ class ChatViewModel(
             store.deleteSession(SessionId(id))
             if (_state.value.currentSessionId == id) closeChat()
             refreshSessions()
+        }
+    }
+
+    /**
+     * Fork [id] at its head (all messages) into a fresh child session and open
+     * it. Stores that cannot fork return null and nothing changes.
+     */
+    fun forkSession(id: String) {
+        viewModelScope.launch {
+            val newId = SessionId(Ids.new("ses"))
+            val fork = store.forkSession(SessionId(id), null, newId)
+            if (fork != null) {
+                refreshSessions()
+                openSession(fork.id.value)
+            }
+        }
+    }
+
+    /**
+     * Drop every message after [messageId] in the current session, then rebuild
+     * the timeline from what the store now holds.
+     */
+    fun rewindTo(messageId: String) {
+        val current = _state.value.currentSessionId ?: return
+        viewModelScope.launch {
+            val sid = SessionId(current)
+            store.rewind(sid, MessageId(messageId))
+            val messages = store.messages(sid)
+            _state.value = _state.value.copy(
+                steps = enrich(StepMapper.fromMessages(messages)),
+                usage = messages.fold(Usage()) { acc, m -> acc + m.usage },
+                changes = RunChanges.EMPTY,
+                error = null,
+            )
+        }
+    }
+
+    /**
+     * Full-text search over the store, when it advertises [SessionSearch]. A
+     * blank query clears the results; a store without search is a no-op for the
+     * results (the query text still tracks the field).
+     */
+    fun searchSessions(query: String) {
+        _state.value = _state.value.copy(searchQuery = query)
+        val searchable = store as? SessionSearch ?: return
+        if (query.isBlank()) {
+            _state.value = _state.value.copy(search = null)
+            return
+        }
+        viewModelScope.launch {
+            val hits = runCatching { searchable.search(query) }.getOrDefault(emptyList())
+            if (_state.value.searchQuery == query) {
+                _state.value = _state.value.copy(search = hits)
+            }
         }
     }
 
@@ -931,7 +1000,7 @@ class ChatViewModel(
                 snapshots = snapshots,
             )
             try {
-                loop.prompt(sid, text, keys.model, AgentConfig(maxSteps = 12))
+                loop.prompt(sid, text, keys.model, _state.value.agentMode)
             } catch (t: Throwable) {
                 _state.value = _state.value.copy(error = t.message ?: t.toString(), busy = false)
             }

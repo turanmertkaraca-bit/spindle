@@ -212,8 +212,16 @@ fun LumenChatScreen(
     onHome: (() -> Unit)? = null,
     /** Open the project files cockpit from the chat top bar, when supplied. */
     onFiles: (() -> Unit)? = null,
-    /** Open the interactive terminal from the chat top bar, when supplied. */
+    /** The interactive terminal from the chat top bar, when supplied. */
     onTerminal: (() -> Unit)? = null,
+    /** Fork this chat at its head; null hides the action. */
+    onFork: (() -> Unit)? = null,
+    /** Rewind the active session to a store message id (from an assistant row). */
+    onRewind: (String) -> Unit = {},
+    /** Active primary agent: "build" | "plan". */
+    agentMode: String = "build",
+    /** Switch the primary agent. */
+    onAgentMode: (String) -> Unit = {},
     onInput: (String) -> Unit = {},
     onSend: () -> Unit = {},
     onStop: () -> Unit = {},
@@ -350,6 +358,17 @@ fun LumenChatScreen(
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f),
                             )
+                            if (onFork != null) {
+                                Text(
+                                    "fork",
+                                    color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable { onFork() }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                        .testTag("fork"),
+                                )
+                            }
                             if (onFiles != null) {
                                 Text(
                                     "files",
@@ -396,6 +415,7 @@ fun LumenChatScreen(
                                         exists = exists,
                                         touchedPaths = touchedPaths,
                                         onOpenFile = onOpenFile,
+                                        onRewind = onRewind,
                                         modifier = Modifier.animateItem(),
                                     )
                                 }
@@ -429,7 +449,7 @@ fun LumenChatScreen(
             ask?.let {
                 AskCard(it, colors, onAnswerPermission, onAnswerQuestion, onSkipQuestion)
             }
-            Composer(input, busy, colors, onInput, onSend, onStop, onToggleTheme, onEditKey)
+            Composer(input, busy, colors, onInput, onSend, onStop, onToggleTheme, onEditKey, agentMode, onAgentMode)
         }
         peek?.let { FilePeekOverlay(it, colors, onClosePeek) }
     }
@@ -500,10 +520,12 @@ private fun MessageRow(
     exists: (String) -> Boolean = { false },
     touchedPaths: Set<String> = emptySet(),
     onOpenFile: (String, Int?) -> Unit = { _, _ -> },
+    onRewind: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(step.id) { mutableStateOf(false) }
+    var rewindArmed by remember(step.id) { mutableStateOf(false) }
     LaunchedEffect(copied) {
         if (copied) {
             kotlinx.coroutines.delay(1200)
@@ -544,10 +566,15 @@ private fun MessageRow(
             if (!isYou) {
                 Row(
                     Modifier.pointerInput(step.id) {
-                        detectTapGestures(onDoubleTap = {
-                            clipboard.setText(AnnotatedString(step.body))
-                            copied = true
-                        })
+                        detectTapGestures(
+                            onDoubleTap = {
+                                clipboard.setText(AnnotatedString(step.body))
+                                copied = true
+                            },
+                            onLongPress = {
+                                if (step.messageId != null) rewindArmed = !rewindArmed
+                            },
+                        )
                     },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -592,6 +619,24 @@ private fun MessageRow(
                         color = colors.fg, fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp,
                     )
                 }
+            }
+
+            val mid = step.messageId
+            if (rewindArmed && mid != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "rewind to here",
+                    color = colors.water, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .border(1.dp, colors.water.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                        .clickable {
+                            onRewind(mid)
+                            rewindArmed = false
+                        }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .testTag("rewind-${step.id}"),
+                )
             }
 
             if (step.rows.isNotEmpty()) {
@@ -1251,6 +1296,8 @@ private fun Composer(
     onStop: () -> Unit,
     onToggleTheme: (() -> Unit)?,
     onEditKey: (() -> Unit)?,
+    agentMode: String,
+    onAgentMode: (String) -> Unit,
 ) {
     val canSend = input.isNotBlank()
     val interaction = remember { MutableInteractionSource() }
@@ -1261,6 +1308,19 @@ private fun Composer(
         label = "send-scale",
     )
     Column {
+        Row(
+            Modifier.fillMaxWidth().background(colors.bg)
+                .padding(start = 16.dp, end = 14.dp, top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AgentModeChip("build", "agent-build", agentMode == "build", colors.water, colors, onAgentMode)
+            Spacer(Modifier.width(8.dp))
+            AgentModeChip("plan", "agent-plan", agentMode == "plan", colors.accent, colors, onAgentMode)
+            if (agentMode == "plan") {
+                Spacer(Modifier.width(10.dp))
+                Text("read-only plan", color = colors.accent, fontFamily = Mono, fontSize = 10.5.sp)
+            }
+        }
         Box(
             Modifier.fillMaxWidth().height(1.dp).drawBehind {
                 drawRect(
@@ -1339,6 +1399,30 @@ private fun Composer(
             }
         }
     }
+}
+
+/** A compact build/plan selector; plan tints with the accent so it reads distinct. */
+@Composable
+private fun AgentModeChip(
+    label: String,
+    tag: String,
+    selected: Boolean,
+    tint: Color,
+    colors: LumenColors,
+    onSelect: (String) -> Unit,
+) {
+    Text(
+        label,
+        color = if (selected) colors.bg else colors.dim,
+        fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) tint else colors.surface)
+            .border(1.dp, if (selected) tint else colors.rule, RoundedCornerShape(50))
+            .clickable { onSelect(label) }
+            .padding(horizontal = 12.dp, vertical = 5.dp)
+            .testTag(tag),
+    )
 }
 
 /**

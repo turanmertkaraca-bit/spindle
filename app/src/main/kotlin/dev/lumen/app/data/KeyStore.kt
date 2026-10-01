@@ -28,6 +28,11 @@ class KeyStore(context: Context) {
         get() = prefs.getString("theme", "system") ?: "system"
         set(value) = prefs.edit().putString("theme", value).apply()
 
+    /** The active primary agent: "build" | "plan". */
+    var agentMode: String
+        get() = prefs.getString("agentMode", "build") ?: "build"
+        set(value) = prefs.edit().putString("agentMode", value).apply()
+
     /**
      * When true, every tool call goes through an interactive ask before it runs.
      * Default false keeps the historical unattended behaviour (allow all).

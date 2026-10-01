@@ -35,4 +35,12 @@ class KeyStoreTest {
         store.allowedPatterns = emptySet()
         assertTrue(newStore().allowedPatterns.isEmpty())
     }
+
+    @Test
+    fun `agent mode defaults to build and round-trips`() {
+        val store = newStore()
+        assertEquals("build", store.agentMode)
+        store.agentMode = "plan"
+        assertEquals("plan", newStore().agentMode, "a new instance sees the persisted mode")
+    }
 }

@@ -45,4 +45,6 @@ data class UiStep(
     val childLoading: Boolean = false,
     /** Tool names of the calls folded into this run, for the compact summary. */
     val toolNames: List<String> = emptyList(),
+    /** The store message this row came from; used by rewind. Null for synthetic rows. */
+    val messageId: String? = null,
 )

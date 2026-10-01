@@ -29,7 +29,7 @@ object StepMapper {
                     if (text.isNotBlank()) {
                         out += UiStep(
                             id = m.id.value, kind = StepKind.YOU, label = "YOU", tag = tag(m.id.value),
-                            summary = oneLine(text), body = text,
+                            summary = oneLine(text), body = text, messageId = m.id.value,
                         )
                     }
                 }
@@ -40,14 +40,14 @@ object StepMapper {
                                 if (p.text.isBlank()) continue
                                 out += UiStep(
                                     id = p.id.value, kind = StepKind.THINKING, label = "THINKING", tag = tag(p.id.value),
-                                    summary = oneLine(p.text), body = p.text.trim(),
+                                    summary = oneLine(p.text), body = p.text.trim(), messageId = m.id.value,
                                 )
                             }
                             is Part.Text -> {
                                 if (p.text.isBlank()) continue
                                 out += UiStep(
                                     id = p.id.value, kind = StepKind.ASSISTANT, label = "ASSISTANT", tag = tag(p.id.value),
-                                    summary = oneLine(p.text), body = p.text.trim(),
+                                    summary = oneLine(p.text), body = p.text.trim(), messageId = m.id.value,
                                 )
                             }
                             is Part.Tool -> {
@@ -66,6 +66,7 @@ object StepMapper {
                                     running = p.state == ToolState.RUNNING || p.state == ToolState.PENDING,
                                     failed = p.state == ToolState.ERROR,
                                     childId = if (isSub) p.result?.metadata?.get("sessionId") else null,
+                                    messageId = m.id.value,
                                 )
                             }
                             else -> Unit
