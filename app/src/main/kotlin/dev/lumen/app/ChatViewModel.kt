@@ -566,12 +566,17 @@ class ChatViewModel(
 
     /** Re-read Alpine/Debian readiness off the main thread. */
     fun refreshLinuxEnvironment() {
+        // With no environment wired (unit-test hosts), there is nothing to
+        // probe: skip the background write so state stays synchronous.
+        val env = environment
+        val deb = debian
+        if (env == null && deb == null) return
         viewModelScope.launch(io) {
             _state.value = _state.value.copy(
                 linux = _state.value.linux.copy(
-                    alpineReady = environment?.ready() ?: false,
-                    debianReady = debian?.ready() ?: false,
-                    debianActive = debian?.active() ?: false,
+                    alpineReady = env?.ready() ?: false,
+                    debianReady = deb?.ready() ?: false,
+                    debianActive = deb?.active() ?: false,
                 ),
             )
         }
