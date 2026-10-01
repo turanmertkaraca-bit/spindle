@@ -132,11 +132,18 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
     }
 
     private fun backfillFts() {
-        val ids = db.rawQuery("SELECT id FROM messages", null).use { c ->
-            buildList { while (c.moveToNext()) add(c.getString(0)) }
+        val ids = db.rawQuery("SELECT id, session_id FROM messages", null).use { c ->
+            buildList {
+                val idIdx = c.getColumnIndexOrThrow("id")
+                val sidIdx = c.getColumnIndexOrThrow("session_id")
+                while (c.moveToNext()) add(c.getString(idIdx) to c.getString(sidIdx))
+            }
         }
-        for (id in ids) {
-            ftsInsert(id)
+        for ((id, sid) in ids) {
+            val message = db.rawQuery("SELECT * FROM messages WHERE id=?", arrayOf(id)).use { c ->
+                if (c.moveToFirst()) c.toMessage() else null
+            } ?: continue
+            ftsRow(message)
         }
     }
 
