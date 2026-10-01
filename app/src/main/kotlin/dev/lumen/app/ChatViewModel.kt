@@ -791,6 +791,8 @@ class ChatViewModel(
                 changes = RunChanges.EMPTY,
                 error = null,
             )
+            val todos = loadTodos(sid)
+            _state.value = _state.value.copy(todos = todos)
         }
     }
 
