@@ -73,7 +73,7 @@ class CanvasAttachmentTest {
     }
 
     @Test
-    fun `openCanvas refuses escape paths and missing files`() {
+    fun openCanvasRefusesEscapePathsAndMissingFiles() {
         val outside = File(workspace.parentFile, "secret.html")
         outside.writeText("<html>secret</html>")
 
@@ -108,7 +108,7 @@ class CanvasAttachmentTest {
     }
 
     @Test
-    fun `send carries queued images as Part.File and clears the queue`() {
+    fun sendCarriesQueuedImagesAsFilePartsAndClearsTheQueue() {
         val store = InMemorySessionStore()
         val dir = Files.createTempDirectory("lumen-send-vision").toFile()
         val keys = KeyStore(ApplicationProvider.getApplicationContext<Context>())
@@ -125,7 +125,7 @@ class CanvasAttachmentTest {
         model.stop()
 
         assertTrue(model.state.value.attachments.isEmpty(), "the queue clears on send")
-        val messages = store.messages(dev.spindle.core.model.SessionId(sid))
+        val messages = kotlinx.coroutines.runBlocking { store.messages(dev.spindle.core.model.SessionId(sid)) }
         val withImages = messages.firstOrNull { m ->
             m.role == Role.USER && m.parts.any { it is Part.File }
         }
