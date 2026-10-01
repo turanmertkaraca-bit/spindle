@@ -672,11 +672,11 @@ private fun MessageRow(
                     "\u25b6 view",
                     color = colors.water, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
+                        .testTag("canvas-view-${step.id}")
                         .clip(RoundedCornerShape(6.dp))
                         .border(1.dp, colors.water.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
                         .clickable { onOpenCanvas(htmlPath) }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                        .testTag("canvas-view-${step.id}"),
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
                 )
             }
             if (rewindArmed && mid != null) {

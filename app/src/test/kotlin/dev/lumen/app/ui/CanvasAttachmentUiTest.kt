@@ -8,6 +8,8 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.unit.dp
 import dev.lumen.app.PendingImage
 import org.junit.Rule
@@ -101,7 +103,7 @@ class CanvasAttachmentUiTest {
             )
         }
 
-        compose.onNodeWithTag("canvas-view-a").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("canvas-view-a").assertIsDisplayed().performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         assertEquals("pages/demo.html", opened)
     }
