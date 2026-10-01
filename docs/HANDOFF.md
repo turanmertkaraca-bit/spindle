@@ -1,0 +1,115 @@
+# Lumen — session handoff (read me first)
+
+Native Android agent app. `spindle` repo, package `dev.lumen.app`. Merged from
+the old `opencode-android` (Java/Views + bundled server + Debian proot) into a
+fully native Kotlin/Compose app on spindle's in-process engine. Function-first;
+UI polish is the final pass.
+
+```
+██  NEVER COMMIT tokens/secrets. The git remote already embeds the PAT.  ██
+██  Never paste the PAT into chat (auto-revokes).                        ██
+```
+
+## 1. Repo + build
+
+- Repo: `/data/user/0/ai.opencode.app/files/projects/playground`
+  (`turanmertkaraca-bit/spindle`), branch `main`.
+- Push works from the guest: `git push origin main` (remote has the token).
+- Local fast loop (pure JVM only):
+  `bash -lc '. /root/env.sh && cd /data/user/0/ai.opencode.app/files/projects/playground && ./gradlew :core:test :sandbox:test :tools:test :provider-openai:test :provider-anthropic:test :store-sqlite:test :server:test --no-daemon --console=plain'`
+- `:app` is **CI-only** (no Android SDK in the guest).
+- Helpers (guest `/root/`): `ci.sh` (run/job status), `log.sh` (failing job log
+  → `/tmp/log.txt`), `apk.sh` (download `lumen-debug-apk` → Downloads),
+  `shots.sh` (download `lumen-screenshots` → Downloads).
+- `.ref/getart.pl` (in-repo) extracts an artifact id from artifacts JSON.
+- Read screenshots directly with `read` at
+  `/storage/emulated/0/Download/lumen-shots/<name>.png`.
+
+## 2. CI
+
+`.github/workflows/ci.yml`: jobs `jvm backend` + `android app (robolectric)`
+(`:app:testDebugUnitTest` + `assembleDebug`, artifacts `lumen-debug-apk`,
+`lumen-screenshots`, `unit-test-reports`). Poll by sha:
+```
+SHA=$(git rev-parse --short=7 HEAD)
+for i in $(seq 1 30); do out=$(bash /root/ci.sh); echo "$out" | head -1
+  echo "$out" | grep -qE "conclusion=(success|failure|cancelled)" && { echo "$out"; break; }
+  sleep 30; done
+```
+`ci.sh` can print a stale run first — always match `sha=$SHA`.
+
+## 3. Architecture (all green up to `e8b2277`)
+
+Modules: `:core` (pure JVM: model, agent loop, events, SPIs, markdown parser,
+references resolver, revert engine, UI math), `:sandbox` (TarGz + InAppProxy),
+`:tools`, `:provider-openai`, `:provider-anthropic`, `:store-sqlite`, `:cli`,
+`:server`, `:app`.
+
+Key capabilities already working on device:
+- Agent loop: approval policy (ALLOW/ASK/DENY), agent modes (build/plan/explore/
+  general), AGENTS.md rules, structured `FileEdit` + pre-edit snapshots, usage
+  events, session search/fork/rewind.
+- Linux userland: bundled **static busybox** applets first on PATH (cures
+  SIGSYS "Bad system call"), Alpine rootfs wrappers, opt-in Debian proot layer
+  (`DebianEnvironment`, not auto-downloaded). `targetSdk 28` exec exemption.
+- Chat: merged think→answer, markdown rendering, distinct compact tool cards
+  (collapsed; expand for bounded scroll output), subagent call tree, live todo
+  board, changes card w/ per-file revert, usage meter, sent-image thumbnails,
+  `↓ new` cue + haptic, reading-friendly scroll, no spine rail.
+- Files cockpit, interactive terminal, sandboxed HTML canvas, vision attach,
+  websearch tool, session search/fork UI, storage manager, diagnostics log.
+- Tool inspector: `durationMs` + tool metadata carried into `UiStep.toolMetadata`
+  and shown in the tool card body.
+
+## 4. KNOWN RED — fix first (`c310455` pushed, CI failing)
+
+`app/src/test/kotlin/dev/lumen/app/ui/ComposerCompletionTest.kt`
+test `the peek overlay renders a backlinks section that can jump`.
+
+- Failure: `AssertionError at ComposerCompletionTest.kt:110`
+  = `compose.onNodeWithTag("peek-backlinks").assertExists()`.
+- Meaning: the `peek-backlinks` node is **not in the semantics tree** even though
+  the test passes `peek = FilePeek(...)` and
+  `onBacklinks = { listOf(Backlink(0, "ASSISTANT", "see src/App.kt", true)) }`.
+- Status of prior attempts (all still red):
+  `assertIsDisplayed` → "not displayed"; `assertExists` → absent; added
+  `waitForIdle()` (no change); `useUnmergedTree=true` on the text lookups
+  (no change — the tag itself is absent).
+- Production wiring looks correct (`LumenChatScreen.kt` ~L262 `onBacklinks`
+  param; ~L517 `peek?.let { FilePeekOverlay(... backlinks = remember(p.path,
+  steps, touchedPaths){ onBacklinks(p.path) } ...) }`; overlay ~L2045;
+  `PeekBacklinks` ~L2158 with `if (backlinks.isNotEmpty())`).
+- **Suspects to check next session:**
+  1. `AndroidEnvironment`/`ChatViewModel` background writes are NOT involved
+     here (pure UI test), but confirm the test isn't missing `Dispatchers`
+     setup needed by `LumenChatScreen`'s other effects.
+  2. The `remember(p.path, steps, touchedPaths)` key omits `onBacklinks`; try
+     removing `remember` (compute inline) to rule out stale capture.
+  3. Verify the overlay actually composes under Robolectric: temporarily assert
+     `onNodeWithTag("file-peek")` (the overlay root tag) to see if the whole
+     overlay is missing (then the issue is the `peek` param not reaching it).
+  4. If the overlay is simply too tall/clipped in the test viewport, scroll or
+     shrink the peek body; but `assertExists` should not depend on layout, so
+     suspect #3 first.
+- Fastest path: pull the `unit-test-reports` artifact for the failing run and
+  read the exact stack/assertion (`/root/log.sh` for job log; use `.ref/getart.pl`
+  for the report zip).
+
+## 5. Deferred UI polish (user explicitly parked to the end)
+
+See `docs/UI-POLISH.md`. Headline: composer/input-box feel, and the top-bar
+`fork`/`files`/`shell` buttons look plain. Do NOT regress the already-fixed
+items listed there.
+
+## 6. Non-goals (do not build)
+
+MCP, LSP, plugins, OAuth providers, keyless free tier, HTTP server/SSE bridge,
+git-commit UI (v1), local models (v1). Provider routing parity (Zen/Go
+`/responses` + `/messages`) is parked until we can record a real keyed SSE.
+
+## 7. Tool-harness gotcha (not the app)
+
+Occasionally a tool call is emitted as literal `<parameter name="bash">…` text
+instead of a real call — nothing runs, and it looks like a network stall. It is
+a model/harness artifact after long turns, not the app or the server; restarting
+the session clears it. Keep commands short; avoid giant single-line blocks.
