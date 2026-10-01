@@ -11,6 +11,7 @@ import dev.lumen.app.platform.AndroidEnvironment
 import dev.lumen.app.platform.AndroidShellExecutor
 import dev.lumen.app.platform.AndroidTerminal
 import dev.lumen.app.platform.DebianEnvironment
+import dev.lumen.app.platform.PerfSampler
 import dev.lumen.app.platform.RunService
 import dev.lumen.app.platform.WorkspaceWatcher
 import dev.lumen.app.ui.model.StepKind
@@ -308,6 +309,9 @@ class ChatViewModel(
     private val watcher: WorkspaceWatcher? = context?.let {
         WorkspaceWatcher(workspace.toFile(), viewModelScope) { changed -> absorbIndirect(changed) }
     }
+
+    /** Frame/heap sampler for the on-device perf sweep; reports one diag line per run. */
+    private val perf = PerfSampler()
 
     /** Record externally-changed paths as change rows the user can see and open. */
     private fun absorbIndirect(paths: Set<String>) {
@@ -1695,6 +1699,7 @@ class ChatViewModel(
                 snapshots = snapshots,
             )
             try {
+                runCatching { perf.start() }
                 withContext(Dispatchers.IO) { runCatching { watcher?.start() } }
                 loop.prompt(
                     sid, text, keys.model, _state.value.agentMode,
@@ -1706,6 +1711,7 @@ class ChatViewModel(
                 _state.value = _state.value.copy(error = t.message ?: t.toString(), busy = false)
             } finally {
                 watcher?.stop()
+                runCatching { perf.stop() }.getOrNull()?.let { if (it.frames > 0) diag(it.line()) }
                 context?.let { ctx -> runCatching { RunService.stop(ctx) } }
             }
             refreshSessions()
