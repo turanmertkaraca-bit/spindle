@@ -210,6 +210,8 @@ fun LumenChatScreen(
     forceOpenIndex: Int? = null,
     title: String = "",
     onHome: (() -> Unit)? = null,
+    /** Open the project files cockpit from the chat top bar, when supplied. */
+    onFiles: (() -> Unit)? = null,
     onInput: (String) -> Unit = {},
     onSend: () -> Unit = {},
     onStop: () -> Unit = {},
@@ -346,6 +348,17 @@ fun LumenChatScreen(
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f),
                             )
+                            if (onFiles != null) {
+                                Text(
+                                    "files",
+                                    color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .clickable { onFiles() }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                        .testTag("open-files"),
+                                )
+                            }
                         }
                     }
                     Box(Modifier.weight(1f).fillMaxWidth()) {

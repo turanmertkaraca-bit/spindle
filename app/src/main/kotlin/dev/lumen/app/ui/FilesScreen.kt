@@ -1,0 +1,529 @@
+package dev.lumen.app.ui
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import dev.lumen.app.EditorState
+import dev.lumen.app.FileEntry
+import dev.lumen.app.FilesState
+
+private val Mono = FontFamily.Monospace
+
+/** What the "new" header actions are creating. */
+private enum class NewKind { File, Folder }
+
+/**
+ * The project file cockpit: a breadcrumbed browser plus an in-place editor, all
+ * scoped to the session workspace. Pure hoisted state — the caller wires every
+ * action to [dev.lumen.app.ChatViewModel].
+ */
+@Composable
+fun FilesScreen(
+    colors: LumenColors,
+    files: FilesState?,
+    editor: EditorState?,
+    onOpenDir: (String) -> Unit,
+    onUp: () -> Unit,
+    onEnter: (FileEntry) -> Unit,
+    onSaveFile: (String, String) -> Unit,
+    onCloseEditor: () -> Unit,
+    onCreateFile: (String, String) -> Unit,
+    onCreateDir: (String, String) -> Unit,
+    onRename: (String, String) -> Unit,
+    onDelete: (String, Boolean) -> Unit,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val dir = files?.dir.orEmpty()
+
+    var newKind by remember { mutableStateOf<NewKind?>(null) }
+    var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
+    var deleteTarget by remember { mutableStateOf<FileEntry?>(null) }
+    var pendingSave by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    Box(modifier.fillMaxSize().background(colors.bg).imePadding()) {
+        Column(Modifier.fillMaxSize()) {
+            FilesHeader(colors, dir, onBack = onBack, onUp = onUp, onNew = { newKind = it })
+
+            Breadcrumb(colors, dir, onOpenDir)
+
+            val listing = files
+            val listingError = listing?.error
+            if (listing == null) {
+                Hint(colors, "loading…")
+            } else if (listingError != null && listing.entries.isEmpty()) {
+                Hint(colors, listingError)
+            } else {
+                LazyColumn(
+                    Modifier.fillMaxWidth().weight(1f).testTag("files-list"),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    if (listingError != null) {
+                        item(key = "__error") {
+                            Text(
+                                listingError, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp).testTag("files-error"),
+                            )
+                        }
+                    }
+                    if (listing.entries.isEmpty() && listingError == null) {
+                        item(key = "__empty") {
+                            Text(
+                                "empty folder", color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 14.dp),
+                            )
+                        }
+                    }
+                    items(listing.entries, key = { it.path }) { entry ->
+                        EntryRow(
+                            colors = colors,
+                            entry = entry,
+                            onEnter = onEnter,
+                            onRename = { renameTarget = it },
+                            onDelete = { deleteTarget = it },
+                        )
+                    }
+                }
+            }
+        }
+
+        val openEditor = editor
+        if (openEditor != null) {
+            EditorOverlay(
+                colors = colors,
+                editor = openEditor,
+                onCancel = onCloseEditor,
+                onSave = { content -> pendingSave = openEditor.path to content },
+            )
+        }
+    }
+
+    newKind?.let { kind ->
+        NameDialog(
+            colors = colors,
+            title = if (kind == NewKind.File) "new file" else "new folder",
+            confirm = "create",
+            onDismiss = { newKind = null },
+            onConfirm = { name ->
+                if (kind == NewKind.File) onCreateFile(dir, name) else onCreateDir(dir, name)
+                newKind = null
+            },
+        )
+    }
+
+    renameTarget?.let { entry ->
+        NameDialog(
+            colors = colors,
+            title = "rename",
+            confirm = "rename",
+            initial = entry.name,
+            onDismiss = { renameTarget = null },
+            onConfirm = { name ->
+                onRename(entry.path, name)
+                renameTarget = null
+            },
+        )
+    }
+
+    deleteTarget?.let { entry ->
+        ConfirmDialog(
+            colors = colors,
+            title = "delete",
+            message = if (entry.isDir) {
+                "delete folder \"${entry.name}\" and everything inside it?"
+            } else {
+                "delete \"${entry.name}\"?"
+            },
+            confirm = "delete",
+            onDismiss = { deleteTarget = null },
+            onConfirm = {
+                onDelete(entry.path, entry.isDir)
+                deleteTarget = null
+            },
+        )
+    }
+
+    pendingSave?.let { (path, content) ->
+        ConfirmDialog(
+            colors = colors,
+            title = "overwrite",
+            message = "overwrite \"${path.substringAfterLast('/')}\"?",
+            confirm = "overwrite",
+            onDismiss = { pendingSave = null },
+            onConfirm = {
+                onSaveFile(path, content)
+                pendingSave = null
+            },
+        )
+    }
+}
+
+@Composable
+private fun FilesHeader(
+    colors: LumenColors,
+    dir: String,
+    onBack: () -> Unit,
+    onUp: () -> Unit,
+    onNew: (NewKind) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 10.dp, end = 14.dp, top = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "‹", color = colors.dim, fontFamily = Mono, fontSize = 20.sp,
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable { onBack() }
+                .padding(horizontal = 8.dp, vertical = 2.dp)
+                .testTag("files-back"),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text("files", color = colors.fg, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.weight(1f))
+        if (dir.isNotEmpty()) {
+            HeaderAction(colors, "up", "files-up", onUp)
+            Spacer(Modifier.width(4.dp))
+        }
+        HeaderAction(colors, "+ file", "new-file") { onNew(NewKind.File) }
+        Spacer(Modifier.width(4.dp))
+        HeaderAction(colors, "+ folder", "new-folder") { onNew(NewKind.Folder) }
+    }
+}
+
+@Composable
+private fun HeaderAction(
+    colors: LumenColors,
+    label: String,
+    tag: String,
+    onClick: () -> Unit,
+) {
+    Text(
+        label, color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 7.dp, vertical = 5.dp)
+            .testTag(tag),
+    )
+}
+
+@Composable
+private fun Breadcrumb(colors: LumenColors, dir: String, onOpenDir: (String) -> Unit) {
+    val segments = dir.split('/').filter { it.isNotEmpty() }
+    Row(
+        Modifier.fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 14.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "workspace",
+            color = if (segments.isEmpty()) colors.fg else colors.water,
+            fontFamily = Mono, fontSize = 12.sp,
+            modifier = Modifier
+                .clip(RoundedCornerShape(5.dp))
+                .clickable { onOpenDir("") }
+                .padding(horizontal = 4.dp, vertical = 3.dp)
+                .testTag("crumb-root"),
+        )
+        var prefix = ""
+        for (seg in segments) {
+            prefix = if (prefix.isEmpty()) seg else "$prefix/$seg"
+            val target = prefix
+            Text("/", color = colors.faint, fontFamily = Mono, fontSize = 12.sp)
+            Text(
+                seg,
+                color = colors.water,
+                fontFamily = Mono, fontSize = 12.sp,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(5.dp))
+                    .clickable { onOpenDir(target) }
+                    .padding(horizontal = 4.dp, vertical = 3.dp)
+                    .testTag("crumb-$target"),
+            )
+        }
+    }
+}
+
+@Composable
+private fun EntryRow(
+    colors: LumenColors,
+    entry: FileEntry,
+    onEnter: (FileEntry) -> Unit,
+    onRename: (FileEntry) -> Unit,
+    onDelete: (FileEntry) -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    Row(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onEnter(entry) }
+            .padding(start = 12.dp, end = 6.dp, top = 9.dp, bottom = 9.dp)
+            .testTag("entry-${entry.path}"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            if (entry.isDir) "▸" else "·",
+            color = if (entry.isDir) colors.water else colors.faint,
+            fontFamily = Mono, fontSize = 13.sp,
+            modifier = Modifier.width(18.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            if (entry.isDir) "${entry.name}/" else entry.name,
+            color = colors.fg, fontFamily = Mono, fontSize = 13.sp,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (!entry.isDir) {
+            Spacer(Modifier.width(8.dp))
+            Text(humanSize(entry.size), color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp)
+        }
+        Box {
+            Text(
+                "⋯", color = colors.faint, fontFamily = Mono, fontSize = 15.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { menu = true }
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                    .testTag("menu-${entry.path}"),
+            )
+            DropdownMenu(
+                expanded = menu,
+                onDismissRequest = { menu = false },
+                containerColor = colors.surface,
+            ) {
+                DropdownMenuItem(
+                    text = { Text("rename", color = colors.fg, fontFamily = Mono, fontSize = 12.5.sp) },
+                    onClick = { menu = false; onRename(entry) },
+                    modifier = Modifier.testTag("rename-${entry.path}"),
+                )
+                DropdownMenuItem(
+                    text = { Text("delete", color = colors.fg, fontFamily = Mono, fontSize = 12.5.sp) },
+                    onClick = { menu = false; onDelete(entry) },
+                    modifier = Modifier.testTag("delete-${entry.path}"),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The full-screen editor: monospace body, Save and Cancel. A file truncated at
+ * the line cap notes it and disables Save so a partial read can never overwrite
+ * the whole file.
+ */
+@Composable
+private fun EditorOverlay(
+    colors: LumenColors,
+    editor: EditorState,
+    onCancel: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    val failed = editor.error != null
+    var draft by remember(editor.path) { mutableStateOf(editor.lines.joinToString("\n")) }
+
+    Column(Modifier.fillMaxSize().background(colors.bg)) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                editor.path, color = colors.fg, fontFamily = Mono, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).testTag("editor-path"),
+            )
+            Spacer(Modifier.width(10.dp))
+            HeaderAction(colors, "cancel", "editor-cancel", onCancel)
+            Spacer(Modifier.width(4.dp))
+            val canSave = !editor.truncated && !failed
+            Text(
+                if (editor.truncated) "truncated" else "save",
+                color = if (canSave) colors.accent else colors.faint,
+                fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(enabled = canSave) { onSave(draft) }
+                    .padding(horizontal = 7.dp, vertical = 5.dp)
+                    .testTag("editor-save"),
+            )
+        }
+
+        if (failed) {
+            Text(
+                editor.error.orEmpty(), color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            )
+            return@Column
+        }
+        if (editor.truncated) {
+            Text(
+                "truncated at ${editor.lines.size} lines — save disabled",
+                color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.4.sp,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp).testTag("editor-truncated"),
+            )
+        }
+        Box(
+            Modifier.weight(1f).fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+        ) {
+            BasicTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp),
+                cursorBrush = SolidColor(colors.water),
+                modifier = Modifier.fillMaxWidth().testTag("editor-body"),
+            )
+        }
+    }
+}
+
+@Composable
+private fun NameDialog(
+    colors: LumenColors,
+    title: String,
+    confirm: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+    initial: String = "",
+) {
+    var value by remember { mutableStateOf(initial) }
+    val valid = value.isNotBlank() && value != "." && value != ".." &&
+        !value.contains('/') && !value.contains('\\')
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.surface,
+        titleContentColor = colors.fg,
+        textContentColor = colors.dim,
+        title = { Text(title, fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium) },
+        text = {
+            BasicTextField(
+                value = value,
+                onValueChange = { value = it },
+                singleLine = true,
+                textStyle = TextStyle(color = colors.fg, fontFamily = Mono, fontSize = 14.sp),
+                cursorBrush = SolidColor(colors.water),
+                modifier = Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, colors.rule, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+                    .testTag("name-input"),
+            )
+        },
+        confirmButton = {
+            Text(
+                confirm,
+                color = if (valid) colors.accent else colors.faint,
+                fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable(enabled = valid) { onConfirm(value.trim()) }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("name-confirm"),
+            )
+        },
+        dismissButton = {
+            Text(
+                "cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { onDismiss() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("name-cancel"),
+            )
+        },
+    )
+}
+
+@Composable
+private fun ConfirmDialog(
+    colors: LumenColors,
+    title: String,
+    message: String,
+    confirm: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.surface,
+        titleContentColor = colors.fg,
+        textContentColor = colors.dim,
+        title = { Text(title, fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium) },
+        text = { Text(message, fontFamily = Mono, fontSize = 12.5.sp, lineHeight = 18.sp) },
+        confirmButton = {
+            Text(
+                confirm, color = colors.accent, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { onConfirm() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("confirm-yes"),
+            )
+        },
+        dismissButton = {
+            Text(
+                "cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { onDismiss() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("confirm-no"),
+            )
+        },
+    )
+}
+
+@Composable
+private fun Hint(colors: LumenColors, text: String) {
+    Box(Modifier.fillMaxWidth().padding(vertical = 40.dp), contentAlignment = Alignment.Center) {
+        Text(text, color = colors.faint, fontFamily = Mono, fontSize = 12.sp)
+    }
+}
+
+private fun humanSize(bytes: Long): String = when {
+    bytes < 1024 -> "${bytes}B"
+    bytes < 1024 * 1024 -> "${bytes / 1024}K"
+    else -> "${bytes / (1024 * 1024)}M"
+}

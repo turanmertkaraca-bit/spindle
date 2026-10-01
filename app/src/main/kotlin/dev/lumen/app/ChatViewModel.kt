@@ -63,6 +63,31 @@ data class FilePeek(
     val truncated: Boolean = false,
 )
 
+/** One row in the project file browser. [path] is workspace-relative, `/`-joined. */
+data class FileEntry(
+    val name: String,
+    val path: String,
+    val isDir: Boolean,
+    val size: Long,
+    val modified: Long,
+)
+
+/** The current folder listing. [dir] is workspace-relative; "" is the root. */
+data class FilesState(
+    val dir: String,
+    val entries: List<FileEntry>,
+    val loading: Boolean = false,
+    val error: String? = null,
+)
+
+/** The file open in the editor, capped at [ChatViewModel.MAX_PEEK_LINES]. */
+data class EditorState(
+    val path: String,
+    val lines: List<String>,
+    val truncated: Boolean = false,
+    val error: String? = null,
+)
+
 /**
  * A gate prompt waiting on the user. [Permission] maps to the approval policy's
  * ASK branch; [Question] maps to the `question` tool. Each carries its own id so
@@ -108,6 +133,10 @@ data class ChatState(
     val changes: RunChanges = RunChanges.EMPTY,
     /** The file currently shown in the peek sheet, or null when closed. */
     val peek: FilePeek? = null,
+    /** The project file browser's current folder, or null until opened. */
+    val files: FilesState? = null,
+    /** The file open in the files editor, or null when closed. */
+    val editor: EditorState? = null,
     /** A permission or question prompt awaiting the user, or null when idle. */
     val ask: PendingAsk? = null,
     /** Whether tools are confirmed interactively before running. */
@@ -446,6 +475,217 @@ class ChatViewModel(
         _state.value = _state.value.copy(peek = null)
     }
 
+    // ---- files browser + editor ----
+
+    /**
+     * List `workspace/<dir>` one level deep: folders first, then files, each
+     * name-ascending. [dir] is workspace-relative ("" or null is the root);
+     * anything that resolves outside the workspace is refused and surfaces as
+     * [FilesState.error]. The listing is capped at [MAX_FILES_ENTRIES].
+     */
+    fun openFiles(dir: String? = null) {
+        val rel = normalizeRel(dir ?: "")
+        val target = inWorkspace(rel)
+        if (target == null || !Files.isDirectory(target)) {
+            surfaceFilesError("cannot open ${rel.ifEmpty { "workspace" }}", rel)
+            return
+        }
+        try {
+            _state.value = _state.value.copy(
+                files = FilesState(dir = relativeToWorkspace(target), entries = listEntries(target)),
+            )
+        } catch (t: Throwable) {
+            surfaceFilesError(t.message ?: "cannot open ${rel.ifEmpty { "workspace" }}", rel)
+        }
+    }
+
+    /** Enter the workspace-relative folder [rel]. */
+    fun enterDir(rel: String) = openFiles(rel)
+
+    /** Move to the parent of the current folder, clamped at the workspace root. */
+    fun filesUp() {
+        val current = _state.value.files?.dir.orEmpty()
+        if (current.isEmpty()) {
+            openFiles()
+            return
+        }
+        openFiles(current.substringBeforeLast('/', ""))
+    }
+
+    /**
+     * Write UTF-8 [content] to [path], creating parent folders as needed and
+     * refusing escapes. The listing is refreshed afterwards either way.
+     */
+    fun saveFile(path: String, content: String) {
+        val target = inWorkspace(path)
+        if (target == null) {
+            surfaceFilesError("cannot write $path")
+            return
+        }
+        try {
+            target.parent?.let { Files.createDirectories(it) }
+            Files.write(target, content.toByteArray(StandardCharsets.UTF_8))
+            openFiles(_state.value.files?.dir.orEmpty())
+        } catch (t: Throwable) {
+            surfaceFilesError(t.message ?: "cannot write $path")
+        }
+    }
+
+    /** Create an empty file named [name] inside [dir], refusing bad names/escapes. */
+    fun createFile(dir: String, name: String) {
+        val trimmed = name.trim()
+        if (!validName(trimmed)) return surfaceFilesError("invalid name")
+        val target = inWorkspace(joinRel(dir, trimmed))
+        if (target == null) return surfaceFilesError("cannot create $trimmed")
+        try {
+            target.parent?.let { Files.createDirectories(it) }
+            Files.createFile(target)
+            openFiles(dir)
+        } catch (t: Throwable) {
+            surfaceFilesError(t.message ?: "cannot create $trimmed")
+        }
+    }
+
+    /** Create a folder named [name] inside [dir], refusing bad names/escapes. */
+    fun createDir(dir: String, name: String) {
+        val trimmed = name.trim()
+        if (!validName(trimmed)) return surfaceFilesError("invalid name")
+        val target = inWorkspace(joinRel(dir, trimmed))
+        if (target == null) return surfaceFilesError("cannot create $trimmed")
+        try {
+            target.parent?.let { Files.createDirectories(it) }
+            Files.createDirectory(target)
+            openFiles(dir)
+        } catch (t: Throwable) {
+            surfaceFilesError(t.message ?: "cannot create $trimmed")
+        }
+    }
+
+    /**
+     * Delete [path]. A folder is only removed recursively when [recursive] is
+     * true; otherwise it must be empty. Escapes are refused.
+     */
+    fun deleteEntry(path: String, recursive: Boolean = false) {
+        val target = inWorkspace(path)
+        if (target == null) return surfaceFilesError("cannot delete $path")
+        try {
+            if (Files.isDirectory(target) && recursive) {
+                val paths = ArrayList<Path>()
+                Files.walk(target).use { stream -> stream.forEach { paths.add(it) } }
+                paths.sortWith(compareByDescending { it.nameCount })
+                for (p in paths) Files.deleteIfExists(p)
+            } else {
+                Files.delete(target)
+            }
+            openFiles(_state.value.files?.dir.orEmpty())
+        } catch (t: Throwable) {
+            surfaceFilesError(t.message ?: "cannot delete $path")
+        }
+    }
+
+    /** Rename [path] to [newName] within the same folder; escapes are refused. */
+    fun renameEntry(path: String, newName: String) {
+        val trimmed = newName.trim()
+        if (!validName(trimmed)) return surfaceFilesError("invalid name")
+        val source = inWorkspace(path)
+        val parent = normalizeRel(path).substringBeforeLast('/', "")
+        val dest = inWorkspace(joinRel(parent, trimmed))
+        if (source == null || dest == null) return surfaceFilesError("cannot rename $path")
+        try {
+            Files.move(source, dest)
+            openFiles(_state.value.files?.dir.orEmpty())
+        } catch (t: Throwable) {
+            surfaceFilesError(t.message ?: "cannot rename $path")
+        }
+    }
+
+    /**
+     * Load [path] into the editor, capped at [MAX_PEEK_LINES] with a truncation
+     * flag (the screen disables Save when set). Escapes are refused.
+     */
+    fun editFile(path: String) {
+        val target = inWorkspace(path)
+        if (target == null || !Files.isRegularFile(target)) {
+            _state.value = _state.value.copy(editor = EditorState(path, emptyList(), error = "cannot open $path"))
+            return
+        }
+        try {
+            val lines = ArrayList<String>()
+            var truncated = false
+            Files.newBufferedReader(target, StandardCharsets.UTF_8).use { reader ->
+                while (true) {
+                    val l = reader.readLine() ?: break
+                    if (lines.size >= MAX_PEEK_LINES) {
+                        truncated = true
+                        break
+                    }
+                    lines.add(l)
+                }
+            }
+            _state.value = _state.value.copy(
+                editor = EditorState(relativeToWorkspace(target), lines, truncated = truncated),
+            )
+        } catch (t: Throwable) {
+            _state.value = _state.value.copy(editor = EditorState(path, emptyList(), error = t.message ?: "cannot open $path"))
+        }
+    }
+
+    /** Dismiss the files editor. */
+    fun closeEditor() {
+        _state.value = _state.value.copy(editor = null)
+    }
+
+    /** One directory's entries: folders first, then files, each name-ascending. */
+    private fun listEntries(dir: Path): List<FileEntry> {
+        val base = workspace.toAbsolutePath().normalize()
+        val all = ArrayList<FileEntry>()
+        Files.newDirectoryStream(dir).use { stream ->
+            for (p in stream) {
+                val abs = p.toAbsolutePath().normalize()
+                if (!abs.startsWith(base)) continue
+                val isDir = Files.isDirectory(p)
+                val size = if (isDir) 0L else runCatching { Files.size(p) }.getOrDefault(0L)
+                val modified = runCatching { Files.getLastModifiedTime(p).toMillis() }.getOrDefault(0L)
+                all += FileEntry(
+                    name = p.fileName?.toString() ?: abs.fileName.toString(),
+                    path = base.relativize(abs).toString().replace('\\', '/'),
+                    isDir = isDir,
+                    size = size,
+                    modified = modified,
+                )
+            }
+        }
+        return all
+            .sortedWith(compareByDescending<FileEntry> { it.isDir }.thenBy { it.name.lowercase() })
+            .take(MAX_FILES_ENTRIES)
+    }
+
+    /** A workspace-relative, `/`-joined, trimmed path; "" for the root. */
+    private fun normalizeRel(path: String): String =
+        path.replace('\\', '/').trim('/').let { if (it == ".") "" else it }
+
+    private fun relativeToWorkspace(target: Path): String = runCatching {
+        workspace.toAbsolutePath().normalize().relativize(target).toString().replace('\\', '/')
+    }.getOrDefault("")
+
+    private fun joinRel(dir: String, name: String): String {
+        val d = normalizeRel(dir)
+        return if (d.isEmpty()) name else "$d/$name"
+    }
+
+    /** A safe single path segment: non-blank, no separators, not `.`/`..`. */
+    private fun validName(name: String): Boolean =
+        name.isNotBlank() && name != "." && name != ".." &&
+            !name.contains('/') && !name.contains('\\')
+
+    /** Record a files error without clobbering the current listing. */
+    private fun surfaceFilesError(message: String, dir: String = _state.value.files?.dir.orEmpty()) {
+        val current = _state.value.files
+        _state.value = _state.value.copy(
+            files = (current ?: FilesState(dir = dir)).copy(error = message),
+        )
+    }
+
     // ---- revert ----
 
     /**
@@ -633,6 +873,9 @@ class ChatViewModel(
     companion object {
         /** Upper bound on peeked lines; longer files are truncated with a note. */
         const val MAX_PEEK_LINES = 2000
+
+        /** Upper bound on one folder's listing; extra entries are dropped. */
+        const val MAX_FILES_ENTRIES = 2000
 
         fun Factory(context: Context, workspace: java.io.File): androidx.lifecycle.ViewModelProvider.Factory =
             object : androidx.lifecycle.ViewModelProvider.Factory {

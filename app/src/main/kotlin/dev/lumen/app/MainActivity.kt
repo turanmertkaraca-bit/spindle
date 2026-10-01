@@ -12,6 +12,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -22,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import dev.lumen.app.ui.FilesScreen
 import dev.lumen.app.ui.HomeScreen
 import dev.lumen.app.ui.KeyScreen
 import dev.lumen.app.ui.LumenChatScreen
@@ -57,11 +59,15 @@ class MainActivity : ComponentActivity() {
             }
 
             var route by rememberSaveable { mutableStateOf("home") }
+            // The route to return to when leaving the files cockpit.
+            var filesReturn by rememberSaveable { mutableStateOf("home") }
             val onChat = route == "chat" && state.currentSessionId != null
 
             BackHandler(enabled = route != "home" || state.currentSessionId != null) {
                 when {
                     state.peek != null -> viewModel.closePeek()
+                    state.editor != null -> viewModel.closeEditor()
+                    route == "files" -> route = filesReturn
                     route == "settings" -> route = "home"
                     route == "chat" -> {
                         viewModel.closeChat()
@@ -101,6 +107,10 @@ class MainActivity : ComponentActivity() {
                     onStop = viewModel::stop,
                     onToggleTheme = toggleTheme,
                     onEditKey = { route = "settings" },
+                    onFiles = {
+                        filesReturn = "chat"
+                        route = "files"
+                    },
                     onExpandSubagent = viewModel::expandSubagent,
                     usage = state.usage,
                     changes = state.changes,
@@ -116,6 +126,30 @@ class MainActivity : ComponentActivity() {
                     onAnswerQuestion = viewModel::answerQuestion,
                     onSkipQuestion = viewModel::skipQuestion,
                 )
+                route == "files" -> {
+                    LaunchedEffect(Unit) { if (state.files == null) viewModel.openFiles() }
+                    FilesScreen(
+                        colors = colors,
+                        files = state.files,
+                        editor = state.editor,
+                        onOpenDir = { viewModel.openFiles(it) },
+                        onUp = viewModel::filesUp,
+                        onEnter = { entry ->
+                            if (entry.isDir) viewModel.enterDir(entry.path) else viewModel.editFile(entry.path)
+                        },
+                        onSaveFile = { path, content ->
+                            viewModel.saveFile(path, content)
+                            viewModel.closeEditor()
+                        },
+                        onCloseEditor = viewModel::closeEditor,
+                        onCreateFile = viewModel::createFile,
+                        onCreateDir = viewModel::createDir,
+                        onRename = viewModel::renameEntry,
+                        onDelete = viewModel::deleteEntry,
+                        onBack = { route = filesReturn },
+                        modifier = modifier,
+                    )
+                }
                 route == "settings" -> SettingsScreen(
                     colors = colors,
                     provider = state.provider,
@@ -148,6 +182,10 @@ class MainActivity : ComponentActivity() {
                     onSettings = { route = "settings" },
                     modifier = modifier,
                     onToggleTheme = toggleTheme,
+                    onFiles = {
+                        filesReturn = "home"
+                        route = "files"
+                    },
                 )
             }
         }

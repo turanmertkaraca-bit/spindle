@@ -46,6 +46,8 @@ fun HomeScreen(
     onSettings: () -> Unit,
     modifier: Modifier = Modifier,
     onToggleTheme: (() -> Unit)? = null,
+    /** Open the project files cockpit, when supplied. */
+    onFiles: (() -> Unit)? = null,
 ) {
     Column(
         modifier.fillMaxSize().background(colors.bg).imePadding()
@@ -70,6 +72,18 @@ fun HomeScreen(
                     )
                 }
                 Spacer(Modifier.width(4.dp))
+                if (onFiles != null) {
+                    Text(
+                        "files",
+                        color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { onFiles() }
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                            .testTag("files"),
+                    )
+                    Spacer(Modifier.width(2.dp))
+                }
                 Text(
                     "settings",
                     color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
