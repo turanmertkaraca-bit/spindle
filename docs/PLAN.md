@@ -137,10 +137,13 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
 - [x] External-change watcher (port `DirWatcher`); files cockpit covers
       list/stat/read/write/save.
 - [x] `EnvironmentManager`: rootfs install/curate/prune, apt, storage report.
-- [x] Foreground `RunService` + notifications + wake lock; resumable runs.
-- [x] SQLite FTS index on the app store (`message_fts`, FTS5 with a linear-scan
-      fallback when the platform SQLite lacks FTS5); key store ported; models.dev
-      catalogue still to port.
+- [~] Foreground `RunService` + notifications + wake lock **wired, but a run
+      still dies when the user leaves the app** — top priority, see HANDOFF.
+      The loop runs in `viewModelScope`; the service is only a keep-alive shell.
+      Must move the loop to a process-scoped owner so backgrounding cannot kill
+      it.
+- [x] SQLite FTS index on the app store (`message_fts`, FTS5 with scan
+      fallback); key store ported; models.dev catalogue still to port.
 
 ### m14 — Feature verticals — `[x]` DONE
 

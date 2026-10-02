@@ -38,7 +38,7 @@ for i in $(seq 1 30); do out=$(bash /root/ci.sh); echo "$out" | head -1
 ```
 `ci.sh` can print a stale run first — always match `sha=$SHA`.
 
-## 3. Architecture (all green up to `ae6ee1d`)
+## 3. Architecture (all green up to `973a63b`)
 
 Modules: `:core` (pure JVM: model, agent loop, events, SPIs, markdown parser,
 references resolver, revert engine, UI math), `:sandbox` (TarGz + InAppProxy),
@@ -77,25 +77,69 @@ Key capabilities already working on device:
   index (kept in sync on insert/update/rewind/delete) and falls back to the old
   linear scan when the platform SQLite lacks FTS5.
 
-## 3a. Pending on-device retest (user, next session)
+## !!! TOP PRIORITY — app kills the run when backgrounded
 
-A stop-mid-run then immediate re-send crashed with a duplicate `LazyColumn` key,
-and a build task appeared to "do nothing" then `cannot open index.html`. Fixed
-in `df63624` (replace the optimistic row on send; rebuild on StateChanged idle;
-`StepMapper.dedupeById` last-wins; refuse to start a run while the previous
-coroutine is still alive). The user has the new APK and will retest. When they
-send the diagnostics log, check: is there a `tool:` line, and does a `perf:`
-line appear? No `tool:`+`perf:` present = the model narrated without calling a
-tool (UI needs progress feedback); no `perf:` at all = the run coroutine is
-blocked. The first-use rootfs install running inline inside `prompt` is the
-prime suspect for a long "working with no output" stall.
+User report: "give it a job, go back into the app, it looks like the app
+immediately killed itself as soon as I got out." A run does **not** survive the
+user leaving the app, which makes the app useless for real jobs. This is the
+foreground-service/lifecycle gap, and it is the first thing to fix.
+
+What exists already (verify it actually works on device):
+- `RunService` (foreground, `dataSync`, ongoing notification + `PARTIAL_WAKE_LOCK`)
+  is started in `ChatViewModel.send()` and stopped in `stop()`/finally.
+- `ChatViewModel.onCleared()` was changed to `runJob?.cancel()` +
+  `RunService.stop(...)` — correct only if the VM is truly being destroyed.
+  Unverified whether a backgrounded Activity destroys the VM or the process is
+  being killed outright.
+
+Prime suspects, in order (assign one agent each):
+1. **Process death on background.** Look for an OOM/`killProcess`, `finish()`
+   in `onStop`, `android:noHistory`, or a stray `System.exit`/`Runtime.halt`.
+   Check `MainActivity` (`onStop`/`onDestroy`/`onTrimMemory`) and anything that
+   calls `closeChat()`/`finish()` when the task leaves foreground.
+2. **`onCleared` cancelling the run.** If the Activity is recreated/the VM is
+   cleared while backgrounded, `runJob?.cancel()` kills the run. Move the run off
+   `viewModelScope` into a process-scoped owner (`RunService` or an
+   Application-scoped `CoroutineScope`) so leaving the UI cannot cancel it.
+3. **Missing `<service>` runtime behavior.** Confirm `startForeground` actually
+   runs (notification appears) and the FGS type/permissions are satisfiable at
+   `targetSdk 28`. Android 12+ can throw on a background FGS start; 14+ caps
+   `dataSync` FGS in the background.
+4. **Run coroutine tied to the UI.** Even with the service alive, the loop runs
+   in `viewModelScope`; the service is only a keep-alive shell. The robust fix is
+   to host the loop in the service/`Application` scope and have the VM observe it.
+5. **`cannot open <file>` after a build task.** The agent narrates "I'll build X"
+   then no next bubble; `openFile` then errors. Check whether a mutating tool
+   emits a resolvable path, whether the model narrated without calling a tool,
+   and relative-vs-absolute resolution in `ChatViewModel.openFile`/`inWorkspace`.
+
+On-device evidence per repro (user can run & paste):
+- `Settings → diagnostics → copy` (has `run start`, `tool:`, `perf:`, errors).
+- Does a `perf:` line appear after backgrounding (run survived) or never (died)?
+- `adb shell dumpsys activity processes | grep -i lumen` right after backgrounding;
+  `adb logcat -b crash` for a native/ANR kill;
+  `adb shell dumpsys batterystats dev.lumen.app` tail for FGS/wakelock.
+
+## 3a. Pending on-device retest (lower priority)
+
+A stop-mid-run then immediate re-send used to crash with a duplicate
+`LazyColumn` key. Fixed in `df63624` (send replaces the optimistic row; rebuild
+on `StateChanged` idle; `StepMapper.dedupeById` last-wins; refuse to start a run
+while the previous coroutine is alive). Not yet retested on device.
 
 ## 4. CI status — all green
 
-The previous KNOWN RED (`ComposerCompletionTest` peek backlinks) is fixed:
-`peek-backlinks`/`backlink-0` are merged away by the peek sheet's
-`Modifier.clickable`, so the test asserts through `useUnmergedTree = true`.
-Head `ae6ee1d`: `jvm backend` + `android app (robolectric)` both success.
+Head `973a63b`: `jvm backend` + `android app (robolectric)` both success. The
+old peek-backlinks KNOWN RED was fixed (`useUnmergedTree = true`).
+
+## Docs index (read with this file)
+
+- `docs/PLAN.md` — milestones M0–M10 + merge track m11–m15 (status checkboxes).
+- `docs/CAPABILITIES.md` — capability model, parity checklist, app NON-GOALS.
+- `docs/SPEC.md` — engine contracts (loop, events, SPIs, wire protocol).
+- `docs/PROVIDERS.md` — provider configs and the OpenCode Go session header.
+- `docs/UI-POLISH.md` — deferred final polish pass (do NOT regress fixed items).
+- `docs/PARITY.md` — what was ported from opencode and what was dropped.
 
 ## 5. Deferred UI polish (user explicitly parked to the end)
 See `docs/UI-POLISH.md`. Headline: composer/input-box feel, and the top-bar

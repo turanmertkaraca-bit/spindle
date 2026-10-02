@@ -1746,6 +1746,12 @@ class ChatViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        // The Activity is going away for good (not a config change — the view
+        // model survives those). Cancel the run so its coroutine does not leak,
+        // and let the store keep whatever was already persisted; the next open
+        // of the session rebuilds from it.
+        runJob?.cancel()
+        context?.let { ctx -> runCatching { RunService.stop(ctx) } }
         watcher?.stop()
         terminal.shutdown()
         runCatching { ownedStore?.close() }
