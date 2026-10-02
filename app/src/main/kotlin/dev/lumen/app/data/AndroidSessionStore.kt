@@ -20,8 +20,11 @@ import dev.spindle.core.store.SessionStore
 import dev.spindle.core.store.messageSearchText
 import dev.spindle.core.store.searchSnippet
 import dev.spindle.core.store.withNewId
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -51,13 +54,20 @@ internal fun ftsMatch(query: String): String? {
  * `android.database.sqlite`, which is always present.
  *
  * The schema mirrors `:store-sqlite` so a future migration is mechanical.
+ *
+ * All public methods hop to [Dispatchers.IO] before touching SQLite, and the
+ * connection/schema/FTS index are opened lazily on that worker, so the main
+ * thread never blocks on disk.
  */
-class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoCloseable {
+class AndroidSessionStore internal constructor(private val shared: AndroidDatabase) :
+    SessionStore, SessionSearch, AutoCloseable {
 
-    private val db: SQLiteDatabase =
-        context.applicationContext.openOrCreateDatabase("lumen.db", Context.MODE_PRIVATE, null)
+    constructor(context: Context) : this(AndroidDatabase(context))
 
     private val mutex = Mutex()
+
+    /** The shared, lazily-opened connection. Only touch from [locked]. */
+    private val db: SQLiteDatabase get() = shared.db()
 
     private val json = Json {
         encodeDefaults = true
@@ -73,77 +83,68 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
         }
     }
 
-    init {
-        // PRAGMA statements return rows, so they must go through rawQuery —
-        // execSQL only accepts statements that produce no result set.
-        db.rawQuery("PRAGMA foreign_keys=ON", null).use { it.moveToFirst() }
-        db.rawQuery("PRAGMA journal_mode=WAL", null).use { it.moveToFirst() }
-        db.execSQL(
-            """CREATE TABLE IF NOT EXISTS sessions(
-                 id TEXT PRIMARY KEY, title TEXT, cwd TEXT, created_at INTEGER,
-                 updated_at INTEGER, model TEXT, provider_id TEXT, agent TEXT, parent_id TEXT,
-                 state TEXT, pinned INTEGER, archived INTEGER, tags TEXT)""",
-        )
-        migrateSessions()
-        db.execSQL(
-            """CREATE TABLE IF NOT EXISTS messages(
-                 id TEXT PRIMARY KEY, session_id TEXT, role TEXT, created_at INTEGER,
-                 model TEXT, provider_id TEXT, agent TEXT, usage TEXT, finish TEXT,
-                 error TEXT, seq INTEGER)""",
-        )
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_msg ON messages(session_id, seq)")
-        db.execSQL(
-            """CREATE TABLE IF NOT EXISTS parts(
-                 id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, ord INTEGER, data TEXT)""",
-        )
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_part ON parts(message_id, ord)")
-        db.execSQL(
-            """CREATE TABLE IF NOT EXISTS todos(
-                 id TEXT PRIMARY KEY, session_id TEXT, ord INTEGER, content TEXT, status TEXT)""",
-        )
-        setupFts()
+    /** One-time FTS setup/backfill, guarded so it runs on the first worker call. */
+    @Volatile
+    private var ftsInitialized = false
+
+    /** True once FTS5 answered; when false the linear scan is used. */
+    @Volatile
+    private var ftsReady = false
+
+    /**
+     * Run [block] on the IO dispatcher under the store mutex, after ensuring the
+     * optional FTS index exists. Every suspend entry point funnels through here.
+     */
+    private suspend fun <T> locked(block: () -> T): T = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            ensureFts()
+            block()
+        }
     }
 
     /**
-     * A best-effort FTS5 index over message text. Android's bundled SQLite may
-     * not have FTS5 (it historically shipped FTS3/4), so this is entirely
-     * optional: if the virtual table cannot be created we stay on the linear
-     * scan and search still works. When the index exists it is kept in sync and
-     * backfilled once.
+     * Best-effort FTS5 index over message text. Android's bundled SQLite may not
+     * have FTS5 (it historically shipped FTS3/4), so this is entirely optional:
+     * if the virtual table cannot be created we stay on the linear scan and
+     * search still works. When the index exists it is kept in sync and backfilled
+     * once, in a single transaction, from one batched message read.
      */
-    private var ftsReady = false
-
-    private fun setupFts() {
-        try {
-            db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(message_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, body)")
-            ftsReady = true
-        } catch (_: Throwable) {
-            ftsReady = false
-            return
-        }
-        try {
-            val indexed = db.rawQuery("SELECT COUNT(*) FROM message_fts", null).use { c ->
-                if (c.moveToFirst()) c.getInt(0) else 0
+    private fun ensureFts() {
+        if (ftsInitialized) return
+        synchronized(this) {
+            if (ftsInitialized) return
+            try {
+                db.execSQL(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(message_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, body)",
+                )
+                ftsReady = true
+            } catch (_: Throwable) {
+                ftsReady = false
+                ftsInitialized = true
+                return
             }
-            if (indexed == 0) backfillFts()
-        } catch (_: Throwable) {
-            // A backfill failure is non-fatal; insert/delete keep it in sync going forward.
+            try {
+                val indexed = db.rawQuery("SELECT COUNT(*) FROM message_fts", null).use { c ->
+                    if (c.moveToFirst()) c.getInt(0) else 0
+                }
+                if (indexed == 0) backfillFts()
+            } catch (_: Throwable) {
+                // A backfill failure is non-fatal; insert/delete keep it in sync.
+            }
+            ftsInitialized = true
         }
     }
 
+    /** Rebuild the FTS rows from a single batched read of every stored message. */
     private fun backfillFts() {
-        val ids = db.rawQuery("SELECT id, session_id FROM messages", null).use { c ->
-            buildList {
-                val idIdx = c.getColumnIndexOrThrow("id")
-                val sidIdx = c.getColumnIndexOrThrow("session_id")
-                while (c.moveToNext()) add(c.getString(idIdx) to c.getString(sidIdx))
-            }
-        }
-        for ((id, sid) in ids) {
-            val message = db.rawQuery("SELECT * FROM messages WHERE id=?", arrayOf(id)).use { c ->
-                if (c.moveToFirst()) c.toMessage() else null
-            } ?: continue
-            ftsRow(message)
+        val messages = allMessages()
+        if (messages.isEmpty()) return
+        db.beginTransaction()
+        try {
+            for (message in messages) ftsRow(message)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
         }
     }
 
@@ -171,29 +172,9 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
         runCatching { db.delete("message_fts", "session_id=?", arrayOf(sessionId)) }
     }
 
-    /** Add the columns introduced after the first schema, so old DBs migrate forward. */
-    private fun migrateSessions() {
-        val existing = columnNames("sessions")
-        fun add(name: String, ddl: String) {
-            if (name !in existing) db.execSQL("ALTER TABLE sessions ADD COLUMN $name $ddl")
-        }
-        add("state", "TEXT")
-        add("pinned", "INTEGER")
-        add("archived", "INTEGER")
-        add("tags", "TEXT")
-    }
-
-    private fun columnNames(table: String): Set<String> =
-        db.rawQuery("PRAGMA table_info($table)", null).use { c ->
-            buildSet {
-                val name = c.getColumnIndexOrThrow("name")
-                while (c.moveToNext()) add(c.getString(name))
-            }
-        }
-
     // ---- sessions ----
 
-    override suspend fun createSession(session: Session) = mutex.withLock { writeSession(session) }
+    override suspend fun createSession(session: Session) = locked { writeSession(session) }
 
     private fun writeSession(session: Session) {
         db.execSQL(
@@ -212,7 +193,7 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
 
     override suspend fun updateSession(session: Session) = createSession(session)
 
-    override suspend fun session(id: SessionId): Session? = mutex.withLock { sessionUnlocked(id) }
+    override suspend fun session(id: SessionId): Session? = locked { sessionUnlocked(id) }
 
     private fun sessionUnlocked(id: SessionId): Session? =
         db.rawQuery("SELECT * FROM sessions WHERE id=?", arrayOf(id.value)).use { c ->
@@ -223,7 +204,7 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
         limit: Int,
         includeChildren: Boolean,
         includeArchived: Boolean,
-    ): List<Session> = mutex.withLock { sessionsUnlocked(limit, includeChildren, includeArchived) }
+    ): List<Session> = locked { sessionsUnlocked(limit, includeChildren, includeArchived) }
 
     private fun sessionsUnlocked(limit: Int, includeChildren: Boolean, includeArchived: Boolean): List<Session> {
         val where = buildList {
@@ -236,7 +217,9 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
         ).use { c -> buildList { while (c.moveToNext()) add(c.toSession()) } }
     }
 
-    override suspend fun deleteSession(id: SessionId) = mutex.withLock { deleteSessionUnlocked(id) }
+    override suspend fun deleteSession(id: SessionId) = locked {
+        transaction { deleteSessionUnlocked(id) }
+    }
 
     private fun deleteSessionUnlocked(id: SessionId) {
         db.delete("parts", "session_id=?", arrayOf(id.value))
@@ -250,14 +233,14 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
         sourceId: SessionId,
         atMessageId: MessageId?,
         newId: SessionId,
-    ): Session? = mutex.withLock {
-        val source = sessionUnlocked(sourceId) ?: return@withLock null
+    ): Session? = locked {
+        val source = sessionUnlocked(sourceId) ?: return@locked null
         val sourceMessages = messagesUnlocked(sourceId)
         val upTo = if (atMessageId == null) {
             sourceMessages.toList()
         } else {
             val index = sourceMessages.indexOfFirst { it.id == atMessageId }
-            if (index < 0) return@withLock null
+            if (index < 0) return@locked null
             sourceMessages.subList(0, index + 1).toList()
         }
         val now = System.currentTimeMillis()
@@ -269,32 +252,52 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
             archived = false,
             pinned = false,
         )
-        writeSession(fork)
-        for (m in upTo) {
-            insertMessage(m.copy(id = MessageId(Ids.new("msg")), sessionId = newId, parts = m.parts.map { it.withNewId() }))
+        transaction {
+            writeSession(fork)
+            for (m in upTo) {
+                insertMessage(m.copy(id = MessageId(Ids.new("msg")), sessionId = newId, parts = m.parts.map { it.withNewId() }))
+            }
         }
         fork
     }
 
-    override suspend fun rewind(sessionId: SessionId, toMessageId: MessageId): Int = mutex.withLock {
+    override suspend fun rewind(sessionId: SessionId, toMessageId: MessageId): Int = locked {
         val list = messagesUnlocked(sessionId)
         val index = list.indexOfFirst { it.id == toMessageId }
-        if (index < 0) return@withLock 0
+        if (index < 0) return@locked 0
         val tail = list.subList(index + 1, list.size)
-        for (m in tail) {
-            db.delete("parts", "message_id=?", arrayOf(m.id.value))
-            db.delete("messages", "id=?", arrayOf(m.id.value))
-            ftsDeleteMessage(m.id.value)
+        transaction {
+            for (m in tail) {
+                db.delete("parts", "message_id=?", arrayOf(m.id.value))
+                db.delete("messages", "id=?", arrayOf(m.id.value))
+                ftsDeleteMessage(m.id.value)
+            }
         }
         tail.size
     }
 
     // ---- messages ----
 
-    override suspend fun appendMessage(message: Message) = mutex.withLock { insertMessage(message) }
+    override suspend fun appendMessage(message: Message) = locked { transaction { insertMessage(message) } }
 
     private fun insertMessage(message: Message) {
         val seq = nextSeq(message.sessionId)
+        writeMessageRow(message, seq)
+    }
+
+    override suspend fun updateMessage(message: Message) = locked {
+        transaction {
+            // A missing id is an insert, not a rewrite: allocate the next
+            // sequence slot so it sorts after existing history rather than before.
+            val existing = db.rawQuery("SELECT seq FROM messages WHERE id=?", arrayOf(message.id.value)).use { c ->
+                if (c.moveToFirst()) c.getLong(0) else null
+            }
+            writeMessageRow(message, existing ?: nextSeq(message.sessionId))
+        }
+    }
+
+    /** Write the message row plus its parts and FTS entry as one unit. */
+    private fun writeMessageRow(message: Message, seq: Long) {
         db.execSQL(
             "INSERT OR REPLACE INTO messages VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             arrayOf(
@@ -302,20 +305,6 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
                 message.model, message.providerId, message.agent,
                 json.encodeToString(Usage.serializer(), message.usage),
                 message.finish?.name, message.error, seq,
-            ),
-        )
-        writeParts(message)
-        ftsRow(message)
-    }
-
-    override suspend fun updateMessage(message: Message) = mutex.withLock {
-        db.execSQL(
-            "INSERT OR REPLACE INTO messages VALUES(?,?,?,?,?,?,?,?,?,?,COALESCE((SELECT seq FROM messages WHERE id=?),0))",
-            arrayOf(
-                message.id.value, message.sessionId.value, message.role.name, message.createdAt,
-                message.model, message.providerId, message.agent,
-                json.encodeToString(Usage.serializer(), message.usage),
-                message.finish?.name, message.error, message.id.value,
             ),
         )
         writeParts(message)
@@ -337,32 +326,46 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
             if (c.moveToFirst()) c.getLong(0) else 1L
         }
 
-    override suspend fun message(sessionId: SessionId, id: MessageId): Message? = mutex.withLock {
-        db.rawQuery("SELECT * FROM messages WHERE id=?", arrayOf(id.value)).use { c ->
-            if (c.moveToFirst()) c.toMessage() else null
-        }
+    override suspend fun message(sessionId: SessionId, id: MessageId): Message? = locked {
+        val row = db.rawQuery("SELECT * FROM messages WHERE id=?", arrayOf(id.value)).use { c ->
+            if (c.moveToFirst()) c.toMessageRow() else null
+        } ?: return@locked null
+        row.copy(parts = partsFor(listOf(row.id.value))[row.id.value].orEmpty())
     }
 
-    override suspend fun messages(sessionId: SessionId): List<Message> = mutex.withLock { messagesUnlocked(sessionId) }
+    override suspend fun messages(sessionId: SessionId): List<Message> = locked { messagesUnlocked(sessionId) }
 
-    private fun messagesUnlocked(sessionId: SessionId): List<Message> =
-        db.rawQuery("SELECT * FROM messages WHERE session_id=? ORDER BY seq", arrayOf(sessionId.value)).use { c ->
-            buildList { while (c.moveToNext()) add(c.toMessage()) }
+    private fun messagesUnlocked(sessionId: SessionId): List<Message> {
+        val rows = db.rawQuery("SELECT * FROM messages WHERE session_id=? ORDER BY seq", arrayOf(sessionId.value)).use { c ->
+            buildList { while (c.moveToNext()) add(c.toMessageRow()) }
         }
+        val parts = partsFor(rows.map { it.id.value })
+        return rows.map { it.copy(parts = parts[it.id.value].orEmpty()) }
+    }
 
-    override suspend fun latestMessage(sessionId: SessionId): Message? = mutex.withLock {
-        db.rawQuery("SELECT * FROM messages WHERE session_id=? ORDER BY seq DESC LIMIT 1", arrayOf(sessionId.value)).use { c ->
-            if (c.moveToFirst()) c.toMessage() else null
+    /** Every message, ordered, with its parts read in batched queries. */
+    private fun allMessages(): List<Message> {
+        val rows = db.rawQuery("SELECT * FROM messages ORDER BY session_id, seq", null).use { c ->
+            buildList { while (c.moveToNext()) add(c.toMessageRow()) }
         }
+        val parts = partsFor(rows.map { it.id.value })
+        return rows.map { it.copy(parts = parts[it.id.value].orEmpty()) }
+    }
+
+    override suspend fun latestMessage(sessionId: SessionId): Message? = locked {
+        val row = db.rawQuery("SELECT * FROM messages WHERE session_id=? ORDER BY seq DESC LIMIT 1", arrayOf(sessionId.value)).use { c ->
+            if (c.moveToFirst()) c.toMessageRow() else null
+        } ?: return@locked null
+        row.copy(parts = partsFor(listOf(row.id.value))[row.id.value].orEmpty())
     }
 
     // ---- search ----
 
-    override suspend fun search(query: String, limit: Int): List<SearchHit> = mutex.withLock {
+    override suspend fun search(query: String, limit: Int): List<SearchHit> = locked {
         val needle = query.trim()
-        if (needle.isEmpty()) return@withLock emptyList()
+        if (needle.isEmpty()) return@locked emptyList()
         if (ftsReady) {
-            ftsSearch(needle, limit)?.let { return@withLock it }
+            ftsSearch(needle, limit)?.let { return@locked it }
         }
         scanSearch(needle, limit)
     }
@@ -403,19 +406,17 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
     /** Linear fallback used when FTS is unavailable. */
     private fun scanSearch(needle: String, limit: Int): List<SearchHit> {
         val hits = ArrayList<SearchHit>()
-        db.rawQuery("SELECT * FROM messages ORDER BY created_at DESC", null).use { c ->
-            while (c.moveToNext() && hits.size < limit) {
-                val message = c.toMessage()
-                val text = messageSearchText(message)
-                if (text.contains(needle, ignoreCase = true)) {
-                    hits += SearchHit(
-                        sessionId = message.sessionId,
-                        messageId = message.id.value,
-                        role = message.role.name,
-                        snippet = searchSnippet(text, needle),
-                        at = message.createdAt,
-                    )
-                }
+        for (message in allMessages()) {
+            if (hits.size >= limit) break
+            val text = messageSearchText(message)
+            if (text.contains(needle, ignoreCase = true)) {
+                hits += SearchHit(
+                    sessionId = message.sessionId,
+                    messageId = message.id.value,
+                    role = message.role.name,
+                    snippet = searchSnippet(text, needle),
+                    at = message.createdAt,
+                )
             }
         }
         return hits
@@ -423,7 +424,7 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
 
     // ---- todos ----
 
-    override suspend fun todos(sessionId: SessionId): List<TodoItem> = mutex.withLock {
+    override suspend fun todos(sessionId: SessionId): List<TodoItem> = locked {
         db.rawQuery("SELECT * FROM todos WHERE session_id=? ORDER BY ord", arrayOf(sessionId.value)).use { c ->
             buildList {
                 while (c.moveToNext()) {
@@ -441,26 +442,72 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
         }
     }
 
-    override suspend fun setTodos(sessionId: SessionId, todos: List<TodoItem>) = mutex.withLock {
-        db.delete("todos", "session_id=?", arrayOf(sessionId.value))
-        todos.forEachIndexed { i, t ->
-            db.execSQL("INSERT INTO todos VALUES(?,?,?,?,?)", arrayOf(t.id, sessionId.value, i, t.content, t.status.name))
+    override suspend fun setTodos(sessionId: SessionId, todos: List<TodoItem>) = locked {
+        transaction {
+            db.delete("todos", "session_id=?", arrayOf(sessionId.value))
+            todos.forEachIndexed { i, t ->
+                db.execSQL("INSERT INTO todos VALUES(?,?,?,?,?)", arrayOf(t.id, sessionId.value, i, t.content, t.status.name))
+            }
         }
     }
 
-    override suspend fun prune(keepSessions: Int): Int = mutex.withLock {
+    override suspend fun prune(keepSessions: Int): Int = locked {
+        // keepSessions == 0 means "drop everything"; the old LIMIT 0 query
+        // returned an empty keep-set and bailed out, making it a silent no-op.
+        if (keepSessions <= 0) {
+            val all = sessionsUnlocked(Int.MAX_VALUE, includeChildren = true, includeArchived = true).map { it.id.value }
+            transaction { for (id in all) deleteSessionUnlocked(SessionId(id)) }
+            return@locked all.size
+        }
         val keep = sessionsUnlocked(keepSessions, includeChildren = true, includeArchived = true).map { it.id.value }
-        if (keep.isEmpty()) return@withLock 0
         val placeholders = keep.joinToString(",") { "?" }
         val gone = db.rawQuery("SELECT id FROM sessions WHERE id NOT IN ($placeholders)", keep.toTypedArray()).use { c ->
             buildList { while (c.moveToNext()) add(c.getString(0)) }
         }
-        for (id in gone) deleteSessionUnlocked(SessionId(id))
+        transaction { for (id in gone) deleteSessionUnlocked(SessionId(id)) }
         gone.size
     }
 
     override fun close() {
-        runCatching { db.close() }
+        // Guard with the mutex so a close cannot race an in-flight worker query.
+        runBlocking {
+            mutex.withLock { shared.close() }
+        }
+    }
+
+    /** Run [block] as one SQLite transaction, committing only on success. */
+    private inline fun <T> transaction(block: () -> T): T {
+        db.beginTransaction()
+        try {
+            val result = block()
+            db.setTransactionSuccessful()
+            return result
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /**
+     * Parts for [messageIds], read in one query per batch and grouped by
+     * message id, so a page of messages is one round-trip instead of N.
+     */
+    private fun partsFor(messageIds: Collection<String>): Map<String, List<Part>> {
+        if (messageIds.isEmpty()) return emptyMap()
+        val acc = HashMap<String, MutableList<Part>>()
+        for (chunk in messageIds.chunked(SQLITE_PARAM_BATCH)) {
+            val placeholders = chunk.joinToString(",") { "?" }
+            db.rawQuery(
+                "SELECT message_id, data FROM parts WHERE message_id IN ($placeholders) ORDER BY message_id, ord",
+                chunk.toTypedArray(),
+            ).use { c ->
+                while (c.moveToNext()) {
+                    val mid = c.getString(0)
+                    val part = runCatching { json.decodeFromString(Part.serializer(), c.getString(1)) }.getOrNull() ?: continue
+                    acc.getOrPut(mid) { mutableListOf() }.add(part)
+                }
+            }
+        }
+        return acc
     }
 
     // ---- row mappers ----
@@ -484,7 +531,8 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
             .orEmpty(),
     )
 
-    private fun android.database.Cursor.toMessage(): Message {
+    /** A message row without its parts; callers attach [partsFor] output. */
+    private fun android.database.Cursor.toMessageRow(): Message {
         val id = getString(getColumnIndexOrThrow("id"))
         val sid = getString(getColumnIndexOrThrow("session_id"))
         val usageStr = getString(getColumnIndexOrThrow("usage"))
@@ -492,7 +540,7 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
             id = MessageId(id),
             sessionId = SessionId(sid),
             role = runCatching { Role.valueOf(getString(getColumnIndexOrThrow("role"))) }.getOrDefault(Role.ASSISTANT),
-            parts = readParts(id),
+            parts = emptyList(),
             createdAt = getLong(getColumnIndexOrThrow("created_at")),
             model = getString(getColumnIndexOrThrow("model")),
             providerId = getString(getColumnIndexOrThrow("provider_id")),
@@ -503,12 +551,8 @@ class AndroidSessionStore(context: Context) : SessionStore, SessionSearch, AutoC
         )
     }
 
-    private fun readParts(messageId: String): List<Part> =
-        db.rawQuery("SELECT data FROM parts WHERE message_id=? ORDER BY ord", arrayOf(messageId)).use { c ->
-            buildList {
-                while (c.moveToNext()) {
-                    runCatching { json.decodeFromString(Part.serializer(), c.getString(0)) }.getOrNull()?.let { add(it) }
-                }
-            }
-        }
+    private companion object {
+        /** Stay well under SQLite's bound-variable limit for old devices. */
+        const val SQLITE_PARAM_BATCH = 900
+    }
 }

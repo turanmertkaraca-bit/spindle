@@ -26,6 +26,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -391,7 +392,17 @@ private fun EditorOverlay(
     onSave: (String) -> Unit,
 ) {
     val failed = editor.error != null
+    // Key on the CONTENT revision, not just the path, so re-reading the same path
+    // refreshes the draft. A dirty (unsaved) draft is protected: we keep the
+    // user's edits rather than clobbering them with a background re-read.
+    val revision = remember(editor.path, editor.lines, editor.truncated) {
+        editor.path + "\u0000" + editor.truncated + "\u0000" + editor.lines.hashCode()
+    }
+    var dirty by remember(editor.path) { mutableStateOf(false) }
     var draft by remember(editor.path) { mutableStateOf(editor.lines.joinToString("\n")) }
+    LaunchedEffect(revision) {
+        if (!dirty) draft = editor.lines.joinToString("\n")
+    }
 
     Column(Modifier.fillMaxSize().background(colors.bg)) {
         Row(
@@ -440,7 +451,10 @@ private fun EditorOverlay(
         ) {
             BasicTextField(
                 value = draft,
-                onValueChange = { draft = it },
+                onValueChange = {
+                    draft = it
+                    dirty = true
+                },
                 textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp),
                 cursorBrush = SolidColor(colors.water),
                 modifier = Modifier.fillMaxWidth().testTag("editor-body"),

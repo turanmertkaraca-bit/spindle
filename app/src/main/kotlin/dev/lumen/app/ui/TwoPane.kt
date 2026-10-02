@@ -1,5 +1,7 @@
 package dev.lumen.app.ui
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -7,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
@@ -56,7 +59,22 @@ fun AdaptiveTwoPane(
         } else if (openDetail != null && focusDetailOnNarrow) {
             Box(Modifier.fillMaxSize()) {
                 list()
-                Box(Modifier.fillMaxSize().testTag("two-pane-detail")) { openDetail() }
+                // A transparent scrim swallows touches so the still-composed list
+                // underneath never receives them while the stacked detail is on top.
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .testTag("two-pane-scrim")
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) {},
+                )
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .testTag("two-pane-detail"),
+                ) { openDetail() }
             }
         } else {
             Box(Modifier.fillMaxSize().testTag("two-pane-list")) { list() }

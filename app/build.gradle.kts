@@ -47,6 +47,7 @@ android {
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
+            all { it.maxHeapSize = "1024m" }
         }
     }
 
@@ -86,9 +87,7 @@ dependencies {
     testImplementation(kotlin("test"))
     testImplementation("org.robolectric:robolectric:4.13")
     testImplementation("androidx.test:core:1.6.1")
-    testImplementation("androidx.test.ext:junit:1.2.1")
     testImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

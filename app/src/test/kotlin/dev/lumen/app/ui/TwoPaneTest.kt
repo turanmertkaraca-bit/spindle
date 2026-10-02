@@ -1,5 +1,6 @@
 package dev.lumen.app.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
@@ -7,12 +8,14 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import kotlin.test.assertEquals
 
 /**
  * The adaptive split: wide viewports host the list and detail side by side, a
@@ -71,5 +74,43 @@ class TwoPaneTest {
 
         compose.onNodeWithTag("pane-list").assertIsDisplayed()
         compose.onNodeWithTag("two-pane").assertDoesNotExist()
+    }
+
+    @Test
+    fun `focusDetailOnNarrow stacks the detail and consumes touches`() {
+        var listClicks = 0
+        var detailClicks = 0
+        compose.setContent {
+            AdaptiveTwoPane(
+                list = {
+                    Text(
+                        "list",
+                        Modifier
+                            .testTag("pane-list")
+                            .clickable { listClicks += 1 },
+                    )
+                },
+                detail = {
+                    Text(
+                        "detail",
+                        Modifier
+                            .testTag("pane-detail")
+                            .clickable { detailClicks += 1 },
+                    )
+                },
+                modifier = Modifier.size(360.dp, 640.dp),
+                focusDetailOnNarrow = true,
+            )
+        }
+
+        // The stacked detail renders over the list.
+        compose.onNodeWithTag("pane-detail").assertIsDisplayed()
+        compose.onNodeWithTag("two-pane-list").assertDoesNotExist()
+
+        // Clicking the detail region hits the detail, not the list underneath.
+        compose.onNodeWithTag("pane-detail").performClick()
+        compose.waitForIdle()
+        assertEquals(1, detailClicks)
+        assertEquals(0, listClicks)
     }
 }

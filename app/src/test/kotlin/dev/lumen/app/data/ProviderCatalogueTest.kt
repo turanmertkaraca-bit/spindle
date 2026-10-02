@@ -52,4 +52,29 @@ class ProviderCatalogueTest {
             assertTrue(models.all { it.contextWindow > 0 }, "$provider has a model with no context window")
         }
     }
+
+    @Test
+    fun `only the selected provider is constructed`() {
+        for ((provider, _) in ProviderCatalogue.choices) {
+            val built = ProviderCatalogue.providers(provider, key = "secret")
+            assertTrue(
+                built.all { it.id == provider },
+                "selected '$provider' also built ${built.map { it.id }} — the key must not span providers",
+            )
+            assertTrue(built.map { it.id } == listOf(provider))
+        }
+    }
+
+    @Test
+    fun `catalogue models carry pricing so the cost budget can fire`() = runBlocking {
+        for ((provider, _) in ProviderCatalogue.choices) {
+            val models = ProviderCatalogue.registry(provider, "").models()
+            assertTrue(
+                models.all { it.inputCostPerM >= 0.0 && it.outputCostPerM >= 0.0 },
+                "$provider has a model with negative pricing",
+            )
+        }
+        val pro = ProviderCatalogue.defaultModels("deepseek").first { it.id == "deepseek-v4-pro" }
+        assertTrue(pro.outputCostPerM > 0.0, "deepseek-v4-pro needs a non-zero price or the budget is dead")
+    }
 }

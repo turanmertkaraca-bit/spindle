@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.dp
@@ -181,6 +182,29 @@ class LumenChatScreenTest {
     }
 
     @Test
+    fun `an expanded tool card shows a late line of a 50-line output`() {
+        // 50 non-blank lines: parseToolRows turns the first 6 into rows; the rest
+        // must still be reachable in the bounded scroll area.
+        val lines = (1..50).joinToString("\n") { "output line $it with enough words to wrap" }
+        // Mirror the store path: the first 6 lines become structured rows, the
+        // rest must survive as the raw tail the expanded card renders.
+        val rows = (1..6).map { "output" to "line $it with enough words to wrap" }
+        val s = listOf(
+            UiStep("t", StepKind.TOOL, "BASH", "x", summary = "big run", body = lines, rows = rows),
+        )
+        compose.setContent {
+            LumenChatScreen(s, input = "", busy = false, error = null, modifier = viewport, ambient = false)
+        }
+        compose.onNodeWithTag("tools-toggle").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        // The raw tail is inside the bounded scroll region; scroll it into view.
+        compose.onNodeWithTag("tool-output-rest", useUnmergedTree = true)
+            .performScrollTo()
+        compose.waitForIdle()
+        compose.onNodeWithText("output line 50", substring = true, useUnmergedTree = true).assertExists()
+    }
+
+    @Test
     fun `an expanded tool card shows the structured inspector above its output`() {
         val s = listOf(
             UiStep(
@@ -217,6 +241,66 @@ class LumenChatScreenTest {
             "a metadata-free card must not render an inspector"
         }
         compose.onNodeWithText("raw output line", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun `a growing streaming body keeps the end displayed at the tail`() {
+        val many = (0 until 12).map { i ->
+            UiStep("s$i", StepKind.ASSISTANT, "ASSISTANT", "t$i", "summary $i", "BODY $i full text")
+        }
+        val streaming = mutableStateOf(
+            many + UiStep("tail", StepKind.ASSISTANT, "ASSISTANT", "tt", "growing", "start"),
+        )
+        compose.setContent {
+            LumenChatScreen(streaming.value, input = "", busy = true, error = null, modifier = viewport, ambient = false, haptics = false)
+        }
+        compose.waitForIdle()
+        // Establish the tail position explicitly, then grow the SAME assistant row
+        // (only its body changes; id and count stay stable).
+        compose.onNodeWithTag("timeline").performScrollToIndex(12)
+        compose.waitForIdle()
+        repeat(6) { n ->
+            compose.runOnIdle {
+                streaming.value = streaming.value.dropLast(1) + UiStep(
+                    "tail", StepKind.ASSISTANT, "ASSISTANT", "tt", "growing",
+                    (0..n).joinToString("\n") { "streamed answer line $it that wraps across the bubble width" },
+                )
+            }
+            compose.waitForIdle()
+        }
+        // At the tail: the end of the streamed body must be visible and no cue shown.
+        check(compose.onAllNodesWithTag("new-cue").fetchSemanticsNodes().isEmpty()) {
+            "no cue should appear while the reader is at the tail"
+        }
+        compose.onNodeWithText("streamed answer line 5", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun `a growing streaming body while scrolled up shows the new cue`() {
+        val many = (0 until 12).map { i ->
+            UiStep("s$i", StepKind.ASSISTANT, "ASSISTANT", "t$i", "summary $i", "BODY $i full text")
+        }
+        val streaming = mutableStateOf(
+            many + UiStep("tail", StepKind.ASSISTANT, "ASSISTANT", "tt", "growing", "start"),
+        )
+        compose.setContent {
+            LumenChatScreen(streaming.value, input = "", busy = true, error = null, modifier = viewport, ambient = false, haptics = false)
+        }
+        compose.waitForIdle()
+        // Read from the top, away from the tail.
+        compose.onNodeWithTag("timeline").performScrollToIndex(0)
+        compose.waitForIdle()
+        // Grow the last row's body while the reader is up the transcript.
+        repeat(8) { n ->
+            compose.runOnIdle {
+                streaming.value = streaming.value.dropLast(1) + UiStep(
+                    "tail", StepKind.ASSISTANT, "ASSISTANT", "tt", "growing",
+                    (0..n).joinToString("\n") { "off-screen streamed line $it growing the bubble" },
+                )
+            }
+            compose.waitForIdle()
+        }
+        compose.onNodeWithTag("new-cue").assertIsDisplayed()
     }
 
     @Test

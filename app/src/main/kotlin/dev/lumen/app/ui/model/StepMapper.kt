@@ -175,7 +175,7 @@ object StepMapper {
     }
 
     /** Pull a short (label, value) list out of a tool result for the sub-rows. */
-    private fun parseToolRows(p: Part.Tool): List<Pair<String, String>> {
+    fun parseToolRows(p: Part.Tool): List<Pair<String, String>> {
         val out = p.result?.output ?: return emptyList()
         val lines = out.lines().filter { it.isNotBlank() }
         if (lines.size <= 1) return emptyList()
@@ -184,6 +184,21 @@ object StepMapper {
             val words = t.split(Regex("\\s+"), limit = 2)
             if (words.size == 2) words[0] to words[1] else t to ""
         }
+    }
+
+    /**
+     * The lines of a tool's raw output that [parseToolRows] did NOT turn into
+     * structured rows, so the expanded card can show the full output instead of
+     * silently dropping everything past the first few rows. Blank lines are
+     * skipped (matching [parseToolRows]); when there is no structured output at
+     * all, the whole body is returned. Pure/JVM-testable.
+     */
+    fun toolExtraLines(output: String, structured: Int): List<String> {
+        val lines = output.lines().filter { it.isNotBlank() }
+        // parseToolRows collapses a single-line output to no rows; the raw body
+        // is still drawn separately in that case, so nothing is "extra".
+        if (lines.size <= 1) return emptyList()
+        return lines.drop(structured.coerceAtLeast(0))
     }
 
     private fun oneLine(s: String): String =

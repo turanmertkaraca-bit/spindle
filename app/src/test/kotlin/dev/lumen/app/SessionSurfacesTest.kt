@@ -67,7 +67,7 @@ class SessionSurfacesTest {
             )
         }
 
-        val vm = ChatViewModel(dir.toPath(), keys(), store)
+        val vm = ChatViewModel(dir.toPath(), keys(), store, searchDebounceMs = 0L)
         vm.searchSessions("needle")
 
         val hits = vm.state.value.search

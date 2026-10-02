@@ -1,6 +1,7 @@
 package dev.lumen.app.ui
 
 import android.annotation.SuppressLint
+import android.view.ViewGroup
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -16,6 +17,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -32,6 +35,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.delay
 
 private val Mono = FontFamily.Monospace
 
@@ -59,8 +66,42 @@ fun CanvasScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // Bump to rebuild the WebView with the same HTML (a hard reload).
+    // Bump to rebuild the WebView with the same HTML (a hard reload), but only
+    // after a short debounce so mashing "reload" cannot leak a WebView per tap.
     var reload by remember { mutableStateOf(0) }
+    var requested by remember { mutableStateOf(0) }
+    LaunchedEffect(requested) {
+        if (requested == 0) return@LaunchedEffect
+        delay(250)
+        reload = requested
+    }
+
+    // Track the live WebView so lifecycle changes can pause/resume it, and so it
+    // is detached from its parent before destroy (destroying an attached view
+    // leaks / can crash).
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var webView by remember { mutableStateOf<WebView?>(null) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> webView?.onResume()
+                Lifecycle.Event.ON_PAUSE -> webView?.onPause()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            webView?.let { web ->
+                runCatching { web.loadUrl("about:blank") }
+                runCatching { (web.parent as? ViewGroup)?.removeView(web) }
+                runCatching { web.destroy() }
+            }
+            webView = null
+        }
+    }
 
     Column(modifier.fillMaxSize().background(colors.bg)) {
         Row(
@@ -87,7 +128,7 @@ fun CanvasScreen(
                 "reload", color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))
-                    .clickable { reload += 1 }
+                    .clickable { requested += 1 }
                     .padding(horizontal = 8.dp, vertical = 4.dp)
                     .testTag("canvas-reload"),
             )
@@ -109,11 +150,14 @@ fun CanvasScreen(
                         settings.cacheMode = WebSettings.LOAD_NO_CACHE
                         webViewClient = WebViewClient()
                         loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+                        webView = this
                     }
                 },
                 onRelease = { web ->
                     runCatching { web.loadUrl("about:blank") }
-                    web.destroy()
+                    runCatching { (web.parent as? ViewGroup)?.removeView(web) }
+                    runCatching { web.destroy() }
+                    if (webView === web) webView = null
                 },
             )
         }

@@ -75,6 +75,61 @@ class TerminalScreenTest {
     }
 
     @Test
+    fun `a dead shell keeps the field enabled and offers a restart`() {
+        var restarted = false
+        compose.setContent {
+            TerminalScreen(
+                colors = LumenColors.Dark,
+                lines = listOf("$ exit\n"),
+                running = false,
+                error = null,
+                onSend = {},
+                onInterrupt = {},
+                onClear = {},
+                onBack = {},
+                modifier = viewport,
+                onRestart = { restarted = true },
+            )
+        }
+
+        // The input is still usable, and typing is possible even though the shell
+        // has exited (it used to be permanently disabled).
+        compose.onNodeWithTag("terminal-input").performClick()
+        compose.onNodeWithTag("terminal-input").performTextInput("echo back")
+        compose.waitForIdle()
+        compose.onNodeWithText("echo back").assertIsDisplayed()
+
+        // The primary action is now a restart.
+        compose.onNodeWithTag("terminal-restart").assertIsDisplayed().performClick()
+        compose.waitForIdle()
+        assertEquals(true, restarted)
+    }
+
+    @Test
+    fun `a dead shell still lets send fire when no restart is wired`() {
+        compose.setContent {
+            TerminalScreen(
+                colors = LumenColors.Dark,
+                lines = emptyList(),
+                running = false,
+                error = null,
+                onSend = {},
+                onInterrupt = {},
+                onClear = {},
+                onBack = {},
+                modifier = viewport,
+            )
+        }
+        compose.onNodeWithTag("terminal-input").performClick()
+        compose.onNodeWithTag("terminal-input").performTextInput("ls")
+        compose.onNodeWithTag("terminal-send").performClick()
+        compose.waitForIdle()
+        // Without a restart hook the send is a no-op (the VM guards on running),
+        // but the affordance stays reachable rather than silently disabled.
+        compose.onNodeWithTag("terminal-send").assertIsDisplayed()
+    }
+
+    @Test
     fun `stop invokes the interrupt callback`() {
         var interrupted = false
         compose.setContent {

@@ -27,9 +27,13 @@ UI polish is the final pass.
 
 ## 2. CI
 
-`.github/workflows/ci.yml`: jobs `jvm backend` + `android app (robolectric)`
-(`:app:testDebugUnitTest` + `assembleDebug`, artifacts `lumen-debug-apk`,
-`lumen-screenshots`, `unit-test-reports`). Poll by sha:
+`.github/workflows/ci.yml`: jobs `jvm backend` + `android app (robolectric)`.
+The JVM job compiles/tests `:core`, `:sandbox`, `:tools`, `:provider-openai`,
+`:provider-anthropic`, `:store-sqlite`, `:server`, and `:cli:classes` (the CLI's
+run path is otherwise never compiled). The Android job runs `:app:testDebugUnitTest`
++ `assembleDebug`, artifacts `lumen-debug-apk`, `lumen-screenshots`,
+`unit-test-reports`. Both workflows declare `permissions: contents: read`. Poll by
+sha:
 ```
 SHA=$(git rev-parse --short=7 HEAD)
 for i in $(seq 1 30); do out=$(bash /root/ci.sh); echo "$out" | head -1

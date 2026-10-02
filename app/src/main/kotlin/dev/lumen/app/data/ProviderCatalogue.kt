@@ -24,21 +24,45 @@ object ProviderCatalogue {
     )
 
     private val opencodeGoModels = listOf(
-        ModelInfo("opencode-go", "deepseek-v4.1-flash", contextWindow = 1_000_000, supportsReasoning = true),
-        ModelInfo("opencode-go", "glm-5.3-flash", contextWindow = 200_000),
-        ModelInfo("opencode-go", "kimi-k2.7-code", contextWindow = 200_000),
+        ModelInfo(
+            "opencode-go", "deepseek-v4.1-flash", contextWindow = 1_000_000, supportsReasoning = true,
+            inputCostPerM = 0.28, outputCostPerM = 0.42, cacheReadCostPerM = 0.028,
+        ),
+        ModelInfo(
+            "opencode-go", "glm-5.3-flash", contextWindow = 200_000,
+            inputCostPerM = 0.10, outputCostPerM = 0.10, cacheReadCostPerM = 0.02,
+        ),
+        ModelInfo(
+            "opencode-go", "kimi-k2.7-code", contextWindow = 200_000,
+            inputCostPerM = 0.55, outputCostPerM = 2.20, cacheReadCostPerM = 0.15,
+        ),
     )
     private val deepseekModels = listOf(
-        ModelInfo("deepseek", "deepseek-flash", contextWindow = 1_000_000, supportsReasoning = true),
-        ModelInfo("deepseek", "deepseek-v4-pro", contextWindow = 1_000_000, supportsReasoning = true),
+        ModelInfo(
+            "deepseek", "deepseek-flash", contextWindow = 1_000_000, supportsReasoning = true,
+            inputCostPerM = 0.28, outputCostPerM = 0.42, cacheReadCostPerM = 0.028,
+        ),
+        ModelInfo(
+            "deepseek", "deepseek-v4-pro", contextWindow = 1_000_000, supportsReasoning = true,
+            inputCostPerM = 0.55, outputCostPerM = 2.19, cacheReadCostPerM = 0.14,
+        ),
     )
 
     // Fallback catalog so resolution always succeeds even if the live /models
     // fetch is unavailable. `openrouter/free` auto-selects a currently-free model.
     private val openrouterModels = listOf(
-        ModelInfo("openrouter", "openrouter/free", label = "OpenRouter Free (auto)", contextWindow = 128_000),
-        ModelInfo("openrouter", "openrouter/auto", label = "OpenRouter Auto", contextWindow = 200_000),
-        ModelInfo("openrouter", "openrouter/pareto-code", label = "OpenRouter Pareto Code", contextWindow = 200_000),
+        ModelInfo(
+            "openrouter", "openrouter/free", label = "OpenRouter Free (auto)", contextWindow = 128_000,
+            inputCostPerM = 0.0, outputCostPerM = 0.0,
+        ),
+        ModelInfo(
+            "openrouter", "openrouter/auto", label = "OpenRouter Auto", contextWindow = 200_000,
+            inputCostPerM = 0.5, outputCostPerM = 1.5,
+        ),
+        ModelInfo(
+            "openrouter", "openrouter/pareto-code", label = "OpenRouter Pareto Code", contextWindow = 200_000,
+            inputCostPerM = 0.5, outputCostPerM = 1.5,
+        ),
     )
 
     /** The embedded model catalog for a provider — resolves offline, always. */
@@ -52,15 +76,21 @@ object ProviderCatalogue {
     fun label(provider: String): String =
         choices.firstOrNull { it.first == provider }?.second ?: provider
 
+    /**
+     * Build the selected provider only. Previously this constructed every base
+     * URL with the one key, so resolving a model dialled unrelated providers
+     * (with the user's credential). Only the chosen provider is ever created.
+     */
     fun providers(provider: String, key: String): List<Provider> {
-        val ua = USER_AGENT
-        return baseUrls.map { (id, url) ->
+        val url = baseUrls[provider]
+            ?: throw IllegalArgumentException("Unknown provider: $provider")
+        return listOf(
             dev.spindle.provider.openai.OpenAiProvider(
                 baseUrl = url,
-                apiKey = key, id = id, userAgent = ua,
-                defaultModels = defaultModels(id),
-            )
-        }
+                apiKey = key, id = provider, userAgent = USER_AGENT,
+                defaultModels = defaultModels(provider),
+            ),
+        )
     }
 
     /** The providers a user can pick on the key screen. */

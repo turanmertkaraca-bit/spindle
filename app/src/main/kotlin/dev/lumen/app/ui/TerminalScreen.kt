@@ -61,6 +61,8 @@ fun TerminalScreen(
     onClear: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Restart a shell that has exited; when null the field still stays usable. */
+    onRestart: (() -> Unit)? = null,
 ) {
     val output = remember(lines) { lines.joinToString("") }
     val scroll = rememberScrollState()
@@ -101,7 +103,7 @@ fun TerminalScreen(
                 )
             }
 
-            InputRow(colors, running, onSend, onInterrupt)
+            InputRow(colors, running, onSend, onInterrupt, onRestart)
         }
     }
 }
@@ -151,9 +153,26 @@ private fun InputRow(
     running: Boolean,
     onSend: (String) -> Unit,
     onInterrupt: () -> Unit,
+    onRestart: (() -> Unit)?,
 ) {
     var draft by remember { mutableStateOf("") }
-    val canSend = running && draft.isNotBlank()
+    // The field stays usable after the shell exits, so the user is never locked
+    // out; when it is not running the primary action restarts the shell instead.
+    val canSend = draft.isNotBlank()
+    val canRestart = !running && onRestart != null
+
+    // Sending (or pressing the action) on a dead shell restarts it first, then
+    // sends the queued command once it is live again.
+    val submit: () -> Unit = {
+        if (running) {
+            if (draft.isNotBlank()) {
+                onSend(draft)
+                draft = ""
+            }
+        } else {
+            onRestart?.invoke()
+        }
+    }
 
     Row(
         Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
@@ -167,22 +186,20 @@ private fun InputRow(
                 .padding(horizontal = 10.dp, vertical = 8.dp),
         ) {
             if (draft.isEmpty()) {
-                Text("type a command", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
+                Text(
+                    if (running) "type a command" else "shell exited — restart",
+                    color = colors.faint, fontFamily = Mono, fontSize = 13.sp,
+                )
             }
             BasicTextField(
                 value = draft,
                 onValueChange = { draft = it },
                 singleLine = true,
-                enabled = running,
+                enabled = true,
                 textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 13.sp),
                 cursorBrush = SolidColor(colors.water),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = {
-                    if (canSend) {
-                        onSend(draft)
-                        draft = ""
-                    }
-                }),
+                keyboardActions = KeyboardActions(onSend = { submit() }),
                 modifier = Modifier.fillMaxWidth().testTag("terminal-input"),
             )
         }
@@ -200,17 +217,14 @@ private fun InputRow(
         )
         Spacer(Modifier.width(4.dp))
         Text(
-            "send",
-            color = if (canSend) colors.accent else colors.faint,
+            if (canRestart) "restart" else "send",
+            color = if (canRestart || canSend) colors.accent else colors.faint,
             fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))
-                .clickable(enabled = canSend) {
-                    onSend(draft)
-                    draft = ""
-                }
+                .clickable(enabled = canRestart || canSend) { submit() }
                 .padding(horizontal = 7.dp, vertical = 6.dp)
-                .testTag("terminal-send"),
+                .testTag(if (canRestart) "terminal-restart" else "terminal-send"),
         )
     }
 }

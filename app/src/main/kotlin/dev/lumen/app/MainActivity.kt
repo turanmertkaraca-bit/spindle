@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -23,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.lumen.app.ui.CanvasScreen
 import dev.lumen.app.ui.DiagnosticsScreen
 import dev.lumen.app.ui.FilesScreen
@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            val state by viewModel.state.collectAsState()
+            val state by viewModel.state.collectAsStateWithLifecycle()
             val systemDark = isSystemInDarkTheme()
             val dark = when (state.theme) {
                 "light" -> false
@@ -204,6 +204,7 @@ class MainActivity : ComponentActivity() {
                         onSend = viewModel::sendTerminal,
                         onInterrupt = viewModel::interruptTerminal,
                         onClear = viewModel::clearTerminal,
+                        onRestart = viewModel::openTerminal,
                         onBack = {
                             viewModel.closeTerminal()
                             route = terminalReturn

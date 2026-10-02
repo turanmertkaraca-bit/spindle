@@ -5,9 +5,9 @@ loop in-process: no HTTP server, no process bridge, no parallel client-side stat
 model. The UI (Compose/Android, later) is a thin consumer of an event stream; the
 `SessionStore` remains the single source of truth.
 
-Status: **v1 draft**. The `:core` domain, SPIs, and loop are implemented. Provider
-adapters, the SQLite store, the tool set, and the CLI are specified here but not
-yet implemented (see `PLAN.md`).
+Status: **v1**. The `:core` domain, SPIs, and loop are implemented, together with
+the provider adapters, the SQLite stores, the tool set, the sandbox helpers, the
+CLI/server hosts, and the native Android app. See `PLAN.md` for milestone status.
 
 ---
 
@@ -16,19 +16,22 @@ yet implemented (see `PLAN.md`).
 | module | role | key deps | state |
 |---|---|---|---|
 | `:core` | domain model, agent loop, events, provider/tool/store SPIs | coroutines, serialization-json | implemented |
-| `:provider-openai` | OpenAI-compatible streaming (`chat/completions`) | `:core`, OkHttp | spec only |
-| `:provider-anthropic` | Anthropic-style streaming (`messages`) | `:core`, OkHttp | spec only |
-| `:store-sqlite` | durable `SessionStore` on SQLite (JDBC) | `:core`, sqlite-jdbc | spec only |
-| `:tools` | `read`/`write`/`edit`/`glob`/`grep`/`todowrite`/`question` | `:core` | spec only |
-| `:cli` | headless harness + live smoke runner (`dev.spindle.cli.MainKt`) | all of the above | spec only |
+| `:provider-openai` | OpenAI-compatible streaming (`chat/completions`) | `:core`, OkHttp | implemented |
+| `:provider-anthropic` | Anthropic-style streaming (`messages`) | `:core`, OkHttp | implemented |
+| `:store-sqlite` | durable `SessionStore`/`SnapshotStore` on SQLite (JDBC) | `:core`, sqlite-jdbc | implemented |
+| `:tools` | `read`/`write`/`edit`/`glob`/`grep`/`todowrite`/`question` (+ `bash`/`apply_patch`/`webfetch`/`task`) | `:core` | implemented |
+| `:sandbox` | tar.gz rootfs helpers + in-app HTTP proxy | JDK only | implemented |
+| `:cli` | headless harness + live smoke runner (`dev.spindle.cli.MainKt`) | all JVM modules | implemented |
+| `:server` | local UI preview backed by the real agent (`/api` + SSE) | `:core`, `:tools`, providers, `:store-sqlite` | implemented |
+| `:app` | native Android/Compose consumer (`dev.lumen.app`) | AndroidX Compose, `:core` | implemented (Robolectric in CI) |
 
 `:core` carries **no Android dependencies** (only `kotlinx-coroutines-core` and
 `kotlinx-serialization-json`), so the entire backend — including the agent loop —
 is exercisable on a plain JVM and in CI.
 
-Dependency rule: adapters and stores depend on `:core`; `:core` depends on none of
-them. The loop talks to interfaces only (`ProviderRegistry`, `SessionStore`,
-`ToolRegistry`, `EventBus`).
+Dependency rule: adapters, stores, `:sandbox` and the `:cli`/`:server`/`:app`
+hosts depend on `:core`; `:core` depends on none of them. The loop talks to
+interfaces only (`ProviderRegistry`, `SessionStore`, `ToolRegistry`, `EventBus`).
 
 ---
 

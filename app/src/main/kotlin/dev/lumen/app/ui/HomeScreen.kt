@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -78,6 +79,8 @@ fun HomeScreen(
     /** Toggle the listing of archived sessions. */
     onShowArchived: (Boolean) -> Unit = {},
 ) {
+    // Destructive delete needs a confirmation; holds the id pending deletion.
+    var deleteTarget by remember { mutableStateOf<String?>(null) }
     Column(
         modifier.fillMaxSize().background(colors.bg).imePadding()
             .padding(start = 20.dp, end = 20.dp, top = 56.dp, bottom = 20.dp),
@@ -193,7 +196,7 @@ fun HomeScreen(
                 }
             } else {
                 LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("search-results")) {
-                    items(search, key = { it.sessionId.value + ":" + it.messageId }) { hit ->
+                    items(search.distinctBy { it.sessionId.value + ":" + it.messageId }, key = { it.sessionId.value + ":" + it.messageId }) { hit ->
                         Column(
                             Modifier.fillMaxWidth()
                                 .padding(vertical = 2.dp)
@@ -225,7 +228,7 @@ fun HomeScreen(
             }
         } else {
             LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("sessions")) {
-                items(sessions, key = { it.id }) { s ->
+                items(sessions.distinctBy { it.id }, key = { it.id }) { s ->
                     var expanded by remember { mutableStateOf(false) }
                     var renaming by remember { mutableStateOf(false) }
                     var draft by remember(s.title) { mutableStateOf(s.title) }
@@ -306,7 +309,7 @@ fun HomeScreen(
                                     RowAction(colors, if (s.archived) "unarchive" else "archive", "archive-${s.id}") { onArchive(s.id, !s.archived) }
                                     RowAction(colors, "rename", "rename-${s.id}") { draft = s.title; renaming = true }
                                     RowAction(colors, "fork", "fork-${s.id}") { onFork(s.id) }
-                                    RowAction(colors, "delete", "delete-${s.id}") { onDelete(s.id) }
+                                    RowAction(colors, "delete", "delete-${s.id}") { deleteTarget = s.id }
                                 }
                             }
                         }
@@ -314,6 +317,46 @@ fun HomeScreen(
                 }
             }
         }
+    }
+
+    // Confirm before a destructive delete; dismissing leaves the session intact.
+    deleteTarget?.let { id ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            containerColor = colors.surface,
+            titleContentColor = colors.fg,
+            textContentColor = colors.dim,
+            title = { Text("delete chat", fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium) },
+            text = {
+                Text(
+                    "delete \"${sessions.firstOrNull { it.id == id }?.title ?: "this chat"}\" and its messages?",
+                    fontFamily = Mono, fontSize = 12.5.sp, lineHeight = 18.sp,
+                )
+            },
+            confirmButton = {
+                Text(
+                    "delete", color = colors.accent, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable {
+                            onDelete(id)
+                            deleteTarget = null
+                        }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .testTag("delete-confirm"),
+                )
+            },
+            dismissButton = {
+                Text(
+                    "cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { deleteTarget = null }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .testTag("delete-cancel"),
+                )
+            },
+        )
     }
 }
 

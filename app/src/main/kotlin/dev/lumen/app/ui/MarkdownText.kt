@@ -19,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -115,8 +116,16 @@ private fun MarkdownParagraph(
     touchedPaths: Set<String>,
     onOpenFile: (String, Int?) -> Unit,
 ) {
+    // Resolving references stats the filesystem, so memoise the annotated run on
+    // everything that can change its result — NOT on the (unstable) `exists`
+    // lambda, which is re-created on every parent recomposition. `rememberUpdated`
+    // keeps the latest gate without invalidating the memo.
+    val gate by rememberUpdatedState(exists)
+    val annotated = remember(spans, colors, cwd, touchedPaths) {
+        markdownAnnotated(spans, colors, cwd, gate, touchedPaths)
+    }
     LinkedText(
-        text = markdownAnnotated(spans, colors, cwd, exists, touchedPaths),
+        text = annotated,
         colors = colors,
         fontSize = 14.sp,
         lineHeight = 21.sp,
@@ -134,8 +143,12 @@ private fun MarkdownList(
     touchedPaths: Set<String>,
     onOpenFile: (String, Int?) -> Unit,
 ) {
+    val gate by rememberUpdatedState(exists)
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         for ((index, item) in items.withIndex()) {
+            val annotated = remember(item, colors, cwd, touchedPaths) {
+                markdownAnnotated(item, colors, cwd, gate, touchedPaths)
+            }
             Row(Modifier.fillMaxWidth()) {
                 Text(
                     if (ordered) "${index + 1}." else "\u2022",
@@ -146,7 +159,7 @@ private fun MarkdownList(
                 )
                 Spacer(Modifier.width(8.dp))
                 LinkedText(
-                    text = markdownAnnotated(item, colors, cwd, exists, touchedPaths),
+                    text = annotated,
                     colors = colors,
                     fontSize = 14.sp,
                     lineHeight = 21.sp,

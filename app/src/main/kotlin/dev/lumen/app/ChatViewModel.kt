@@ -3,8 +3,6 @@ package dev.lumen.app
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.lumen.app.data.AndroidSessionStore
-import dev.lumen.app.data.AndroidSnapshotStore
 import dev.lumen.app.data.KeyStore
 import dev.lumen.app.data.ProviderCatalogue
 import dev.lumen.app.platform.AndroidEnvironment
@@ -18,7 +16,10 @@ import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
 import dev.spindle.core.model.FileEdit
+import dev.spindle.core.model.FinishReason
 import dev.spindle.core.model.RunChanges
+import dev.spindle.core.model.ToolResult
+import dev.spindle.core.model.ToolState
 import dev.spindle.core.model.Usage
 import dev.spindle.core.store.RevertResult
 import dev.spindle.core.store.Reverter
@@ -51,8 +52,10 @@ import dev.spindle.tool.DefaultTools
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -271,18 +274,38 @@ class ChatViewModel(
     private val workspace: Path,
     private val keys: KeyStore,
     private val store: SessionStore,
-    private val ownedStore: AutoCloseable? = null,
     private val snapshots: SnapshotStore? = null,
-    private val ownedSnapshots: AutoCloseable? = null,
     private val shell: ShellExecutor? = null,
     private val context: Context? = null,
     private val environment: AndroidEnvironment? = null,
     private val debian: DebianEnvironment? = null,
     /** Dispatcher for storage scans, cache clears and the Debian install. */
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    /**
+     * The process-wide scope a run is launched in. Production passes the
+     * Application scope so destroying the Activity cannot cancel a live run;
+     * tests (and any headless host) fall back to [viewModelScope].
+     */
+    private val runScope: CoroutineScope? = null,
+    /** Test seam: overrides the provider registry so a scripted provider can run. */
+    private val registryFactory: ((provider: String, key: String) -> SimpleProviderRegistry)? = null,
+    /** How long session search waits for more keystrokes; 0 lands inline in tests. */
+    private val searchDebounceMs: Long = SEARCH_DEBOUNCE_MS,
+    /**
+     * Process-wide event bus. Production passes the Application's bus so a run
+     * that outlives this ViewModel still feeds whichever ViewModel is open when
+     * the user returns; tests default to a private bus.
+     */
+    eventBus: EventBus = EventBus(),
+    /**
+     * Process-wide ids of sessions with a live in-process run. [reconcileOrphanRuns]
+     * must not treat one of these as a stale orphan, or reopening the Activity
+     * mid-run would clobber the live run's persisted state.
+     */
+    private val runningSessions: MutableSet<String>? = null,
 ) : ViewModel() {
 
-    private val bus = EventBus()
+    private val bus: EventBus = eventBus
 
     private val _state = MutableStateFlow(
         ChatState(
@@ -299,6 +322,23 @@ class ChatViewModel(
 
     private var runJob: Job? = null
 
+    /** The session id of the in-flight run, so [stop] can clear its live marker. */
+    private var runningSessionId: String? = null
+
+    /**
+     * Bumped whenever a run starts or is superseded. A finishing coroutine only
+     * touches shared state (busy flag, service, watcher) when its generation is
+     * still current, so a stop()/new send() cannot be clobbered by the old run's
+     * `finally`.
+     */
+    private var runGeneration = 0
+
+    /** Bumped on every session switch so a slow `openSession` cannot land stale. */
+    private var sessionOpenToken = 0
+
+    /** In-flight debounced search, cancelled when a newer query arrives. */
+    private var searchJob: Job? = null
+
     /** The one interactive shell behind the terminal screen. */
     private val terminal = AndroidTerminal(workspace.toFile(), shell)
 
@@ -308,7 +348,7 @@ class ChatViewModel(
      * Best-effort: a sandbox without a context runs without it.
      */
     private val watcher: WorkspaceWatcher? = context?.let {
-        WorkspaceWatcher(workspace.toFile(), viewModelScope) { changed -> absorbIndirect(changed) }
+        WorkspaceWatcher(workspace.toFile(), runScope ?: viewModelScope) { changed -> absorbIndirect(changed) }
     }
 
     /** Frame/heap sampler for the on-device perf sweep; reports one diag line per run. */
@@ -459,13 +499,48 @@ class ChatViewModel(
     /**
      * A run cannot outlive its process in this app, so any session still marked
      * RUNNING on a cold start is stale and is replayed as idle. Without this, a
-     * killed run would reopen as permanently "busy".
+     * killed run would reopen as permanently "busy". Reconciliation also has to
+     * repair the persisted timeline: a tool part left PENDING/RUNNING would spin
+     * forever, so it is rewritten as an aborted ERROR result and any open
+     * assistant message is finalized.
      */
     private suspend fun reconcileOrphanRuns() {
         runCatching {
-            store.sessions(limit = 200, includeChildren = true)
-                .filter { it.state == SessionState.RUNNING }
-                .forEach { store.updateSession(it.copy(state = SessionState.IDLE)) }
+            val live = runningSessions ?: emptySet()
+            val stale = store.sessions(limit = Int.MAX_VALUE, includeChildren = true, includeArchived = true)
+                .filter { it.state == SessionState.RUNNING && it.id.value !in live }
+            for (session in stale) {
+                abortStaleRun(session.id)
+                store.updateSession(session.copy(state = SessionState.IDLE))
+            }
+        }
+    }
+
+    /** Rewrite a stale run's in-flight tool parts to ERROR and close open messages. */
+    private suspend fun abortStaleRun(sid: SessionId) {
+        val messages = runCatching { store.messages(sid) }.getOrDefault(emptyList())
+        for (message in messages) {
+            var rewroteTool = false
+            val parts = message.parts.map { part ->
+                if (part is Part.Tool && (part.state == ToolState.PENDING || part.state == ToolState.RUNNING)) {
+                    rewroteTool = true
+                    part.copy(
+                        state = ToolState.ERROR,
+                        result = ToolResult(part.call.id, "aborted", isError = true),
+                    )
+                } else {
+                    part
+                }
+            }
+            val openAssistant = message.role == Role.ASSISTANT && message.finish == null
+            if (!rewroteTool && !openAssistant) continue
+            store.updateMessage(
+                message.copy(
+                    parts = parts,
+                    finish = if (openAssistant) FinishReason.ERROR else message.finish,
+                    error = message.error ?: if (openAssistant) "aborted" else null,
+                ),
+            )
         }
     }
 
@@ -765,6 +840,7 @@ class ChatViewModel(
     // ---- sessions ----
 
     fun newChat() {
+        val token = ++sessionOpenToken
         viewModelScope.launch {
             val now = System.currentTimeMillis()
             val id = SessionId(Ids.new("ses"))
@@ -779,6 +855,7 @@ class ChatViewModel(
                     providerId = keys.model.substringBefore('/', "opencode-go"),
                 ),
             )
+            if (token != sessionOpenToken) return@launch
             _state.value = _state.value.copy(
                 currentSessionId = id.value,
                 steps = emptyList(),
@@ -797,25 +874,36 @@ class ChatViewModel(
     }
 
     fun openSession(id: String) {
+        // A newer navigation supersedes this load, so open A then B can never
+        // apply A's messages under B's id.
+        val token = ++sessionOpenToken
         viewModelScope.launch {
             val sid = SessionId(id)
             val messages = store.messages(sid)
+            val session = store.session(sid)
+            if (token != sessionOpenToken) return@launch
             _state.value = _state.value.copy(
                 currentSessionId = id,
                 steps = enrich(StepMapper.fromMessages(messages)),
                 input = "",
                 error = null,
-                busy = store.session(sid)?.state == SessionState.RUNNING,
+                busy = session?.state == SessionState.RUNNING,
                 usage = messages.fold(Usage()) { acc, m -> acc + m.usage },
                 changes = RunChanges.EMPTY,
                 todos = loadTodos(sid),
+                // Restore a gate prompt that was hidden by navigating away mid-run.
+                ask = activeAsk?.ask,
             )
         }
     }
 
+    /**
+     * Leave the chat screen. This resets UI state ONLY: it must never cancel a
+     * live run or drop a gate the run is waiting on, because the run is owned by
+     * the process scope and continues in the background.
+     */
     fun closeChat() {
-        runJob?.cancel()
-        clearAsks()
+        sessionOpenToken++
         _state.value = _state.value.copy(
             currentSessionId = null,
             steps = emptyList(),
@@ -923,12 +1011,14 @@ class ChatViewModel(
      */
     fun searchSessions(query: String) {
         _state.value = _state.value.copy(searchQuery = query)
+        searchJob?.cancel()
         val searchable = store as? SessionSearch ?: return
         if (query.isBlank()) {
             _state.value = _state.value.copy(search = null)
             return
         }
-        viewModelScope.launch {
+        searchJob = viewModelScope.launch {
+            if (searchDebounceMs > 0) delay(searchDebounceMs)
             val hits = runCatching { searchable.search(query) }.getOrDefault(emptyList())
             if (_state.value.searchQuery == query) {
                 _state.value = _state.value.copy(search = hits)
@@ -1509,7 +1599,7 @@ class ChatViewModel(
     // ---- chat ----
 
     private fun providersFor(provider: String, key: String): SimpleProviderRegistry =
-        ProviderCatalogue.registry(provider, key)
+        registryFactory?.invoke(provider, key) ?: ProviderCatalogue.registry(provider, key)
 
     private suspend fun collectEvents() {
         bus.events.collect { e ->
@@ -1531,6 +1621,8 @@ class ChatViewModel(
                 }
                 is AgentEvent.Progress -> {
                     _state.value = _state.value.copy(steps = StepMapper.applyEvent(_state.value.steps, e))
+                    // Keep the ongoing notification's progress line in step.
+                    context?.let { ctx -> runCatching { RunService.update(ctx, e.message) } }
                 }
                 is AgentEvent.UsageUpdated -> _state.value = _state.value.copy(usage = e.usage)
                 is AgentEvent.BudgetWarning -> {
@@ -1676,7 +1768,13 @@ class ChatViewModel(
             runCatching { RunService.start(ctx, currentId, title.ifBlank { "Lumen run" }) }
         }
 
-        runJob = viewModelScope.launch {
+        val generation = ++runGeneration
+        runningSessionId = currentId
+        runningSessions?.add(currentId)
+        // The Application scope keeps the run alive across Activity destruction;
+        // tests without one fall back to the ViewModel scope.
+        val scope = runScope ?: viewModelScope
+        runJob = scope.launch {
             // Title a fresh chat from its first message.
             runCatching {
                 val s = store.session(sid)
@@ -1725,18 +1823,32 @@ class ChatViewModel(
                 throw e
             } catch (t: Throwable) {
                 diag("error: " + (t.message ?: t.toString()))
-                _state.value = _state.value.copy(error = t.message ?: t.toString(), busy = false)
+                if (generation == runGeneration) {
+                    _state.value = _state.value.copy(error = t.message ?: t.toString(), busy = false)
+                }
             } finally {
-                watcher?.stop()
-                runCatching { perf.stop() }.getOrNull()?.let { if (it.frames > 0) diag(it.line()) }
-                context?.let { ctx -> runCatching { RunService.stop(ctx) } }
+                // A superseded run must not tear down the new run's watcher,
+                // service or busy flag: that race is exactly generation's job.
+                if (generation == runGeneration) {
+                    // Tear down only when this run is still current. A stop()
+                    // already reset the live marker; a superseding run owns the
+                    // watcher/service now, so this must not touch them.
+                    runningSessionId = null
+                    runningSessions?.remove(sid.value)
+                    watcher?.stop()
+                    runCatching { perf.stop() }.getOrNull()?.let { if (it.frames > 0) diag(it.line()) }
+                    context?.let { ctx -> runCatching { RunService.stop(ctx) } }
+                }
             }
-            refreshSessions()
+            if (generation == runGeneration) refreshSessions()
         }
     }
 
     fun stop() {
+        runGeneration++
         runJob?.cancel()
+        runningSessionId?.let { runningSessions?.remove(it) }
+        runningSessionId = null
         clearAsks()
         watcher?.stop()
         context?.let { ctx -> runCatching { RunService.stop(ctx) } }
@@ -1746,16 +1858,12 @@ class ChatViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        // The Activity is going away for good (not a config change — the view
-        // model survives those). Cancel the run so its coroutine does not leak,
-        // and let the store keep whatever was already persisted; the next open
-        // of the session rebuilds from it.
-        runJob?.cancel()
-        context?.let { ctx -> runCatching { RunService.stop(ctx) } }
+        // The Activity is going away for good. The run belongs to the process
+        // scope and the stores live in the app container, so neither is touched
+        // here: a backgrounded run finishes and persists independently. Only
+        // screen-bound resources are reaped.
         watcher?.stop()
         terminal.shutdown()
-        runCatching { ownedStore?.close() }
-        runCatching { ownedSnapshots?.close() }
     }
 
     private fun oneLine(s: String, max: Int): String =
@@ -1805,25 +1913,42 @@ class ChatViewModel(
         const val STORAGE_LOGS = "logs"
         const val STORAGE_CACHE = "app cache"
 
-        fun Factory(context: Context, workspace: java.io.File): androidx.lifecycle.ViewModelProvider.Factory =
+        /** Quiet period before a session search query is actually executed. */
+        internal const val SEARCH_DEBOUNCE_MS = 150L
+
+        fun Factory(context: Context, workspace: java.io.File): androidx.lifecycle.ViewModelProvider.Factory {
+            val app = context.applicationContext as? LumenApp ?: error("LumenApp must own ChatViewModel")
+            return Factory(app.container, app.applicationScope, app.events, app.runningSessions, workspace)
+        }
+
+        /**
+         * Build a ViewModel over the process singletons: the shared stores, the
+         * Application scope and the Application event bus, so a run outlives any
+         * Activity and still feeds whichever ViewModel is open when the user
+         * returns.
+         */
+        fun Factory(
+            container: AppContainer,
+            runScope: CoroutineScope,
+            events: EventBus,
+            runningSessions: MutableSet<String>,
+            workspace: java.io.File,
+        ): androidx.lifecycle.ViewModelProvider.Factory =
             object : androidx.lifecycle.ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
-                override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    val store = AndroidSessionStore(context)
-                    val snapshots = AndroidSnapshotStore(context)
-                    return ChatViewModel(
-                        workspace = workspace.toPath(),
-                        keys = KeyStore(context),
-                        store = store,
-                        ownedStore = store,
-                        snapshots = snapshots,
-                        ownedSnapshots = snapshots,
-                        shell = AndroidShellExecutor(context),
-                        context = context,
-                        environment = AndroidEnvironment(context),
-                        debian = DebianEnvironment(context),
-                    ) as T
-                }
+                override fun <T : ViewModel> create(modelClass: Class<T>): T = ChatViewModel(
+                    workspace = workspace.toPath(),
+                    keys = container.keys,
+                    store = container.store,
+                    snapshots = container.snapshots,
+                    shell = AndroidShellExecutor(container.context),
+                    context = container.context,
+                    environment = AndroidEnvironment(container.context),
+                    debian = DebianEnvironment(container.context),
+                    runScope = runScope,
+                    eventBus = events,
+                    runningSessions = runningSessions,
+                ) as T
             }
     }
 }

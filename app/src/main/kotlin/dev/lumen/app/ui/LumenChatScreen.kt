@@ -1,7 +1,9 @@
 package dev.lumen.app.ui
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
+import android.util.LruCache
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -66,8 +68,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -119,7 +123,9 @@ import dev.spindle.core.model.TodoStatus
 import dev.spindle.core.model.Usage
 import java.util.Locale
 import kotlin.math.abs
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val Mono = FontFamily.Monospace
 
@@ -318,18 +324,22 @@ fun LumenChatScreen(
         }
     }
 
-    // A slow spectrum breathe while something is running; off when idle or in tests.
+    // A slow spectrum breathe while something is running; off when idle or in
+    // tests. Kept as a lambda so the parent body never READS the animated value:
+    // rows re-read it only inside their own draw phase, confining recomposition
+    // to the glyphs instead of every timeline row every frame.
     val running = busy || steps.any { it.running }
-    val pulse = if (ambient && running) {
+    val pulse: () -> Float = if (ambient && running) {
         val t = rememberInfiniteTransition(label = "pulse")
-        t.animateFloat(
+        val value = t.animateFloat(
             initialValue = 0.35f,
             targetValue = 1f,
             animationSpec = infiniteRepeatable(tween(1400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
             label = "pulse",
-        ).value
+        )
+        { value.value }
     } else {
-        1f
+        { 1f }
     }
 
     // Fold each think block into the answer/tool that follows, so it collapses
@@ -345,13 +355,19 @@ fun LumenChatScreen(
     val count = display.size
     val last = display.lastOrNull()
 
-    // Follow the tail while streaming, gently. We only re-anchor when content
-    // actually grows and the reader is already at the bottom, so a bubble that
-    // merely gains height (token, or think→answer) does not yank the list.
+    // `forceOpenIndex` indexes the RAW step list, but the timeline renders the
+    // grouped/deduped `display` list; map raw → display by id so a folded row
+    // still opens. Fall back to -1 (nothing open) when it cannot be mapped.
+    val forceOpenId = remember(forceOpenIndex, steps, display) {
+        forceOpenIndex?.let { steps.getOrNull(it)?.id }
+    }
+
+    // Follow the tail while streaming, gently. We re-anchor when content actually
+    // grows and the reader is already at the bottom. Keying on the last row's
+    // body LENGTH (not just its id) is what makes a streaming answer follow: a
+    // single assistant Part only grows its body, so id/count alone never change.
     var followTail by remember { mutableStateOf(true) }
     var showNewCue by remember { mutableStateOf(false) }
-    var cueArmed by remember { mutableStateOf(false) }
-    var prevCount by remember { mutableStateOf(0) }
     LaunchedEffect(listState) {
         snapshotFlow {
             val info = listState.layoutInfo
@@ -362,29 +378,52 @@ fun LumenChatScreen(
             if (it) showNewCue = false
         }
     }
-    LaunchedEffect(count, last?.id) {
+    LaunchedEffect(count, last?.id, last?.body?.length) {
         if (count == 0 || !followTail) return@LaunchedEffect
-        // animateScrollToItem eases to the newest bubble; harmless when already
-        // there, so it never fights the streaming height changes above it.
-        listState.animateScrollToItem(count - 1)
+        // Pin the last row to the tail whenever it (or a new one) grows; scrollBy
+        // of the height delta keeps a streaming bubble glued to the bottom without
+        // fighting the height changes above it.
+        val info = listState.layoutInfo
+        val lastVisible = info.visibleItemsInfo.lastOrNull { it.index == count - 1 }
+        if (lastVisible == null) {
+            // The last row is not composed yet: jump so it lays out, then pin next.
+            listState.scrollToItem(count - 1)
+        } else {
+            val delta = (info.viewportEndOffset - info.afterContentPadding) - (lastVisible.offset + lastVisible.size)
+            if (delta > 0) listState.scrollBy(delta.toFloat())
+        }
     }
-    // A new bubble landed while the reader is up the transcript: show the "new"
-    // cue and give a light haptic. Keyed on the row id, not the body, so streaming
-    // tokens never fire it; the first composition is skipped so opening a session
-    // does not buzz. The haptic is disabled in tests.
-    LaunchedEffect(count, last?.id) {
-        val grew = count > prevCount
-        prevCount = count
+    // The `↓ new` cue fires when the content grows off-screen. Growth is detected
+    // from the DATA (count OR last body length), because a streaming row scrolled
+    // far up may not be composed at all and so has no layout entry to observe.
+    // Layout clears the cue the moment the reader is back at the tail. `cueArmed`
+    // skips the first emission so opening a session never flashes the cue.
+    var cueArmed by remember { mutableStateOf(false) }
+    LaunchedEffect(count, last?.id, last?.body?.length) {
         if (!cueArmed) {
             cueArmed = true
             return@LaunchedEffect
         }
-        if (!grew || count == 0 || followTail) return@LaunchedEffect
+        if (count == 0 || followTail) return@LaunchedEffect
         showNewCue = true
         val kind = last?.kind
         if (hapticsActive && kind != null && kind != StepKind.YOU && kind != StepKind.THINKING) {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         }
+    }
+    // Clear the cue as soon as the last row is fully visible again (or the list is
+    // short). This runs only on layout changes, so it never re-triggers growth.
+    LaunchedEffect(listState, count) {
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val item = info.visibleItemsInfo.lastOrNull { it.index == count - 1 }
+            val lastVertex = info.visibleItemsInfo.lastOrNull()
+            val tailVisible = item != null &&
+                item.offset + item.size <= info.viewportEndOffset - info.afterContentPadding + 1
+            val atTail = info.totalItemsCount == 0 ||
+                (lastVertex != null && lastVertex.index >= info.totalItemsCount - 1)
+            tailVisible || atTail
+        }.collect { settled -> if (settled) showNewCue = false }
     }
 
     Box(modifier.fillMaxSize().background(colors.bg).imePadding()) {
@@ -465,7 +504,7 @@ fun LumenChatScreen(
                                         step = step,
                                         colors = colors,
                                         pulse = pulse,
-                                        open = forceOpenIndex == index,
+                                        open = forceOpenId != null && step.id == forceOpenId,
                                         onExpandSubagent = onExpandSubagent,
                                         cwd = cwd,
                                         exists = exists,
@@ -599,7 +638,7 @@ private fun NewCue(colors: LumenColors, onClick: () -> Unit) {
 private fun MessageRow(
     step: UiStep,
     colors: LumenColors,
-    pulse: Float,
+    pulse: () -> Float,
     open: Boolean,
     onExpandSubagent: (UiStep) -> Unit = {},
     cwd: String = "",
@@ -713,7 +752,7 @@ private fun MessageRow(
                         )
                     }
                 } else if (step.running && step.body.isBlank()) {
-                    Text("thinking…", color = colors.water.copy(alpha = 0.5f + 0.5f * pulse), fontFamily = Mono, fontSize = 14.sp)
+                    Text("thinking…", color = colors.water.copy(alpha = 0.5f + 0.5f * pulse()), fontFamily = Mono, fontSize = 14.sp)
                 } else {
                     val body = step.body.ifBlank { step.summary }
                     // Assistant prose is markdown; the user's own words and every
@@ -772,22 +811,34 @@ private fun MessageRow(
 
 /**
  * The images attached to a user turn, drawn inside the bubble. Each decodes its
- * base64 to a thumbnail once, memoised on the payload; when the bytes cannot be
+ * base64 to a thumbnail OFF the main thread, downsampled to the display size and
+ * cached, so a large photo cannot OOM or jank the frame; when the bytes cannot be
  * decoded it falls back to a labelled chip so the attachment is never invisible.
  */
 @Composable
 private fun UserImages(images: List<UiImage>, colors: LumenColors) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         for (image in images) {
-            val bitmap = remember(image.base64) {
-                runCatching {
-                    val bytes = Base64.decode(image.base64, Base64.DEFAULT)
-                    if (bytes.isEmpty()) null else BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                }.getOrNull()
+            val key = remember(image.base64) { hashKey(image.base64) }
+            val bytes = remember(image.base64) {
+                runCatching { Base64.decode(image.base64, Base64.DEFAULT) }.getOrDefault(ByteArray(0))
+            }
+            val bitmap by produceState<Bitmap?>(initialValue = ImageThumbCache.get(key), key1 = key) {
+                if (value == null) {
+                    value = withContext(Dispatchers.Default) {
+                        val decoded = decodeThumbnail(
+                            bytes,
+                            reqW = THUMBNAIL_WIDTH_PX,
+                            reqH = THUMBNAIL_HEIGHT_PX,
+                        )
+                        if (decoded != null) ImageThumbCache.put(key, decoded)
+                        decoded
+                    }
+                }
             }
             if (bitmap != null) {
                 Image(
-                    bitmap = bitmap.asImageBitmap(),
+                    bitmap = bitmap!!.asImageBitmap(),
                     contentDescription = image.name,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
@@ -833,6 +884,67 @@ private fun UserImages(images: List<UiImage>, colors: LumenColors) {
     }
 }
 
+/** Target thumbnail size in pixels; matches the 240dp max bubble width at ~mdpi. */
+private const val THUMBNAIL_WIDTH_PX = 480
+private const val THUMBNAIL_HEIGHT_PX = 400
+
+/** A content hash for a base64 payload, used as the thumbnail cache key. */
+internal fun hashKey(base64: String): String {
+    var h = 1125899906842597L
+    // Hash a bounded prefix: the payload identity is stable and we avoid scanning
+    // megabytes of base64 on every composition of the row.
+    val n = minOf(base64.length, 256)
+    for (i in 0 until n) h = 31 * h + base64[i].code
+    return "$n:$h:${base64.length}"
+}
+
+/**
+ * Pure, JVM-testable sampling math: pick the largest power-of-two [inSampleSize]
+ * that keeps the decoded bitmap at least [reqW] x [reqH] (i.e. never smaller than
+ * requested), then decode with it. Returns null when the bytes are empty or not
+ * a decodable image. The bounds decode is cheap (headers only); the full decode
+ * happens once with the chosen sample size, off the caller's thread.
+ */
+internal fun decodeThumbnail(bytes: ByteArray, reqW: Int, reqH: Int): Bitmap? {
+    if (bytes.isEmpty()) return null
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    val w = reqW.coerceAtLeast(1)
+    val h = reqH.coerceAtLeast(1)
+    val opts = BitmapFactory.Options().apply {
+        inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight, w, h)
+    }
+    return runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) }.getOrNull()
+}
+
+/**
+ * The power-of-two downsample factor that keeps the image at least [reqW]x[reqH]
+ * while shrinking it as much as possible. Pure and directly unit-tested.
+ */
+internal fun sampleSizeFor(srcW: Int, srcH: Int, reqW: Int, reqH: Int): Int {
+    if (srcW <= 0 || srcH <= 0 || reqW <= 0 || reqH <= 0) return 1
+    var sample = 1
+    while (srcW / (sample * 2) >= reqW && srcH / (sample * 2) >= reqH) {
+        sample *= 2
+    }
+    return sample
+}
+
+/** A small bounded cache of decoded message thumbnails, keyed by content hash. */
+private object ImageThumbCache {
+    private const val MAX_BYTES = 8 * 1024 * 1024
+    private val cache = object : LruCache<String, Bitmap>(MAX_BYTES) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
+
+    fun get(key: String): Bitmap? = cache.get(key)
+
+    fun put(key: String, bitmap: Bitmap) {
+        cache.put(key, bitmap)
+    }
+}
+
 /** A spectrum teardrop mark; a ring when [ring]. */
 @Composable
 private fun Droplet(
@@ -866,18 +978,78 @@ private fun Droplet(
 private fun ToolCard(
     step: UiStep,
     colors: LumenColors,
-    pulse: Float,
+    pulse: () -> Float,
     startExpanded: Boolean,
     onExpandSubagent: (UiStep) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember(step.id, startExpanded) { mutableStateOf(startExpanded) }
     val isSub = step.kind == StepKind.SUBAGENT
+
+    // Read the animated `pulse` only inside draw so a running card's stripe does
+    // not recompose the card (and thus every row) each frame.
+    if (step.running) {
+        val accentBase = colors.water
+        ToolCardFrame(
+            step = step,
+            colors = colors,
+            isSub = isSub,
+            expanded = expanded,
+            onToggle = {
+                if (!expanded && isSub && step.childId != null && step.childSteps.isEmpty()) {
+                    onExpandSubagent(step)
+                }
+                expanded = !expanded
+            },
+            accentForDraw = { accentBase.copy(alpha = 0.5f + 0.5f * pulse()) },
+            accentForStatic = accentBase.copy(alpha = 0.75f),
+            bodyPulse = pulse,
+            modifier = modifier,
+            shape = RoundedCornerShape(12.dp),
+        )
+        return
+    }
     val accent = when {
         step.failed -> colors.danger()
-        step.running -> colors.water.copy(alpha = 0.5f + 0.5f * pulse)
         else -> colors.spectrum.getOrElse(2) { colors.water }
     }
+    ToolCardFrame(
+        step = step,
+        colors = colors,
+        isSub = isSub,
+        expanded = expanded,
+        onToggle = {
+            if (!expanded && isSub && step.childId != null && step.childSteps.isEmpty()) {
+                onExpandSubagent(step)
+            }
+            expanded = !expanded
+        },
+        accentForDraw = { accent },
+        accentForStatic = accent,
+        bodyPulse = pulse,
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+    )
+}
+
+/**
+ * The tool card's chrome (stripe, header, collapsible body). Split out so the
+ * running accent can be read inside its own draw callback via [accentForDraw]
+ * while the border uses the non-animated [accentForStatic].
+ */
+@Composable
+private fun ToolCardFrame(
+    step: UiStep,
+    colors: LumenColors,
+    isSub: Boolean,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    accentForDraw: () -> Color,
+    accentForStatic: Color,
+    bodyPulse: () -> Float,
+    modifier: Modifier,
+    shape: RoundedCornerShape,
+) {
     val count = step.merged.coerceAtLeast(1)
     val names = remember(step.toolNames, step.rows, step.label, isSub) {
         step.toolNames.ifEmpty { if (isSub) emptyList() else step.rows.map { it.first.lowercase() } }
@@ -898,14 +1070,14 @@ private fun ToolCard(
         }
     }
     val title = (if (isSub) step.label.ifBlank { "subagent" } else step.label.ifBlank { "tool" }).lowercase()
-    val shape = RoundedCornerShape(12.dp)
 
     Column(
         modifier
             .clip(shape)
             .background(colors.surface)
-            .border(1.dp, accent.copy(alpha = 0.30f), shape)
+            .border(1.dp, accentForStatic.copy(alpha = 0.30f), shape)
             .drawBehind {
+                val accent = accentForDraw()
                 val x = 1.5.dp.toPx()
                 drawLine(
                     color = accent,
@@ -924,17 +1096,12 @@ private fun ToolCard(
         Row(
             Modifier
                 .fillMaxWidth()
-                .clickable {
-                    if (!expanded && isSub && step.childId != null && step.childSteps.isEmpty()) {
-                        onExpandSubagent(step)
-                    }
-                    expanded = !expanded
-                }
+                .clickable { onToggle() }
                 .padding(start = 11.dp, end = 10.dp, top = 8.dp, bottom = 8.dp)
                 .testTag("tools-toggle"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            ToolGlyph(accent, step.failed, step.running)
+            ToolGlyph(accentForStatic, step.failed, step.running)
             Spacer(Modifier.width(8.dp))
             Text(
                 title,
@@ -957,7 +1124,7 @@ private fun ToolCard(
             enter = expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
             exit = shrinkVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut(),
         ) {
-            ToolCardBody(step, colors, isSub, pulse)
+            ToolCardBody(step, colors, isSub, bodyPulse)
         }
     }
 }
@@ -968,7 +1135,7 @@ private fun ToolCard(
  * when there are no rows. This is the only place raw output is drawn.
  */
 @Composable
-private fun ToolCardBody(step: UiStep, colors: LumenColors, isSub: Boolean, pulse: Float) {
+private fun ToolCardBody(step: UiStep, colors: LumenColors, isSub: Boolean, pulse: () -> Float) {
     val toolScroll = rememberScrollState()
     val atBottom by remember { derivedStateOf { toolScroll.value >= toolScroll.maxValue - 2 } }
     val showTree = isSub && (step.childSteps.isNotEmpty() || step.childLoading)
@@ -1009,34 +1176,50 @@ private fun ToolCardBody(step: UiStep, colors: LumenColors, isSub: Boolean, puls
                     color = colors.dim, fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp,
                     modifier = Modifier.testTag("tool-output-0"),
                 )
-                else -> for ((k, r) in entries.withIndex()) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(colors.bg.copy(alpha = 0.35f))
-                            .padding(horizontal = 9.dp, vertical = 4.dp)
-                            .testTag("tool-row-$k"),
-                        verticalAlignment = Alignment.Top,
-                    ) {
-                        Text(
-                            if (step.failed) "\u00d7" else "\u2713",
-                            color = if (step.failed) colors.danger() else colors.water,
-                            fontFamily = Mono, fontSize = 10.5.sp,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(r.first, color = colors.fg, fontFamily = Mono, fontSize = 11.5.sp)
-                            if (r.second.isNotEmpty() && r.second != r.first) {
-                                Text(
-                                    r.second, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
-                                    lineHeight = 15.sp,
-                                    modifier = Modifier.testTag("tool-output-$k"),
-                                )
+                else -> {
+                    for ((k, r) in entries.withIndex()) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(colors.bg.copy(alpha = 0.35f))
+                                .padding(horizontal = 9.dp, vertical = 4.dp)
+                                .testTag("tool-row-$k"),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            Text(
+                                if (step.failed) "\u00d7" else "\u2713",
+                                color = if (step.failed) colors.danger() else colors.water,
+                                fontFamily = Mono, fontSize = 10.5.sp,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(r.first, color = colors.fg, fontFamily = Mono, fontSize = 11.5.sp)
+                                if (r.second.isNotEmpty() && r.second != r.first) {
+                                    Text(
+                                        r.second, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
+                                        lineHeight = 15.sp,
+                                        modifier = Modifier.testTag("tool-output-$k"),
+                                    )
+                                }
                             }
                         }
+                        if (k != entries.lastIndex) Spacer(Modifier.height(3.dp))
                     }
-                    if (k != entries.lastIndex) Spacer(Modifier.height(3.dp))
+                    // The structured rows only cover the first few output lines;
+                    // render the rest of the raw output underneath so a 50-line
+                    // result is fully readable inside the same bounded scroll area.
+                    val extra = remember(step.body, entries.size) {
+                        StepMapper.toolExtraLines(step.body, entries.size)
+                    }
+                    if (extra.isNotEmpty()) {
+                        Spacer(Modifier.height(7.dp))
+                        Text(
+                            extra.joinToString("\n"),
+                            color = colors.dim, fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp,
+                            modifier = Modifier.fillMaxWidth().testTag("tool-output-rest"),
+                        )
+                    }
                 }
             }
         }
@@ -1131,7 +1314,7 @@ private const val MAX_CHILD_DEPTH = 3
  * chain never marches off the right edge.
  */
 @Composable
-private fun ChildTreeRow(child: UiStep, depth: Int, colors: LumenColors, pulse: Float) {
+private fun ChildTreeRow(child: UiStep, depth: Int, colors: LumenColors, pulse: () -> Float) {
     val indent = (depth * 14).dp
     Row(
         Modifier
@@ -1179,7 +1362,7 @@ private fun ChildTreeRow(child: UiStep, depth: Int, colors: LumenColors, pulse: 
 
 /** A tiny arc spinner (driven by the ambient [pulse]) for a loading child read. */
 @Composable
-private fun ChildLoadingRow(colors: LumenColors, pulse: Float) {
+private fun ChildLoadingRow(colors: LumenColors, pulse: () -> Float) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -1198,8 +1381,8 @@ private fun ChildLoadingRow(colors: LumenColors, pulse: Float) {
                         style = Stroke(width = w),
                     )
                     drawArc(
-                        color = colors.water.copy(alpha = 0.4f + 0.6f * pulse),
-                        startAngle = -90f + 360f * pulse, sweepAngle = 90f, useCenter = false,
+                        color = colors.water.copy(alpha = 0.4f + 0.6f * pulse()),
+                        startAngle = -90f + 360f * pulse(), sweepAngle = 90f, useCenter = false,
                         style = Stroke(width = w, cap = StrokeCap.Round),
                     )
                 },
@@ -1245,7 +1428,7 @@ private fun childTint(child: UiStep, colors: LumenColors): Color = when {
  * line, and expands to a checklist with a per-status glyph. Pure hoisted state.
  */
 @Composable
-private fun TodoBoard(todos: List<TodoItem>, colors: LumenColors, pulse: Float) {
+private fun TodoBoard(todos: List<TodoItem>, colors: LumenColors, pulse: () -> Float) {
     if (todos.isEmpty()) return
     var expanded by remember { mutableStateOf(false) }
     val done = todos.count { it.status == TodoStatus.DONE }
@@ -1291,7 +1474,7 @@ private fun TodoBoard(todos: List<TodoItem>, colors: LumenColors, pulse: Float) 
                 todos.forEachIndexed { i, todo ->
                     val (glyph, tint) = when (todo.status) {
                         TodoStatus.PENDING -> "\u25cb" to colors.faint
-                        TodoStatus.IN_PROGRESS -> "\u25d0" to colors.water.copy(alpha = 0.35f + 0.65f * pulse)
+                        TodoStatus.IN_PROGRESS -> "\u25d0" to colors.water.copy(alpha = 0.35f + 0.65f * pulse())
                         TodoStatus.DONE -> "\u2713" to colors.spectrum.getOrElse(3) { colors.water }
                         TodoStatus.CANCELLED -> "\u2715" to colors.faint
                     }
@@ -1765,8 +1948,17 @@ private fun Composer(
 ) {
     val canSend = input.isNotBlank() || attachments.isNotEmpty()
     val atToken = remember(input) { AtToken.find(input)?.groupValues?.get(1) }
-    val suggestions = remember(atToken, onCompleteFiles) {
-        if (atToken != null) onCompleteFiles(atToken).take(MAX_SUGGESTIONS) else emptyList()
+    // The completion walk can recurse the whole workspace, so it must never run
+    // during composition. Hoist it into a LaunchedEffect keyed on the stable
+    // token string (not the unstable callback) and run it on the IO dispatcher.
+    val complete = rememberUpdatedState(onCompleteFiles)
+    var suggestions by remember { mutableStateOf(emptyList<String>()) }
+    LaunchedEffect(atToken) {
+        suggestions = if (atToken == null) {
+            emptyList()
+        } else {
+            withContext(Dispatchers.IO) { complete.value(atToken).take(MAX_SUGGESTIONS) }
+        }
     }
     val pickSuggestion: (String) -> Unit = { path ->
         val match = AtToken.find(input)

@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
@@ -63,12 +64,23 @@ class RunService : Service() {
         super.onDestroy()
     }
 
-    /** Post/replace the ongoing notification and ensure the wake lock is held. */
+    /**
+     * Post/replace the ongoing notification and ensure the wake lock is held.
+     *
+     * `startForeground` is deliberately NOT swallowed: if it fails the platform
+     * will kill the process with `ForegroundServiceDidNotStartInTimeException`,
+     * so surface the failure and stop the service instead of lingering in an
+     * illegal state.
+     */
     private fun show(notification: Notification) {
-        runCatching {
+        try {
             startForeground(NOTIFICATION_ID, notification)
-            acquireWakeLock()
+        } catch (t: Throwable) {
+            Log.e(TAG, "startForeground failed; stopping run service", t)
+            runCatching { stopSelf() }
+            return
         }
+        acquireWakeLock()
     }
 
     @Suppress("DEPRECATION")
@@ -125,6 +137,7 @@ class RunService : Service() {
     }
 
     companion object {
+        private const val TAG = "RunService"
         private const val CHANNEL_ID = "lumen-run"
         private const val CHANNEL_NAME = "Agent runs"
         private const val NOTIFICATION_ID = 4711
@@ -161,15 +174,12 @@ class RunService : Service() {
         }
 
         /**
-         * Stop the run. A plain `startService` is used here: the stop command
-         * only tears down, so it must not be subject to the `startForeground`
-         * deadline that `startForegroundService` imposes.
+         * Stop the run. `stopService` is used rather than a `startService` STOP
+         * command: it works from the background (a plain `startService` throws
+         * there) and [onDestroy] releases the wake lock.
          */
         fun stop(context: Context) {
-            val intent = Intent(context, RunService::class.java).apply {
-                action = ACTION_STOP
-            }
-            context.startService(intent)
+            context.stopService(Intent(context, RunService::class.java))
         }
     }
 }
