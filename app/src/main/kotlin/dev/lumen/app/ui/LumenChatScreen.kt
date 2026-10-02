@@ -337,7 +337,8 @@ fun LumenChatScreen(
             animationSpec = infiniteRepeatable(tween(1400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
             label = "pulse",
         )
-        { value.value }
+        val read: () -> Float = { value.value }
+        read
     } else {
         { 1f }
     }
