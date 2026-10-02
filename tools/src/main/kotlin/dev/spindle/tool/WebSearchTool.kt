@@ -7,12 +7,9 @@ import dev.spindle.core.tool.ToolOutcome
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import okhttp3.Request
 import java.net.URI
 import java.net.URLEncoder
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.time.Duration
 
 /**
  * Keyless web search backed by DuckDuckGo's HTML endpoint. Each invocation is
@@ -77,7 +74,7 @@ class WebSearchTool(
         val truncated = rendered.length > Limits.WEBSEARCH_MAX_CHARS
         val output = if (truncated) {
             rendered.substring(0, Limits.WEBSEARCH_MAX_CHARS) +
-                "\n\n…[websearch: truncated at ${Limits.WEBSEARCH_MAX_CHARS} chars]"
+                charCapNote("websearch", Limits.WEBSEARCH_MAX_CHARS)
         } else {
             rendered
         }
@@ -89,6 +86,7 @@ class WebSearchTool(
                 "count" to count.toString(),
                 "results" to hits.size.toString(),
                 "host" to (uri.host ?: ""),
+                "truncated" to truncated.toString(),
             ),
         )
     }
@@ -127,23 +125,18 @@ class WebSearchTool(
     }
 }
 
-/** Default transport: JDK HttpClient with the ambient sandbox proxy honoured. */
-internal suspend fun fetchSearchHtml(uri: URI): String {
-    val builder = HttpClient.newBuilder()
-        .followRedirects(HttpClient.Redirect.NORMAL)
-        .connectTimeout(Duration.ofSeconds(15))
-    ambientProxySelector()?.let { builder.proxy(it) }
-    val client = builder.build()
-
-    val request = HttpRequest.newBuilder(uri)
-        .timeout(Duration.ofSeconds(15))
+/** Default transport: OkHttp with the ambient sandbox proxy honoured. */
+internal suspend fun fetchSearchHtml(uri: URI): String = withContext(Dispatchers.IO) {
+    val request = Request.Builder()
+        .url(uri.toURL())
         .header("User-Agent", "Mozilla/5.0 (compatible; spindle-websearch/0.1)")
-        .GET()
+        .get()
         .build()
 
-    val response = withContext(Dispatchers.IO) {
-        client.send(request, HttpResponse.BodyHandlers.ofString())
+    defaultHttpClient(followRedirects = true).newCall(request).execute().use { response ->
+        if (response.code >= 400) throw IllegalStateException("HTTP ${response.code}")
+        val input = response.body?.byteStream() ?: return@withContext ""
+        val bytes = input.readNBytes(Limits.WEBSEARCH_MAX_HTML_BYTES)
+        String(bytes, Charsets.UTF_8)
     }
-    if (response.statusCode() >= 400) throw IllegalStateException("HTTP ${response.statusCode()}")
-    return response.body() ?: ""
 }

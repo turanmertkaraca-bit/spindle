@@ -9,13 +9,17 @@ import dev.spindle.core.provider.ProviderEvent
 import dev.spindle.core.provider.ToolSpec
 import dev.spindle.core.provider.WireMessage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -23,12 +27,17 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 private val json = Json {
     ignoreUnknownKeys = true
@@ -94,7 +103,7 @@ class OpenAiProvider(
         }.getOrElse { defaultModels }
     }
 
-    override fun stream(request: ChatRequest): Flow<ProviderEvent> = flow {
+    override fun stream(request: ChatRequest): Flow<ProviderEvent> = channelFlow {
         val payload = buildPayload(request)
         val httpReq = Request.Builder()
             .url("$root/chat/completions")
@@ -107,28 +116,76 @@ class OpenAiProvider(
             .post(payload.toString().toRequestBody(JSON_MEDIA))
             .build()
 
-        client.newCall(httpReq).execute().use { resp ->
-            if (!resp.isSuccessful) {
-                val body = runCatching { resp.body?.string() }.getOrNull()
-                emit(ProviderEvent.Failure("OpenAI HTTP ${resp.code}: ${body ?: ""}"))
-                return@use
-            }
-            val source = resp.body?.source()
-            if (source == null) {
-                emit(ProviderEvent.Failure("OpenAI: empty response body"))
-                return@use
-            }
-            while (true) {
-                val line = source.readUtf8Line() ?: break
-                if (line.isEmpty() || line.startsWith(":")) continue
-                if (!line.startsWith("data:")) continue
-                val frame = line.substring(5).trim()
-                if (frame == "[DONE]") break
-                if (frame.isEmpty()) continue
-                handleFrame(frame) { emit(it) }
-            }
+        val call = client.newCall(httpReq)
+        val state = OpenAiStreamState()
+        val terminated = AtomicBoolean(false)
+        val terminal: (ProviderEvent) -> Unit = { event ->
+            if (terminated.compareAndSet(false, true)) trySend(event)
         }
-    }.flowOn(Dispatchers.IO)
+        val emitEvent: (ProviderEvent) -> Unit = { event -> trySend(event) }
+        val emitFinish: (FinishReason) -> Unit = { terminal(ProviderEvent.Finished(it)) }
+
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                terminal(ProviderEvent.Failure("OpenAI stream I/O: ${e.message}", e))
+                close()
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                response.use { resp ->
+                    if (!resp.isSuccessful) {
+                        val body = runCatching { resp.body?.string() }.getOrNull()
+                        terminal(ProviderEvent.Failure("OpenAI HTTP ${resp.code}: ${body ?: ""}"))
+                        return@use
+                    }
+                    val source = resp.body?.source()
+                    if (source == null) {
+                        terminal(ProviderEvent.Failure("OpenAI: empty response body"))
+                        return@use
+                    }
+                    try {
+                        val data = StringBuilder()
+                        var done = false
+                        while (!done) {
+                            val line = source.readUtf8Line() ?: break
+                            if (line.isEmpty()) {
+                                if (data.isNotEmpty()) {
+                                    val frame = data.toString()
+                                    data.setLength(0)
+                                    if (frame == "[DONE]") done = true
+                                    else state.handle(frame, emitEvent, emitFinish)
+                                }
+                                continue
+                            }
+                            if (line.startsWith(":") || !line.startsWith("data:")) continue
+                            val payloadLine = line.substring(5)
+                                .let { if (it.startsWith(" ")) it.substring(1) else it }
+                            if (data.isNotEmpty()) data.append('\n')
+                            data.append(payloadLine)
+                        }
+                        if (!done && data.isNotEmpty()) {
+                            val frame = data.toString()
+                            if (frame == "[DONE]") done = true
+                            else state.handle(frame, emitEvent, emitFinish)
+                        }
+                        if (!state.sawFinish) {
+                            state.closeToolCalls(emitEvent)
+                            emitFinish(FinishReason.UNKNOWN)
+                        }
+                    } catch (e: IOException) {
+                        terminal(ProviderEvent.Failure("OpenAI stream I/O: ${e.message}", e))
+                    }
+                }
+                } catch (e: Throwable) {
+                    terminal(ProviderEvent.Failure("OpenAI stream error: ${e.message}", e))
+                } finally {
+                    close()
+                }
+            }
+        })
+        awaitClose { call.cancel() }
+    }.buffer(Channel.UNLIMITED).flowOn(Dispatchers.IO)
 
     private fun supportsReasoning(modelId: String): Boolean {
         val m = modelId.lowercase()
@@ -146,9 +203,9 @@ class OpenAiProvider(
         request.temperature?.let { put("temperature", it) }
         request.maxTokens?.let { put("max_tokens", it) }
         put("stream_options", buildJsonObject { put("include_usage", true) })
+        request.reasoningEffort?.let { put("reasoning_effort", it) }
         if (request.thinking == true) {
             put("thinking", buildJsonObject { put("type", "enabled") })
-            request.reasoningEffort?.let { put("reasoning_effort", it) }
         }
     }
 
@@ -190,7 +247,8 @@ class OpenAiProvider(
                 })
                 "assistant" -> add(buildJsonObject {
                     put("role", "assistant")
-                    m.text?.let { put("content", it) }
+                    val text = m.text
+                    if (text != null) put("content", text) else put("content", JsonNull)
                     if (m.toolCalls.isNotEmpty()) {
                         put("tool_calls", buildJsonArray {
                             m.toolCalls.forEach { c ->
@@ -227,8 +285,25 @@ class OpenAiProvider(
             })
         }
     }
+}
 
-    private suspend fun handleFrame(frame: String, emit: suspend (ProviderEvent) -> Unit) {
+/**
+ * Per-stream SSE state. Tool-call metadata arrives split across frames, so we
+ * accumulate id/name per index and emit exactly one [ProviderEvent.ToolCallStart]
+ * once the name is known, buffering any argument fragments that precede it.
+ */
+private class OpenAiStreamState {
+    private val ids = HashMap<Int, String>()
+    private val names = HashMap<Int, String>()
+    private val bufferedArgs = HashMap<Int, StringBuilder>()
+    private val started = sortedSetOf<Int>()
+    private val ended = HashSet<Int>()
+    private var emittedReasoning = ""
+
+    var sawFinish = false
+        private set
+
+    fun handle(frame: String, emit: (ProviderEvent) -> Unit, finish: (FinishReason) -> Unit) {
         val root = runCatching { json.parseToJsonElement(frame).jsonObject }.getOrNull() ?: return
 
         val choices = root["choices"] as? JsonArray
@@ -239,34 +314,67 @@ class OpenAiProvider(
                 if (delta != null) {
                     delta.str("content")?.takeIf { it.isNotEmpty() }
                         ?.let { emit(ProviderEvent.TextDelta(it)) }
-                    val reasoning = delta.str("reasoning_content") ?: delta.str("reasoning")
-                    reasoning?.takeIf { it.isNotEmpty() }
-                        ?.let { emit(ProviderEvent.ReasoningDelta(it)) }
-
-                    val toolCalls = delta["tool_calls"] as? JsonArray
-                    toolCalls?.forEach { el ->
-                        val tc = el as? JsonObject ?: return@forEach
-                        val index = tc.int("index") ?: 0
-                        val id = tc.str("id")
-                        val fn = tc["function"] as? JsonObject
-                        val name = fn?.str("name")
-                        val args = fn?.str("arguments")
-                        if (id != null || name != null) {
-                            emit(ProviderEvent.ToolCallStart(index, id ?: "", name ?: ""))
-                        }
-                        if (!args.isNullOrEmpty()) {
-                            emit(ProviderEvent.ToolCallArgsDelta(index, args))
-                        }
+                    val reasoning = delta.str("reasoning_content")
+                        ?: delta.str("reasoning")
+                        ?: delta.str("thinking")
+                    if (!reasoning.isNullOrEmpty()) emitReasoning(reasoning, emit)
+                    (delta["tool_calls"] as? JsonArray)?.forEach { el ->
+                        (el as? JsonObject)?.let { handleToolCall(it, emit) }
                     }
                 }
                 choice["finish_reason"].primitiveString()?.let {
-                    emit(ProviderEvent.Finished(mapFinish(it)))
+                    closeToolCalls(emit)
+                    sawFinish = true
+                    finish(mapFinish(it))
                 }
             }
         }
 
         (root["usage"] as? JsonObject)?.let {
             emit(ProviderEvent.UsageEvent(parseUsage(it)))
+        }
+    }
+
+    fun closeToolCalls(emit: (ProviderEvent) -> Unit) {
+        for (index in started) {
+            if (ended.add(index)) emit(ProviderEvent.ToolCallEnd(index))
+        }
+    }
+
+    private fun handleToolCall(tc: JsonObject, emit: (ProviderEvent) -> Unit) {
+        val index = tc.int("index") ?: 0
+        tc.str("id")?.takeIf { it.isNotEmpty() }?.let { ids[index] = it }
+        val fn = tc["function"] as? JsonObject
+        fn?.str("name")?.takeIf { it.isNotEmpty() }?.let { names[index] = it }
+        val args = fn?.str("arguments")
+
+        val name = names[index]
+        if (name == null) {
+            if (!args.isNullOrEmpty()) bufferedArgs.getOrPut(index) { StringBuilder() }.append(args)
+            return
+        }
+        if (started.add(index)) {
+            emit(ProviderEvent.ToolCallStart(index, ids[index] ?: "", name))
+            bufferedArgs.remove(index)?.takeIf { it.isNotEmpty() }
+                ?.let { emit(ProviderEvent.ToolCallArgsDelta(index, it.toString())) }
+        }
+        if (!args.isNullOrEmpty()) emit(ProviderEvent.ToolCallArgsDelta(index, args))
+    }
+
+    private fun emitReasoning(value: String, emit: (ProviderEvent) -> Unit) {
+        when {
+            value == emittedReasoning -> Unit
+            value.startsWith(emittedReasoning) -> {
+                val suffix = value.substring(emittedReasoning.length)
+                if (suffix.isNotEmpty()) {
+                    emit(ProviderEvent.ReasoningDelta(suffix))
+                    emittedReasoning = value
+                }
+            }
+            else -> {
+                emit(ProviderEvent.ReasoningDelta(value))
+                emittedReasoning += value
+            }
         }
     }
 }

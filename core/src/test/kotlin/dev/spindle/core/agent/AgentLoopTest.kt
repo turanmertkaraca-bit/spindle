@@ -23,9 +23,11 @@ import dev.spindle.core.tool.Tool
 import dev.spindle.core.tool.ToolContext
 import dev.spindle.core.tool.ToolOutcome
 import dev.spindle.core.tool.ToolRegistry
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -473,5 +475,140 @@ class AgentLoopTest {
         loop.prompt(SessionId("ses_state_err"), "hi", "fake/fake-1")
 
         assertEquals(SessionState.ERROR, store.session(SessionId("ses_state_err"))!!.state)
+    }
+
+    @Test
+    fun `maxSteps finalizes the unexecuted tool as an error`() = runTest {
+        fun alwaysTool() = listOf(
+            ProviderEvent.ToolCallStart(0, "call_1", "echo"),
+            ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"x\"}"),
+            ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+        )
+        val provider = ScriptedProvider(alwaysTool(), alwaysTool())
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        newSession(store, "ses_max_err")
+
+        loop.prompt(SessionId("ses_max_err"), "go", "fake/fake-1", agent = AgentConfig(maxSteps = 1))
+
+        val tools = store.messages(SessionId("ses_max_err")).flatMap { it.parts }.filterIsInstance<Part.Tool>()
+        assertEquals(1, tools.size)
+        assertEquals(ToolState.ERROR, tools.single().state)
+        assertEquals("step budget exhausted", tools.single().result?.output)
+        assertTrue(tools.none { it.state == ToolState.PENDING })
+    }
+
+    @Test
+    fun `retry discards usage from a failed attempt`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.UsageEvent(Usage(inputTokens = 111, outputTokens = 22)),
+                ProviderEvent.Failure("503 service unavailable"),
+            ),
+            listOf(
+                ProviderEvent.UsageEvent(Usage(inputTokens = 7, outputTokens = 3)),
+                ProviderEvent.TextDelta("ok"),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+        )
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(emptyList()),
+            store = store,
+            bus = EventBus(),
+            clock = { 0 },
+        )
+        newSession(store, "ses_retry_usage")
+
+        val result = loop.prompt(
+            SessionId("ses_retry_usage"),
+            "go",
+            "fake/fake-1",
+            agent = AgentConfig(maxRetries = 1),
+        )
+
+        assertEquals(7, result.usage.inputTokens)
+        assertEquals(3, result.usage.outputTokens)
+        assertEquals(10, result.usage.totalTokens)
+    }
+
+    @Test
+    fun `provider failure keeps reasoning and emits terminal part updates`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ReasoningDelta("thinking"),
+                ProviderEvent.TextDelta("partial"),
+                ProviderEvent.Failure("boom"),
+            ),
+        )
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(emptyList()),
+            store = store,
+            bus = bus,
+        )
+        newSession(store, "ses_fail_parts")
+
+        val events = mutableListOf<AgentEvent>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            bus.events.collect { events += it }
+        }
+        val result = loop.prompt(SessionId("ses_fail_parts"), "hi", "fake/fake-1")
+        job.cancel()
+
+        assertEquals("thinking", result.parts.filterIsInstance<Part.Reasoning>().single().text)
+        assertEquals("partial", result.parts.filterIsInstance<Part.Text>().single().text)
+        val updated = events.filterIsInstance<AgentEvent.PartUpdated>()
+        assertTrue(updated.any { (it.part as? Part.Reasoning)?.text == "thinking" })
+        assertTrue(updated.any { (it.part as? Part.Text)?.text == "partial" })
+    }
+
+    @Test
+    fun `cancellation aborts only the assistant and emits one idle`() = runTest {
+        val provider = object : Provider {
+            override val id = "fake"
+            override suspend fun models() =
+                listOf(ModelInfo(providerId = id, id = "fake-1", label = "fake"))
+
+            override fun stream(request: ChatRequest): Flow<ProviderEvent> = flow {
+                emit(ProviderEvent.TextDelta("partial"))
+                awaitCancellation()
+            }
+        }
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(emptyList()),
+            store = store,
+            bus = bus,
+        )
+        newSession(store, "ses_cancel")
+
+        val events = mutableListOf<AgentEvent>()
+        val collector = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            bus.events.collect { events += it }
+        }
+        val job = launch(UnconfinedTestDispatcher(testScheduler)) {
+            runCatching { loop.prompt(SessionId("ses_cancel"), "hello", "fake/fake-1") }
+        }
+        job.cancel()
+        job.join()
+        collector.cancel()
+
+        val user = store.messages(SessionId("ses_cancel")).first { it.role == Role.USER }
+        assertEquals(null, user.finish)
+        assertEquals(null, user.error)
+
+        val idle = events.filterIsInstance<AgentEvent.StateChanged>().filter { it.state == SessionState.IDLE }
+        assertEquals(1, idle.size)
     }
 }

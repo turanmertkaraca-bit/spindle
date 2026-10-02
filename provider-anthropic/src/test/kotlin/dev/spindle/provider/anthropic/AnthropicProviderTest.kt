@@ -8,14 +8,22 @@ import dev.spindle.core.provider.ProviderEvent
 import dev.spindle.core.provider.ToolSpec
 import dev.spindle.core.provider.WireImage
 import dev.spindle.core.provider.WireMessage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
+import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -54,6 +62,9 @@ class AnthropicProviderTest {
     private fun fixture(name: String): String =
         javaClass.getResourceAsStream("/$name")!!.use { it.readBytes().decodeToString() }
 
+    private fun frame(vararg lines: String): String =
+        lines.joinToString("") { "data: $it\n\n" }
+
     @Test
     fun `stream reassembles split anthropic sse frames into exact event sequence`() = runTest {
         server.enqueue(MockResponse().setChunkedBody(fixture("anthropic_stream.sse"), 9))
@@ -68,6 +79,7 @@ class AnthropicProviderTest {
                 ProviderEvent.ToolCallStart(1, "toolu_1", "search"),
                 ProviderEvent.ToolCallArgsDelta(1, "{\"q\":"),
                 ProviderEvent.ToolCallArgsDelta(1, "\"cats\"}"),
+                ProviderEvent.ToolCallEnd(1),
                 ProviderEvent.UsageEvent(Usage(outputTokens = 7)),
                 ProviderEvent.Finished(FinishReason.TOOL_CALLS),
             ),
@@ -176,5 +188,128 @@ class AnthropicProviderTest {
         assertEquals(1, blocks.size)
         assertEquals("text", blocks[0].jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("hi", blocks[0].jsonObject["text"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `system wire messages fold into top-level system and never a user turn`() = runTest {
+        server.enqueue(MockResponse().setChunkedBody("data: {\"type\":\"message_stop\"}\n\n", 5))
+
+        val req = request().copy(
+            messages = listOf(
+                WireMessage(role = "system", text = "extra rules"),
+                WireMessage(role = "user", text = "hi"),
+            ),
+        )
+        provider().stream(req).toList()
+
+        val body = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertTrue(body["system"]!!.jsonPrimitive.content.contains("extra rules"), "system text dropped")
+
+        val messages = body["messages"]!!.jsonArray
+        assertTrue(messages.none { it.jsonObject["role"]!!.jsonPrimitive.content == "system" })
+        assertEquals("user", messages[0].jsonObject["role"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `tool_use start with inline input emits a single args delta`() = runTest {
+        server.enqueue(
+            MockResponse().setChunkedBody(
+                frame(
+                    "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":" +
+                        "{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"search\",\"input\":{\"q\":\"cats\"}}}",
+                    "{\"type\":\"content_block_stop\",\"index\":0}",
+                    "{\"type\":\"message_stop\"}",
+                ),
+                5,
+            ),
+        )
+
+        val events = provider().stream(request()).toList()
+
+        assertEquals(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "t1", "search"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"q\":\"cats\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.UNKNOWN),
+            ),
+            events,
+        )
+    }
+
+    @Test
+    fun `error event then message_stop yields exactly one terminal`() = runTest {
+        server.enqueue(
+            MockResponse().setChunkedBody(
+                frame(
+                    "{\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}",
+                    "{\"type\":\"message_stop\"}",
+                ),
+                5,
+            ),
+        )
+
+        val events = provider().stream(request()).toList()
+
+        val terminals = events.filter { it is ProviderEvent.Finished || it is ProviderEvent.Failure }
+        assertEquals(1, terminals.size, "exactly one terminal event")
+        val failure = terminals.single() as ProviderEvent.Failure
+        assertTrue(failure.message.contains("busy"), failure.message)
+    }
+
+    @Test
+    fun `mid-stream disconnect emits one failure and does not throw`() = runTest {
+        val body = buildString {
+            repeat(50) {
+                append("data: {\"type\":\"content_block_delta\",\"index\":0," +
+                    "\"delta\":{\"type\":\"text_delta\",\"text\":\"x\"}}\n\n")
+            }
+        }
+        server.enqueue(
+            MockResponse()
+                .setChunkedBody(body, 16)
+                .setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY),
+        )
+
+        val events = provider().stream(request()).toList()
+
+        val terminals = events.filter { it is ProviderEvent.Finished || it is ProviderEvent.Failure }
+        assertEquals(1, terminals.size, "exactly one terminal event")
+        assertTrue(terminals.single() is ProviderEvent.Failure)
+    }
+
+    @Test
+    fun `cancelling the collector aborts a stalled stream promptly`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setBody("data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n")
+                .setBodyDelay(3, TimeUnit.SECONDS),
+        )
+
+        val job = launch(Dispatchers.IO) {
+            provider().stream(request()).collect { }
+        }
+        delay(250)
+        job.cancel()
+        withTimeout(5_000) { job.join() }
+        assertTrue(job.isCancelled)
+    }
+
+    @Test
+    fun `session hint and user agent are sent as headers`() = runTest {
+        val subject = AnthropicProvider(
+            baseUrl = server.url("/").toString().trimEnd('/'),
+            apiKey = "test-key",
+            userAgent = "spindle/test",
+            extraHeaders = mapOf("X-Title" to "spindle"),
+        )
+        server.enqueue(MockResponse().setChunkedBody("data: {\"type\":\"message_stop\"}\n\n", 5))
+
+        subject.stream(request().copy(sessionHint = "sess-9")).toList()
+
+        val recorded = server.takeRequest()
+        assertEquals("sess-9", recorded.getHeader("x-opencode-session"))
+        assertEquals("spindle/test", recorded.getHeader("User-Agent"))
+        assertEquals("spindle", recorded.getHeader("X-Title"))
     }
 }

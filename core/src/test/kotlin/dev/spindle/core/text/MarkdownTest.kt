@@ -41,6 +41,14 @@ class MarkdownTest {
     }
 
     @Test
+    fun `parses indented headings and keeps a legitimate trailing hash`() {
+        assertEquals(listOf(MdBlock.Heading(1, "indented")), Markdown.parse("   # indented"))
+        assertEquals(listOf(MdBlock.Heading(1, "C#")), Markdown.parse("# C#"))
+        assertEquals(listOf(MdBlock.Heading(1, "title")), Markdown.parse("# title #"))
+        assertTrue(Markdown.parse("    # too deep").single() is MdBlock.Paragraph)
+    }
+
+    @Test
     fun `parses bold italic and inline code spans`() {
         val block = Markdown.parse("a **bold** b *italic* c _also_ d `code` e").single()
         val spans = (block as MdBlock.Paragraph).spans
@@ -132,6 +140,12 @@ class MarkdownTest {
     fun `parses tilde fences and keeps fence markers out of the body`() {
         val block = Markdown.parse("~~~python\nprint('hi')\n~~~").single()
         assertEquals(MdBlock.Code("python", "print('hi')"), block)
+    }
+
+    @Test
+    fun `a shorter fence does not close a longer one`() {
+        val block = Markdown.parse("````\ncode\n```\nmore\n````").single()
+        assertEquals(MdBlock.Code(null, "code\n```\nmore"), block)
     }
 
     @Test

@@ -16,6 +16,7 @@ import dev.spindle.core.store.SearchHit
 import dev.spindle.core.store.SessionSearch
 import dev.spindle.core.store.SessionStore
 import dev.spindle.core.store.messageSearchText
+import dev.spindle.core.store.searchSnippet
 import dev.spindle.core.store.withNewId
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -36,6 +37,13 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
     private val mutex = Mutex()
     private val connection: Connection
     private val tagsSerializer = ListSerializer(String.serializer())
+
+    /**
+     * Whether the FTS5 `message_fts` index exists and is usable. FTS5 is
+     * optional; when it is unavailable (or a write fails) [search] falls back to
+     * a linear scan so results are never silently dropped.
+     */
+    private var ftsReady = false
 
     private val json = Json {
         encodeDefaults = true
@@ -59,6 +67,7 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
             st.execute("PRAGMA foreign_keys=ON")
         }
         migrate()
+        setupFts()
         backfillSearchIndex()
     }
 
@@ -66,11 +75,19 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
         connection.createStatement().use {
             it.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
         }
-        val current = connection.createStatement().use { st ->
-            st.executeQuery("SELECT COALESCE(MAX(version), 0) FROM schema_version").use { rs ->
-                if (rs.next()) rs.getInt(1) else 0
-            }
-        }
+        // `PRAGMA user_version` is the durable source of truth (SPEC §5.1); the
+        // `schema_version` table is kept for compatibility with older databases.
+        // Taking the max lets either location record progress and makes a
+        // database written by another host (e.g. the Android store, which keeps
+        // neither) simply start at 0 and replay the idempotent migrations.
+        val current = maxOf(
+            connection.createStatement().use { st ->
+                st.executeQuery("SELECT COALESCE(MAX(version), 0) FROM schema_version").use { rs ->
+                    if (rs.next()) rs.getInt(1) else 0
+                }
+            },
+            userVersion(),
+        )
         for (migration in MIGRATIONS) {
             if (migration.version <= current) continue
             connection.autoCommit = false
@@ -80,6 +97,7 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
                     it.setInt(1, migration.version)
                     it.executeUpdate()
                 }
+                connection.createStatement().use { it.execute("PRAGMA user_version = ${migration.version}") }
                 connection.commit()
             } catch (t: Throwable) {
                 connection.rollback()
@@ -87,6 +105,43 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
             } finally {
                 connection.autoCommit = true
             }
+        }
+    }
+
+    private fun userVersion(): Int = connection.createStatement().use { st ->
+        st.executeQuery("PRAGMA user_version").use { rs -> if (rs.next()) rs.getInt(1) else 0 }
+    }
+
+    /**
+     * Create (or detect) the optional FTS5 index. Android's bundled SQLite may
+     * lack FTS5, and the index can be dropped by an external writer, so this is
+     * best-effort: a failure leaves [ftsReady] false and [search] on the scan.
+     */
+    private fun setupFts() {
+        ftsReady = try {
+            connection.createStatement().use {
+                it.execute(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(" +
+                        "message_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, body)",
+                )
+            }
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private inline fun <T> inTransaction(block: () -> T): T {
+        connection.autoCommit = false
+        return try {
+            val result = block()
+            connection.commit()
+            result
+        } catch (t: Throwable) {
+            connection.rollback()
+            throw t
+        } finally {
+            connection.autoCommit = true
         }
     }
 
@@ -152,7 +207,9 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
         mutex.withLock { deleteSessionRows(id.value) }
     }
 
-    private fun deleteSessionRows(sessionId: String) {
+    private fun deleteSessionRows(sessionId: String) = inTransaction { removeSessionRows(sessionId) }
+
+    private fun removeSessionRows(sessionId: String) {
         deleteFtsSession(sessionId)
         connection.prepareStatement("DELETE FROM parts WHERE session_id = ?").use {
             it.setString(1, sessionId); it.executeUpdate()
@@ -248,6 +305,14 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
         dropped.size
     }
 
+    /**
+     * Append a message. Idempotent on the message id: re-appending an existing
+     * id is a no-op (`INSERT OR IGNORE`) rather than a replace or a duplicate.
+     *
+     * NOTE: the Android store (`AndroidSessionStore`) uses `INSERT OR REPLACE`
+     * and `InMemorySessionStore` appends duplicates. This JVM store is the
+     * documented reference; the others are owned elsewhere and not changed here.
+     */
     override suspend fun appendMessage(message: Message) {
         mutex.withLock {
             insertMessage(message, nextSeq(message.sessionId.value))
@@ -302,13 +367,28 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
     }
 
     override suspend fun search(query: String, limit: Int): List<SearchHit> = mutex.withLock {
-        val match = ftsQuery(query) ?: return@withLock emptyList()
+        val needle = query.trim()
+        if (needle.isEmpty()) return@withLock emptyList()
+        if (ftsReady) {
+            // null means the index could not answer (unavailable/stale); only a
+            // genuine no-match returns an empty list.
+            ftsSearch(needle, limit)?.let { return@withLock it }
+        }
+        scanSearch(needle, limit)
+    }
+
+    /**
+     * FTS5 MATCH search. Returns null when the index cannot answer, so [search]
+     * can fall back to [scanSearch]; an empty list is a real "no hits".
+     */
+    private fun ftsSearch(needle: String, limit: Int): List<SearchHit>? {
+        val match = ftsQuery(needle) ?: return emptyList()
         val sql = "SELECT message_fts.message_id AS message_id, message_fts.session_id AS session_id, " +
             "message_fts.role AS role, snippet(message_fts, 3, '[', ']', '…', 12) AS snippet, " +
             "m.created_at AS created_at FROM message_fts " +
             "JOIN messages m ON m.id = message_fts.message_id " +
             "WHERE message_fts MATCH ? ORDER BY bm25(message_fts) LIMIT ?"
-        try {
+        return try {
             connection.prepareStatement(sql).use { st ->
                 st.setString(1, match)
                 st.setInt(2, limit)
@@ -328,9 +408,33 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
                     }
                 }
             }
-        } catch (t: Throwable) {
-            emptyList()
+        } catch (_: Throwable) {
+            null
         }
+    }
+
+    /** Linear fallback used when the FTS index is unavailable or unusable. */
+    private fun scanSearch(needle: String, limit: Int): List<SearchHit> {
+        // Materialize the rows first: loading parts issues a second query, and
+        // running it while the outer cursor is open is not portable.
+        val messages = connection.prepareStatement("SELECT * FROM messages ORDER BY created_at DESC").use { st ->
+            st.executeQuery().use { rs -> buildList { while (rs.next()) add(readMessage(rs)) } }
+        }
+        val hits = ArrayList<SearchHit>()
+        for (message in messages) {
+            if (hits.size >= limit) break
+            val text = messageSearchText(withParts(message))
+            if (text.contains(needle, ignoreCase = true)) {
+                hits += SearchHit(
+                    sessionId = message.sessionId,
+                    messageId = message.id.value,
+                    role = message.role.name,
+                    snippet = searchSnippet(text, needle),
+                    at = message.createdAt,
+                )
+            }
+        }
+        return hits
     }
 
     override suspend fun todos(sessionId: SessionId): List<TodoItem> = mutex.withLock {
@@ -384,26 +488,23 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
         }
     }
 
+    /**
+     * Drop whole sessions beyond the [keepSessions] most recently updated, plus
+     * their messages/parts/todos. Negative values behave like zero (drop all).
+     * Returns the number of *sessions* removed, matching SPEC §5 and the
+     * in-memory/Android implementations.
+     */
     override suspend fun prune(keepSessions: Int): Int = mutex.withLock {
+        val keep = keepSessions.coerceAtLeast(0)
         val drop = connection.prepareStatement(
             "SELECT id FROM sessions ORDER BY updated_at DESC LIMIT -1 OFFSET ?",
         ).use { st ->
-            st.setInt(1, keepSessions.coerceAtLeast(0))
+            st.setInt(1, keep)
             st.executeQuery().use { rs -> buildList { while (rs.next()) add(rs.getString(1)) } }
         }
-        var removed = 0
-        for (id in drop) {
-            removed += deleteCount("DELETE FROM parts WHERE session_id = ?", id)
-            removed += deleteCount("DELETE FROM messages WHERE session_id = ?", id)
-            removed += deleteCount("DELETE FROM todos WHERE session_id = ?", id)
-            removed += deleteCount("DELETE FROM sessions WHERE id = ?", id)
-            deleteFtsSession(id)
-        }
-        removed
+        inTransaction { drop.forEach { removeSessionRows(it) } }
+        drop.size
     }
-
-    private fun deleteCount(sql: String, sessionId: String): Int =
-        connection.prepareStatement(sql).use { it.setString(1, sessionId); it.executeUpdate() }
 
     private fun nextSeq(sessionId: String): Int =
         connection.prepareStatement(
@@ -414,8 +515,8 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
         }
 
     private fun insertMessage(message: Message, seq: Int) {
-        connection.prepareStatement(
-            "INSERT INTO messages(id, session_id, role, created_at, model, provider_id, agent, usage, finish, error, seq) " +
+        val inserted = connection.prepareStatement(
+            "INSERT OR IGNORE INTO messages(id, session_id, role, created_at, model, provider_id, agent, usage, finish, error, seq) " +
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ).use { st ->
             st.setString(1, message.id.value)
@@ -431,6 +532,8 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
             st.setInt(11, seq)
             st.executeUpdate()
         }
+        // Ignored duplicate: leave the existing row, parts and index untouched.
+        if (inserted == 0) return
         insertParts(message)
         insertFts(message)
     }
@@ -458,43 +561,82 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
     }
 
     private fun insertFts(message: Message) {
+        if (!ftsReady) return
         val body = messageSearchText(message)
         if (body.isBlank()) return
-        connection.prepareStatement(
-            "INSERT INTO message_fts(message_id, session_id, role, body) VALUES (?, ?, ?, ?)",
-        ).use { st ->
-            st.setString(1, message.id.value)
-            st.setString(2, message.sessionId.value)
-            st.setString(3, message.role.name)
-            st.setString(4, body)
-            st.executeUpdate()
+        try {
+            connection.prepareStatement(
+                "INSERT INTO message_fts(message_id, session_id, role, body) VALUES (?, ?, ?, ?)",
+            ).use { st ->
+                st.setString(1, message.id.value)
+                st.setString(2, message.sessionId.value)
+                st.setString(3, message.role.name)
+                st.setString(4, body)
+                st.executeUpdate()
+            }
+        } catch (_: Throwable) {
+            // The index is optional: disable it so search falls back to a scan.
+            ftsReady = false
         }
     }
 
     private fun deleteFtsMessage(messageId: String) {
-        connection.prepareStatement("DELETE FROM message_fts WHERE message_id = ?").use {
-            it.setString(1, messageId); it.executeUpdate()
+        if (!ftsReady) return
+        try {
+            connection.prepareStatement("DELETE FROM message_fts WHERE message_id = ?").use {
+                it.setString(1, messageId); it.executeUpdate()
+            }
+        } catch (_: Throwable) {
+            ftsReady = false
         }
     }
 
     private fun deleteFtsSession(sessionId: String) {
-        connection.prepareStatement("DELETE FROM message_fts WHERE session_id = ?").use {
-            it.setString(1, sessionId); it.executeUpdate()
+        if (!ftsReady) return
+        try {
+            connection.prepareStatement("DELETE FROM message_fts WHERE session_id = ?").use {
+                it.setString(1, sessionId); it.executeUpdate()
+            }
+        } catch (_: Throwable) {
+            ftsReady = false
         }
     }
 
+    /**
+     * Rebuild the index when it does not cover every searchable message.
+     *
+     * The old heuristic (any row implies complete) never repaired a partial or
+     * stale index. Comparing the number of indexed rows with the number of
+     * messages that actually produce indexable text repairs both: an empty
+     * index, a partially deleted one, and one left behind by an older write.
+     */
     private fun backfillSearchIndex() {
-        val existing = connection.createStatement().use { st ->
-            st.executeQuery("SELECT COUNT(*) FROM message_fts").use { rs -> if (rs.next()) rs.getInt(1) else 0 }
-        }
-        if (existing > 0) return
-        val ids = connection.createStatement().use { st ->
-            st.executeQuery("SELECT id FROM messages").use { rs ->
-                buildList { while (rs.next()) add(rs.getString(1)) }
+        if (!ftsReady) return
+        val messageCount = countRows("messages")
+        val indexed = countRows("message_fts")
+        // Fast path: every message is indexed (the common case).
+        if (indexed == messageCount) return
+        // Slow path: messages without searchable text are legitimately absent,
+        // so only rebuild when the index does not cover the searchable subset.
+        val messages = connection.createStatement().use { st ->
+            st.executeQuery("SELECT * FROM messages").use { rs ->
+                buildList { while (rs.next()) add(withParts(readMessage(rs))) }
             }
         }
-        for (id in ids) readMessageById(id)?.let { insertFts(it) }
+        val searchable = messages.filter { messageSearchText(it).isNotBlank() }
+        if (indexed == searchable.size) return
+        try {
+            connection.createStatement().use { it.executeUpdate("DELETE FROM message_fts") }
+            for (message in searchable) insertFts(message)
+        } catch (_: Throwable) {
+            ftsReady = false
+        }
     }
+
+    private fun countRows(table: String): Int =
+        connection.createStatement().use { st ->
+            st.executeQuery("SELECT COUNT(*) FROM $table").use { rs -> if (rs.next()) rs.getInt(1) else 0 }
+        }
 
     private fun ftsQuery(query: String): String? {
         val tokens = query.lowercase()
@@ -514,15 +656,6 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
         connection.prepareStatement("SELECT * FROM messages WHERE session_id = ? AND id = ?").use { st ->
             st.setString(1, sessionId)
             st.setString(2, id)
-            st.executeQuery().use { rs ->
-                if (!rs.next()) null
-                else withParts(readMessage(rs))
-            }
-        }
-
-    private fun readMessageById(id: String): Message? =
-        connection.prepareStatement("SELECT * FROM messages WHERE id = ?").use { st ->
-            st.setString(1, id)
             st.executeQuery().use { rs ->
                 if (!rs.next()) null
                 else withParts(readMessage(rs))
@@ -620,6 +753,22 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
 
 private class Migration(val version: Int, val apply: (Connection) -> Unit)
 
+private fun tableColumns(connection: Connection, table: String): Set<String> =
+    connection.createStatement().use { st ->
+        st.executeQuery("PRAGMA table_info($table)").use { rs ->
+            buildSet {
+                val name = rs.findColumn("name")
+                while (rs.next()) add(rs.getString(name))
+            }
+        }
+    }
+
+private fun addColumnIfMissing(connection: Connection, table: String, name: String, ddl: String) {
+    if (name !in tableColumns(connection, table)) {
+        connection.createStatement().use { it.execute("ALTER TABLE $table ADD COLUMN $name $ddl") }
+    }
+}
+
 private val MIGRATIONS = listOf(
     Migration(1) { connection ->
         connection.createStatement().use { st ->
@@ -671,15 +820,14 @@ private val MIGRATIONS = listOf(
         }
     },
     Migration(2) { connection ->
-        connection.createStatement().use { st ->
-            st.execute("ALTER TABLE sessions ADD COLUMN state TEXT NOT NULL DEFAULT 'IDLE'")
-            st.execute("ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
-            st.execute("ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
-            st.execute("ALTER TABLE sessions ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
-            st.execute(
-                "CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(" +
-                    "message_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, body)",
-            )
-        }
+        // Idempotent: a database written by another host (e.g. the Android
+        // store, which creates these columns up front) may already have them,
+        // so check `PRAGMA table_info` before every ALTER. The FTS index is
+        // created separately in `setupFts()` so its absence never fails a
+        // migration.
+        addColumnIfMissing(connection, "sessions", "state", "TEXT NOT NULL DEFAULT 'IDLE'")
+        addColumnIfMissing(connection, "sessions", "pinned", "INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing(connection, "sessions", "archived", "INTEGER NOT NULL DEFAULT 0")
+        addColumnIfMissing(connection, "sessions", "tags", "TEXT NOT NULL DEFAULT '[]'")
     },
 )

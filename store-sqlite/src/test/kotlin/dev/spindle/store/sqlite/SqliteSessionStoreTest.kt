@@ -183,7 +183,7 @@ class SqliteSessionStoreTest {
         }
 
         val removed = s.prune(keepSessions = 2)
-        assertTrue(removed > 0)
+        assertEquals(3, removed)
 
         val remaining = s.sessions(limit = 100).map { it.id.value }
         assertEquals(listOf("ses_5", "ses_4"), remaining)
@@ -356,5 +356,137 @@ class SqliteSessionStoreTest {
         assertEquals(listOf("msg_old"), s.messages(SessionId("ses_old")).map { it.id.value })
         assertEquals(1, s.search("legacy").size)
         assertEquals(listOf("ses_old"), s.sessions().map { it.id.value })
+    }
+
+    @Test
+    fun searchFallsBackWhenFtsIndexIsUnavailable(@TempDir tmpDir: Path) = runTest {
+        val db = tmpDir.resolve("fts-fallback.db")
+        val s = SqliteSessionStore.open(db)
+        store = s
+        val sid = SessionId("ses_fallback")
+        s.createSession(Session(id = sid, cwd = "/w", createdAt = 1L, updatedAt = 1L))
+        s.appendMessage(
+            Message(
+                id = MessageId("msg_fallback"),
+                sessionId = sid,
+                role = Role.ASSISTANT,
+                parts = listOf(text("p_fb", "the fallback path still works")),
+                createdAt = 7L,
+            ),
+        )
+        assertEquals(1, s.search("fallback").size)
+
+        // Break the index out from under the open store: search must fall back
+        // to the linear scan rather than reporting "no matches".
+        DriverManager.getConnection("jdbc:sqlite:$db").use { conn ->
+            conn.createStatement().use { it.execute("ALTER TABLE message_fts RENAME TO message_fts_gone") }
+        }
+
+        val hits = s.search("fallback")
+        assertEquals(1, hits.size)
+        assertEquals("msg_fallback", hits.single().messageId)
+        assertEquals(Role.ASSISTANT.name, hits.single().role)
+        assertEquals(7L, hits.single().at)
+        assertTrue(hits.single().snippet.contains("fallback"))
+    }
+
+    @Test
+    fun backfillRepairsPartialIndex(@TempDir tmpDir: Path) = runTest {
+        val db = tmpDir.resolve("fts-partial.db")
+        val first = SqliteSessionStore.open(db)
+        store = first
+        val sid = SessionId("ses_partial")
+        first.createSession(Session(id = sid, cwd = "/w", createdAt = 1L, updatedAt = 1L))
+        first.appendMessage(Message(MessageId("m1"), sid, Role.USER, listOf(text("p1", "alpha one")), 1L))
+        first.appendMessage(Message(MessageId("m2"), sid, Role.ASSISTANT, listOf(text("p2", "beta two")), 2L))
+        first.appendMessage(Message(MessageId("m3"), sid, Role.USER, listOf(text("p3", "gamma three")), 3L))
+        assertEquals(1, first.search("beta").size)
+        first.close()
+
+        DriverManager.getConnection("jdbc:sqlite:$db").use { conn ->
+            conn.createStatement().use { it.executeUpdate("DELETE FROM message_fts WHERE message_id = 'm2'") }
+        }
+
+        val second = SqliteSessionStore.open(db)
+        store = second
+        val hits = second.search("beta")
+        assertEquals(1, hits.size)
+        assertEquals("m2", hits.single().messageId)
+        assertEquals(1, second.search("alpha").size)
+        assertEquals(1, second.search("gamma").size)
+    }
+
+    @Test
+    fun opensDatabaseWithV2ColumnsAndNoSchemaVersion(@TempDir tmpDir: Path) = runTest {
+        val db = tmpDir.resolve("android-style.db")
+        DriverManager.getConnection("jdbc:sqlite:$db").use { conn ->
+            conn.createStatement().use { st ->
+                st.execute(
+                    "CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, cwd TEXT, created_at INTEGER, " +
+                        "updated_at INTEGER, model TEXT, provider_id TEXT, agent TEXT, parent_id TEXT, " +
+                        "state TEXT, pinned INTEGER, archived INTEGER, tags TEXT)",
+                )
+                st.execute(
+                    "CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, created_at INTEGER, " +
+                        "model TEXT, provider_id TEXT, agent TEXT, usage TEXT, finish TEXT, error TEXT, seq INTEGER)",
+                )
+                st.execute(
+                    "CREATE TABLE parts (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, ord INTEGER, data TEXT)",
+                )
+                st.execute(
+                    "CREATE TABLE todos (id TEXT PRIMARY KEY, session_id TEXT, ord INTEGER, content TEXT, status TEXT)",
+                )
+                st.execute(
+                    "INSERT INTO sessions VALUES " +
+                        "('ses_android','Android','/w',1,2,NULL,NULL,'build',NULL,'IDLE',0,0,'[]')",
+                )
+            }
+        }
+
+        val s = SqliteSessionStore.open(db)
+        store = s
+        val loaded = s.session(SessionId("ses_android"))
+        assertNotNull(loaded)
+        assertEquals("Android", loaded?.title)
+        assertEquals(SessionState.IDLE, loaded?.state)
+
+        val fresh = SessionId("ses_new")
+        s.createSession(Session(id = fresh, cwd = "/w", createdAt = 3L, updatedAt = 3L))
+        assertNotNull(s.session(fresh))
+    }
+
+    @Test
+    fun pruneZeroAndNegativeKeepAreConsistent(@TempDir tmpDir: Path) = runTest {
+        suspend fun seed(db: Path, count: Int): SqliteSessionStore {
+            val s = SqliteSessionStore.open(db)
+            repeat(count) { i ->
+                val sid = SessionId("ses_$i")
+                s.createSession(Session(id = sid, cwd = "/w", createdAt = i.toLong(), updatedAt = i.toLong()))
+                s.appendMessage(
+                    Message(
+                        id = MessageId("msg_$i"),
+                        sessionId = sid,
+                        role = Role.USER,
+                        parts = listOf(text("p_$i", "hello $i")),
+                        createdAt = i.toLong(),
+                    ),
+                )
+            }
+            return s
+        }
+
+        val zero = seed(tmpDir.resolve("prune-zero.db"), 3)
+        store = zero
+        assertEquals(3, zero.prune(keepSessions = 0))
+        assertTrue(zero.sessions(limit = 100).isEmpty())
+        assertEquals(0, zero.prune(keepSessions = 0))
+        zero.close()
+        store = null
+
+        val negative = seed(tmpDir.resolve("prune-negative.db"), 2)
+        store = negative
+        assertEquals(2, negative.prune(keepSessions = -5))
+        assertTrue(negative.sessions(limit = 100).isEmpty())
+        assertEquals(0, negative.prune(keepSessions = -1))
     }
 }

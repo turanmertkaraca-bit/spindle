@@ -77,6 +77,34 @@ class HostShellExecutorTest {
     }
 
     @Test
+    fun timeoutKillsDescendants() = runTest {
+        withShellDir { dir ->
+            val result = shell.run("sleep 30 & echo \$! > child.pid; wait", dir, 300)
+            assertTrue(result.timedOut, "expected timeout, output=${result.output}")
+
+            val pidFile = dir.resolve("child.pid")
+            var childPid = -1L
+            val fileDeadline = System.currentTimeMillis() + 3_000
+            while (System.currentTimeMillis() < fileDeadline && childPid < 0) {
+                if (Files.exists(pidFile)) {
+                    childPid = Files.readString(pidFile).trim().toLongOrNull() ?: -1L
+                }
+                if (childPid < 0) Thread.sleep(20)
+            }
+            assertTrue(childPid > 0, "child pid was not written; output=${result.output}")
+
+            var alive = true
+            val deadDeadline = System.currentTimeMillis() + 3_000
+            while (System.currentTimeMillis() < deadDeadline) {
+                alive = ProcessHandle.of(childPid).map { it.isAlive }.orElse(false)
+                if (!alive) break
+                Thread.sleep(50)
+            }
+            assertFalse(alive, "descendant $childPid survived the timeout")
+        }
+    }
+
+    @Test
     fun openPtyIsNullOnHost() = runTest {
         withShellDir { dir ->
             assertNull(shell.openPty("echo hi", dir))

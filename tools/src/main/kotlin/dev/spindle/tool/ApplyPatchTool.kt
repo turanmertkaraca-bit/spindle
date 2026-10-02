@@ -9,8 +9,10 @@ import dev.spindle.core.tool.ToolEdit
 import dev.spindle.core.tool.ToolOutcome
 import kotlinx.serialization.json.JsonObject
 import java.nio.charset.StandardCharsets
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 
 /**
  * Apply a multi-file patch in the opencode patch format:
@@ -261,17 +263,35 @@ class ApplyPatchTool : Tool {
             )
         }
 
+        // Capture the pre-patch state of every path this call may touch so a
+        // mid-loop failure can be fully reverted. Context matching happened
+        // above, so the tree is still untouched at this point.
+        val originals = LinkedHashMap<Path, String>()
+        val absent = ArrayList<Path>()
+        for (path in pending.keys) {
+            val original = if (Files.isRegularFile(path) && !Files.isSymbolicLink(path)) {
+                runCatching { Files.readString(path, StandardCharsets.UTF_8) }.getOrNull()
+            } else {
+                null
+            }
+            if (original != null) originals[path] = original else absent.add(path)
+        }
+
         try {
             for ((path, content) in pending) {
                 if (content == null) {
                     Files.deleteIfExists(path)
                 } else {
                     path.parent?.let { Files.createDirectories(it) }
-                    Files.write(path, content.toByteArray(StandardCharsets.UTF_8))
+                    writeAtomically(path, content)
                 }
             }
         } catch (e: Exception) {
-            return ToolOutcome("Patch failed while writing: ${e.message}", isError = true)
+            revert(originals, absent)
+            return ToolOutcome(
+                "Patch failed while writing: ${e.message}; all changes were reverted",
+                isError = true,
+            )
         }
 
         val now = System.currentTimeMillis()
@@ -307,6 +327,39 @@ class ApplyPatchTool : Tool {
             snapshotId = if (toolEdits.size == 1) toolEdits.single().snapshotId else null,
             edits = toolEdits,
         )
+    }
+
+    /** Write [content] to a sibling temp file and atomically move it into place. */
+    private fun writeAtomically(path: Path, content: String) {
+        val parent = path.parent
+        val tmp = if (parent != null) {
+            Files.createTempFile(parent, ".spindle-patch-", ".tmp")
+        } else {
+            Files.createTempFile(".spindle-patch-", ".tmp")
+        }
+        try {
+            Files.write(tmp, content.toByteArray(StandardCharsets.UTF_8))
+            try {
+                Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            } catch (e: AtomicMoveNotSupportedException) {
+                Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            runCatching { Files.deleteIfExists(tmp) }
+        }
+    }
+
+    /** Restore every touched path to its pre-patch state, best effort. */
+    private fun revert(originals: Map<Path, String>, absent: List<Path>) {
+        for ((path, content) in originals) {
+            runCatching {
+                path.parent?.let { Files.createDirectories(it) }
+                Files.writeString(path, content, StandardCharsets.UTF_8)
+            }
+        }
+        for (path in absent) {
+            runCatching { if (!Files.isDirectory(path)) Files.deleteIfExists(path) }
+        }
     }
 
     private fun currentContent(pending: Map<Path, String?>, path: Path): String? {

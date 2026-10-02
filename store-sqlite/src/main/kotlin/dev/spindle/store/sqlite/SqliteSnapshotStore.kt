@@ -67,7 +67,7 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
     override suspend fun record(snapshot: Snapshot) {
         mutex.withLock {
             connection.prepareStatement(
-                "INSERT OR REPLACE INTO snapshot(id, session_id, path, content, sha256, created_at) " +
+                "INSERT OR REPLACE INTO snapshots(id, session_id, path, content, sha256, created_at) " +
                     "VALUES (?, ?, ?, ?, ?, ?)",
             ).use { st ->
                 st.setString(1, snapshot.id)
@@ -83,7 +83,7 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
 
     override suspend fun latest(sessionId: SessionId, path: String): Snapshot? = mutex.withLock {
         connection.prepareStatement(
-            "SELECT * FROM snapshot WHERE session_id = ? AND path = ? " +
+            "SELECT * FROM snapshots WHERE session_id = ? AND path = ? " +
                 "ORDER BY created_at DESC, rowid DESC LIMIT 1",
         ).use { st ->
             st.setString(1, sessionId.value)
@@ -94,7 +94,7 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
 
     override suspend fun forSession(sessionId: SessionId): List<Snapshot> = mutex.withLock {
         connection.prepareStatement(
-            "SELECT * FROM snapshot WHERE session_id = ? ORDER BY created_at ASC, rowid ASC",
+            "SELECT * FROM snapshots WHERE session_id = ? ORDER BY created_at ASC, rowid ASC",
         ).use { st ->
             st.setString(1, sessionId.value)
             st.executeQuery().use { rs -> buildList { while (rs.next()) add(readSnapshot(rs)) } }
@@ -106,7 +106,7 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
         mutex.withLock {
             connection.autoCommit = false
             try {
-                connection.prepareStatement("DELETE FROM snapshot WHERE id = ?").use { st ->
+                connection.prepareStatement("DELETE FROM snapshots WHERE id = ?").use { st ->
                     for (id in ids) {
                         st.setString(1, id)
                         st.addBatch()
@@ -125,9 +125,9 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
 
     override suspend fun prune(keep: Int): Int = mutex.withLock {
         connection.prepareStatement(
-            "DELETE FROM snapshot WHERE rowid IN (" +
-                "SELECT s.rowid FROM snapshot s WHERE (" +
-                "SELECT COUNT(*) FROM snapshot x WHERE x.session_id = s.session_id " +
+            "DELETE FROM snapshots WHERE rowid IN (" +
+                "SELECT s.rowid FROM snapshots s WHERE (" +
+                "SELECT COUNT(*) FROM snapshots x WHERE x.session_id = s.session_id " +
                 "AND (x.created_at > s.created_at OR (x.created_at = s.created_at AND x.rowid > s.rowid))" +
                 ") >= ?)",
         ).use { st ->
@@ -161,7 +161,7 @@ private val SNAPSHOT_MIGRATIONS = listOf(
     SnapshotMigration(1) { connection ->
         connection.createStatement().use { st ->
             st.execute(
-                "CREATE TABLE IF NOT EXISTS snapshot (" +
+                "CREATE TABLE IF NOT EXISTS snapshots (" +
                     "id TEXT PRIMARY KEY, " +
                     "session_id TEXT NOT NULL, " +
                     "path TEXT NOT NULL, " +
@@ -169,7 +169,20 @@ private val SNAPSHOT_MIGRATIONS = listOf(
                     "sha256 TEXT NOT NULL, " +
                     "created_at INTEGER NOT NULL)",
             )
-            st.execute("CREATE INDEX IF NOT EXISTS idx_snapshot_session_path ON snapshot(session_id, path)")
+            st.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_session_path ON snapshots(session_id, path)")
+        }
+    },
+    SnapshotMigration(2) { connection ->
+        // Converge on the plural table name the Android store already uses so
+        // both stores can share one file. Only a legacy singular table is
+        // renamed (and only when the plural one does not already exist).
+        connection.createStatement().use { st ->
+            val tables = st.executeQuery("SELECT name FROM sqlite_master WHERE type = 'table'").use { rs ->
+                buildSet { while (rs.next()) add(rs.getString(1)) }
+            }
+            if ("snapshot" in tables && "snapshots" !in tables) {
+                st.execute("ALTER TABLE snapshot RENAME TO snapshots")
+            }
         }
     },
 )

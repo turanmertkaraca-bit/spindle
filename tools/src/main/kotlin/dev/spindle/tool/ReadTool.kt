@@ -5,7 +5,9 @@ import dev.spindle.core.tool.Tool
 import dev.spindle.core.tool.ToolContext
 import dev.spindle.core.tool.ToolOutcome
 import kotlinx.serialization.json.JsonObject
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.nio.file.Path
 
 /** Read a text file and return numbered lines, capped at [Limits.READ_MAX_LINES]. */
 class ReadTool : Tool {
@@ -37,45 +39,94 @@ class ReadTool : Tool {
         }
         if (!Files.exists(path)) return ToolOutcome("File not found: $raw", isError = true)
         if (Files.isDirectory(path)) return ToolOutcome("Path is a directory, not a file: $raw", isError = true)
+        if (!Files.isRegularFile(path)) {
+            return ToolOutcome("Path is not a regular file: $raw", isError = true)
+        }
+
+        // Guard against loading a huge file into memory. The byte cap bounds both
+        // the initial read and the line scan below.
+        val size = try {
+            Files.size(path)
+        } catch (e: Exception) {
+            return ToolOutcome("Failed to read $raw: ${e.message}", isError = true)
+        }
+        if (size > Limits.READ_MAX_BYTES) {
+            return ToolOutcome(
+                "File is too large to read safely: $raw is $size bytes (limit ${Limits.READ_MAX_BYTES}). " +
+                    "Use offset/limit via a narrower tool or grep for specific content.",
+                isError = true,
+                metadata = mapOf("path" to raw, "bytes" to size.toString(), "truncated" to "true"),
+            )
+        }
+        if (looksBinary(path)) {
+            return ToolOutcome("Refusing to read binary file: $raw", isError = true, metadata = mapOf("path" to raw))
+        }
 
         val offset = (input.intOrNull("offset") ?: 1).coerceAtLeast(1)
         val requested = (input.intOrNull("limit") ?: Limits.READ_MAX_LINES).coerceAtLeast(1)
         val limit = minOf(requested, Limits.READ_MAX_LINES)
 
-        val lines = try {
-            Files.readAllLines(path)
+        val window = try {
+            readWindow(path, offset, limit)
         } catch (e: Exception) {
             return ToolOutcome("Failed to read $raw: ${e.message}", isError = true)
         }
 
-        if (offset > lines.size + 1) {
-            return ToolOutcome("Offset $offset is past the end of $raw (${lines.size} lines)", isError = true)
+        if (offset > window.totalLines + 1) {
+            return ToolOutcome("Offset $offset is past the end of $raw (${window.totalLines} lines)", isError = true)
         }
 
         val start = offset - 1
-        val end = minOf(lines.size, start + limit)
+        val end = minOf(window.totalLines, start + limit)
         val builder = StringBuilder()
-        for (i in start until end) {
-            builder.append((i + 1).toString().padStart(6)).append('\t').append(lines[i]).append('\n')
+        for (i in window.lines.indices) {
+            builder.append((start + i + 1).toString().padStart(6)).append('\t')
+                .append(window.lines[i]).append('\n')
         }
 
-        val shown = end - start
-        val truncated = end < lines.size
+        val shown = window.lines.size
+        val truncated = end < window.totalLines || window.scanCapped
+        val totalLabel = if (window.scanCapped) "≥${window.totalLines}" else window.totalLines.toString()
         val note = if (truncated) {
-            "\n…[truncated: showing lines ${start + 1}-$end of ${lines.size}; " +
+            "\n…[truncated: showing lines ${start + 1}-$end of $totalLabel; " +
                 "use offset/limit to read more]"
         } else {
             ""
         }
-        val header = "$raw (lines ${start + 1}-$end of ${lines.size})\n"
+        val header = "$raw (lines ${start + 1}-$end of $totalLabel)\n"
         return ToolOutcome(
             output = header + builder.toString() + note,
             metadata = mapOf(
                 "path" to raw,
                 "lines" to shown.toString(),
-                "totalLines" to lines.size.toString(),
+                "totalLines" to window.totalLines.toString(),
                 "truncated" to truncated.toString(),
             ),
         )
     }
+
+    /**
+     * Stream the file once, keeping only the requested `[offset, offset+limit)`
+     * window in memory while counting total lines. The 2 MB byte guard above
+     * bounds both the scan and the line count.
+     */
+    private fun readWindow(path: Path, offset: Int, limit: Int): Window {
+        val lines = ArrayList<String>(minOf(limit, 64))
+        var total = 0
+        var capped = false
+        Files.newBufferedReader(path, StandardCharsets.UTF_8).use { reader ->
+            while (true) {
+                val line = reader.readLine() ?: break
+                total++
+                if (total >= offset && lines.size < limit) lines.add(line)
+                if (total >= Limits.READ_MAX_SCAN_LINES) {
+                    capped = true
+                    break
+                }
+            }
+        }
+        return Window(lines, total, capped)
+    }
+
+    private class Window(val lines: List<String>, val totalLines: Int, val scanCapped: Boolean)
 }

@@ -106,6 +106,23 @@ class WebSearchParserTest {
         )
     }
 
+    @Test
+    fun unwrapUrlRejectsNonHttpSchemes() {
+        assertEquals("", WebSearchParser.unwrapUrl("javascript:alert(1)"))
+        assertEquals("", WebSearchParser.unwrapUrl("data:text/html,<h1>x</h1>"))
+        assertEquals("", WebSearchParser.unwrapUrl("ftp://example.com/x"))
+    }
+
+    @Test
+    fun parseOfAdversarialAnchorSoupIsLinear() {
+        val html = "<a>".repeat(20_000) + "x".repeat(20_000)
+        val started = System.nanoTime()
+        val hits = WebSearchParser.parse(html, 10)
+        val elapsedMs = (System.nanoTime() - started) / 1_000_000
+        assertTrue(hits.isEmpty())
+        assertTrue(elapsedMs < 3_000, "parse took ${elapsedMs}ms")
+    }
+
     private companion object {
         val SAMPLE_HTML = """
             <html><body>

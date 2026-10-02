@@ -3,6 +3,8 @@ package dev.spindle.core.store
 import dev.spindle.core.model.Ids
 import dev.spindle.core.model.Message
 import dev.spindle.core.model.MessageId
+import dev.spindle.core.model.Part
+import dev.spindle.core.model.PartId
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.model.TodoItem
@@ -38,7 +40,7 @@ class InMemorySessionStore : SessionStore, SessionSearch {
             .filter { includeChildren || it.parentId == null }
             .filter { includeArchived || !it.archived }
             .sortedByDescending { it.updatedAt }
-            .take(limit)
+            .take(limit.coerceAtLeast(0))
     }
 
     override suspend fun deleteSession(id: SessionId) {
@@ -115,7 +117,7 @@ class InMemorySessionStore : SessionStore, SessionSearch {
     }
 
     override suspend fun prune(keepSessions: Int): Int = mutex.withLock {
-        val drop = sessions.values.sortedByDescending { it.updatedAt }.drop(keepSessions)
+        val drop = sessions.values.sortedByDescending { it.updatedAt }.drop(keepSessions.coerceAtLeast(0))
         drop.forEach { sessions.remove(it.id); messages.remove(it.id); todos.remove(it.id) }
         drop.size
     }
@@ -138,12 +140,28 @@ class InMemorySessionStore : SessionStore, SessionSearch {
                 }
             }
         }
-        hits.sortedByDescending { it.at }.take(limit)
+        hits.sortedByDescending { it.at }.take(limit.coerceAtLeast(0))
     }
 }
 
 private fun Message.forkedInto(sessionId: SessionId): Message = copy(
     id = MessageId(Ids.new("msg")),
     sessionId = sessionId,
-    parts = parts.map { it.withNewId() },
+    parts = parts.map { it.forkedPart() },
 )
+
+/**
+ * Give a copied part fresh ids, remapping a tool call and its result together so
+ * the pairing stays internally consistent inside the fork.
+ */
+private fun Part.forkedPart(): Part = when (this) {
+    is Part.Tool -> {
+        val callId = Ids.new("call")
+        copy(
+            id = PartId(Ids.new("prt")),
+            call = call.copy(id = callId),
+            result = result?.copy(callId = callId),
+        )
+    }
+    else -> withNewId()
+}

@@ -16,10 +16,14 @@ internal data class SearchHit(
  * the parsing is unit-tested without touching the network.
  */
 internal object WebSearchParser {
-    private val ANCHOR = Regex("(?is)<a\\b([^>]*)>(.*?)</a>")
-
     fun parse(html: String, limit: Int): List<SearchHit> {
         if (limit <= 0) return emptyList()
+        // Bound the adversarial input before doing any scanning.
+        val source = if (html.length > Limits.WEBSEARCH_MAX_HTML_CHARS) {
+            html.substring(0, Limits.WEBSEARCH_MAX_HTML_CHARS)
+        } else {
+            html
+        }
         val hits = mutableListOf<SearchHit>()
         var title: String? = null
         var url: String? = null
@@ -34,13 +38,32 @@ internal object WebSearchParser {
             snippet = ""
         }
 
-        for (match in ANCHOR.findAll(html)) {
-            val attrs = match.groupValues[1]
+        // Linear scan: each indexOf starts where the previous anchor ended, so
+        // adversarial markup (many `<a` with no closing tag) is O(n), not O(n²).
+        var cursor = 0
+        while (cursor < source.length) {
+            val start = source.indexOf("<a", cursor, ignoreCase = true)
+            if (start < 0) break
+            val afterName = start + 2
+            if (afterName < source.length) {
+                val next = source[afterName]
+                if (next != '>' && next != '/' && !next.isWhitespace()) {
+                    cursor = afterName
+                    continue
+                }
+            }
+            val tagEnd = source.indexOf('>', afterName)
+            if (tagEnd < 0) break
+            val close = source.indexOf("</a", tagEnd, ignoreCase = true)
+            if (close < 0) break
+
+            val attrs = source.substring(afterName, tagEnd)
+            val textHtml = source.substring(tagEnd + 1, close)
             val classes = attribute(attrs, "class")?.split(Regex("\\s+")) ?: emptyList()
             when {
                 "result__a" in classes -> {
                     flush()
-                    val text = clean(match.groupValues[2])
+                    val text = clean(textHtml)
                     val resolved = attribute(attrs, "href")?.let { unwrapUrl(it) }
                     if (text.isNotEmpty() && !resolved.isNullOrEmpty()) {
                         title = text
@@ -48,9 +71,10 @@ internal object WebSearchParser {
                     }
                 }
                 "result__snippet" in classes -> {
-                    if (title != null) snippet = clean(match.groupValues[2])
+                    if (title != null) snippet = clean(textHtml)
                 }
             }
+            cursor = close + 3
         }
         if (hits.size < limit) flush()
         return hits
@@ -68,7 +92,11 @@ internal object WebSearchParser {
         return text.replace(Regex("\\s+"), " ").trim()
     }
 
-    /** Unwrap `//duckduckgo.com/l/?uddg=<encoded>` style redirect links. */
+    /**
+     * Unwrap `//duckduckgo.com/l/?uddg=<encoded>` style redirect links. Only
+     * `http(s)` targets are returned; `javascript:`, `data:` and every other
+     * scheme yield the empty string so they can never be rendered as a link.
+     */
     fun unwrapUrl(raw: String): String {
         var value = unescapeHtmlEntities(raw).trim()
         if (value.startsWith("//")) value = "https:$value"
@@ -76,12 +104,18 @@ internal object WebSearchParser {
         val index = value.indexOf(marker)
         if (index >= 0) {
             val encoded = value.substring(index + marker.length).substringBefore('&')
-            return try {
+            value = try {
                 URLDecoder.decode(encoded, "UTF-8")
             } catch (e: Exception) {
                 encoded
             }
         }
-        return value
+        return if (value.startsWith("http://", ignoreCase = true) ||
+            value.startsWith("https://", ignoreCase = true)
+        ) {
+            value
+        } else {
+            ""
+        }
     }
 }

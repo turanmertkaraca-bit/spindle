@@ -61,7 +61,9 @@ class GlobTool : Tool {
                 val iterator = stream.iterator()
                 while (iterator.hasNext()) {
                     val candidate = iterator.next()
-                    if (!Files.isRegularFile(candidate)) continue
+                    // Never surface symlinks or special files: a symlink inside the
+                    // tree can point outside the sandbox.
+                    if (isNonRegularOrSymlink(candidate)) continue
                     val normalized = candidate.toAbsolutePath().normalize()
                     if (!normalized.startsWith(cwd)) continue
                     val rel = base.relativize(normalized)
@@ -78,10 +80,15 @@ class GlobTool : Tool {
 
         val sorted = matches.map { it.displayPath(cwd) }.sorted()
         val shown = sorted.take(Limits.GLOB_MAX_RESULTS)
+        val truncated = sorted.size > shown.size
         val note = capNote(shown.size, sorted.size, "glob")
         return ToolOutcome(
             output = shown.joinToString("\n") + note,
-            metadata = mapOf("count" to shown.size.toString(), "total" to sorted.size.toString()),
+            metadata = mapOf(
+                "count" to shown.size.toString(),
+                "total" to sorted.size.toString(),
+                "truncated" to truncated.toString(),
+            ),
         )
     }
 }

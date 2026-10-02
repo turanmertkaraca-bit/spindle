@@ -40,7 +40,7 @@ object Markdown {
     private val BULLET = Regex("^\\s*[-*+]\\s+(.*)$")
     private val ORDERED = Regex("^\\s*\\d+[.)]\\s+(.*)$")
 
-    private class Fence(val marker: Char, val info: String)
+    private class Fence(val marker: Char, val info: String, val count: Int)
 
     fun parse(src: String): List<MdBlock> {
         if (src.isEmpty()) return emptyList()
@@ -64,7 +64,7 @@ object Markdown {
                 flushParagraph()
                 i++
                 val code = ArrayList<String>()
-                while (i < lines.size && !isFenceClose(lines[i], fence.marker)) {
+                while (i < lines.size && !isFenceClose(lines[i], fence)) {
                     code += lines[i]
                     i++
                 }
@@ -129,33 +129,54 @@ object Markdown {
         if (n < 3) return null
         val info = t.substring(n).trim()
         if (marker == '`' && info.contains('`')) return null
-        return Fence(marker, info)
+        return Fence(marker, info, n)
     }
 
-    private fun isFenceClose(line: String, marker: Char): Boolean {
+    private fun isFenceClose(line: String, fence: Fence): Boolean {
         val t = line.trim()
-        if (t.length < 3) return false
+        if (t.isEmpty() || t[0] != fence.marker) return false
         var n = 0
-        while (n < t.length && t[n] == marker) n++
-        if (n < 3) return false
+        while (n < t.length && t[n] == fence.marker) n++
+        if (n < fence.count) return false
         return t.substring(n).isBlank()
     }
 
     /**
-     * ATX heading level, or 0. A space after the hashes is conventional but not
-     * required here: models often emit `##hello##`, and the closing hashes are
-     * stripped below, so being forgiving reads better than showing raw markup.
+     * ATX heading level, or 0. Up to three leading spaces are allowed, and a
+     * space after the hashes is conventional but not required: models often emit
+     * `##hello##`, and being forgiving reads better than showing raw markup.
      */
     private fun headingLevel(line: String): Int {
+        var i = 0
+        while (i < line.length && i < 3 && line[i] == ' ') i++
         var n = 0
-        while (n < line.length && n < 6 && line[n] == '#') n++
+        while (i + n < line.length && n < 6 && line[i + n] == '#') n++
         if (n == 0) return 0
-        if (n == 6 && line.length > 6 && line[6] == '#') return 0
+        if (n == 6 && i + n < line.length && line[i + n] == '#') return 0
         return n
     }
 
-    private fun headingText(line: String, level: Int): String =
-        line.substring(level).trim().trimEnd('#').trim()
+    /**
+     * Heading content. When there is a space after the opening hashes, only a
+     * closing run preceded by a space is stripped, so `# C#` keeps its `#`.
+     * Without that space the forgiving path strips any trailing run.
+     */
+    private fun headingText(line: String, level: Int): String {
+        var i = 0
+        while (i < line.length && i < 3 && line[i] == ' ') i++
+        val raw = line.substring((i + level).coerceAtMost(line.length))
+        val body = raw.trim()
+        if (body.isEmpty()) return ""
+        if (raw[0] == ' ') {
+            val trimmed = body.trimEnd('#')
+            return if (trimmed.length < body.length && (trimmed.isEmpty() || trimmed.last() == ' ')) {
+                trimmed.trim()
+            } else {
+                body
+            }
+        }
+        return body.trimEnd('#').trimEnd()
+    }
 
     /**
      * Inline scan. Emphasis requires non-space content on both ends so that a

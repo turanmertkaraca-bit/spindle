@@ -34,9 +34,11 @@ import dev.spindle.core.tool.ToolOutcome
 import dev.spindle.core.tool.ToolProgress
 import dev.spindle.core.tool.ToolRegistry
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -117,6 +119,10 @@ class AgentLoop(
         bus.emit(AgentEvent.StateChanged(sessionId, SessionState.RUNNING))
         persistState(store, sessionId, SessionState.RUNNING)
         val budgetWarning = BudgetWarningState()
+        var inFlightAssistant: MessageId? = null
+        // The terminal state already emitted, so cancellation during the final
+        // persist cannot double-emit a terminal StateChanged.
+        var terminalState: SessionState? = null
         try {
             store.appendMessage(
                 Message(
@@ -165,6 +171,7 @@ class AgentLoop(
                     agent = agent.name,
                 )
                 store.appendMessage(assistant)
+                inFlightAssistant = assistant.id
                 bus.emit(AgentEvent.MessageCreated(sessionId, assistant.id.value, "assistant"))
 
                 val textPartId = PartId(Ids.new("prt"))
@@ -199,6 +206,8 @@ class AgentLoop(
                         },
                     ) {
                         text.setLength(0); reasoning.setLength(0); calls.clear()
+                        usage = Usage()
+                        finish = FinishReason.UNKNOWN
                         failure = null
                         provider.stream(request).collect { ev ->
                             when (ev) {
@@ -225,15 +234,21 @@ class AgentLoop(
                         if (failure != null) throw ProviderFailure(failure!!)
                     }
                 } catch (e: ProviderFailure) {
+                    val erroredParts = buildList {
+                        if (reasoning.isNotEmpty()) add(Part.Reasoning(reasoningPartId, reasoning.toString()))
+                        if (text.isNotEmpty()) add(Part.Text(textPartId, text.toString()))
+                    }
                     val errored = assistant.copy(
                         error = e.message,
                         finish = FinishReason.ERROR,
                         usage = usage,
-                        parts = text.takeIf { it.isNotEmpty() }?.let { listOf(Part.Text(textPartId, it.toString())) } ?: emptyList(),
+                        parts = erroredParts,
                     )
                     store.updateMessage(errored)
+                    errored.parts.forEach { bus.emit(AgentEvent.PartUpdated(sessionId, errored.id.value, it)) }
                     bus.emit(AgentEvent.Error(sessionId, e.message ?: "provider error"))
                     bus.emit(AgentEvent.UsageUpdated(sessionId, store.messages(sessionId).fold(Usage()) { acc, m -> acc + m.usage }))
+                    terminalState = SessionState.ERROR
                     bus.emit(AgentEvent.StateChanged(sessionId, SessionState.ERROR))
                     persistState(store, sessionId, SessionState.ERROR)
                     return errored
@@ -259,7 +274,19 @@ class AgentLoop(
                 bus.emit(AgentEvent.UsageUpdated(sessionId, sessionUsage))
 
                 if (toolCalls.isEmpty()) break
-                if (agent.maxSteps != null && step >= agent.maxSteps) break
+                if (agent.maxSteps != null && step >= agent.maxSteps) {
+                    for (part in finalized.parts.filterIsInstance<Part.Tool>()) {
+                        updatePart(
+                            sessionId,
+                            finalized.id,
+                            part.copy(
+                                state = ToolState.ERROR,
+                                result = ToolResult(part.call.id, "step budget exhausted", isError = true),
+                            ),
+                        )
+                    }
+                    break
+                }
 
                 for (part in finalized.parts.filterIsInstance<Part.Tool>()) {
                     currentCoroutineContext().ensureActive()
@@ -267,18 +294,46 @@ class AgentLoop(
                 }
             }
 
+            terminalState = SessionState.IDLE
             bus.emit(AgentEvent.StateChanged(sessionId, SessionState.IDLE))
             persistState(store, sessionId, SessionState.IDLE)
             return store.latestMessage(sessionId)!!
         } catch (e: CancellationException) {
-            store.latestMessage(sessionId)?.let {
-                store.updateMessage(it.copy(finish = FinishReason.ERROR, error = "aborted"))
+            withContext(NonCancellable) {
+                inFlightAssistant?.let { id ->
+                    store.message(sessionId, id)?.let { m ->
+                        // The assistant's finish is TOOL_CALLS by the time tools run,
+                        // so `finish == null` is not a reliable "in flight" test:
+                        // also finalize any tool part still pending/running so the
+                        // whole-history open-call scan cannot wedge compaction.
+                        val hasOpen = m.parts.any {
+                            it is Part.Tool && (it.state == ToolState.PENDING || it.state == ToolState.RUNNING)
+                        }
+                        if (hasOpen || m.finish == null) {
+                            val parts = m.parts.map { p ->
+                                if (p is Part.Tool &&
+                                    (p.state == ToolState.PENDING || p.state == ToolState.RUNNING)
+                                ) {
+                                    p.copy(
+                                        state = ToolState.ERROR,
+                                        result = ToolResult(p.call.id, "aborted", isError = true),
+                                    )
+                                } else {
+                                    p
+                                }
+                            }
+                            store.updateMessage(m.copy(parts = parts, finish = FinishReason.ERROR, error = "aborted"))
+                        }
+                    }
+                }
+                val terminal = terminalState ?: SessionState.IDLE
+                if (terminalState == null) bus.emit(AgentEvent.StateChanged(sessionId, terminal))
+                persistState(store, sessionId, terminal)
             }
-            bus.emit(AgentEvent.StateChanged(sessionId, SessionState.IDLE))
-            persistState(store, sessionId, SessionState.IDLE)
             throw e
         } catch (e: Throwable) {
             bus.emit(AgentEvent.Error(sessionId, e.message ?: e.toString()))
+            terminalState = SessionState.ERROR
             bus.emit(AgentEvent.StateChanged(sessionId, SessionState.ERROR))
             persistState(store, sessionId, SessionState.ERROR)
             throw e
@@ -292,21 +347,24 @@ class AgentLoop(
         system: String,
     ): OverflowDecision {
         val history = store.messages(sessionId)
-        val open = history.lastOrNull()?.parts?.filterIsInstance<Part.Tool>()
-            ?.any { it.state == ToolState.PENDING || it.state == ToolState.RUNNING } ?: false
+        val open = history.any { m ->
+            m.parts.filterIsInstance<Part.Tool>()
+                .any { it.state == ToolState.PENDING || it.state == ToolState.RUNNING }
+        }
         val sysChars = system.length
-        val msgChars = history.sumOf { m ->
+        val msgChars = history.map { m ->
             m.parts.sumOf { p ->
                 when (p) {
                     is Part.Text -> p.text.length
                     is Part.Reasoning -> p.text.length
                     is Part.Tool -> p.call.argumentsJson.length + (p.result?.output?.length ?: 0)
+                    is Part.File -> p.dataBase64?.length ?: 16
                     else -> 16
                 }
             }
         }
         val schemaChars = active.specs.sumOf { it.parametersJson.length + it.description.length }
-        val est = TokenEstimator.estimate("x".repeat(sysChars), listOf("x".repeat(msgChars)), schemaChars)
+        val est = TokenEstimator.estimate("x".repeat(sysChars), msgChars.map { "x".repeat(it) }, schemaChars)
         val alreadyCompacted = history.any { it.parts.filterIsInstance<Part.Text>().any { p -> p.text.startsWith(COMPACT_MARKER) } }
         return Overflow.decide(est, contextWindow, open, alreadyCompacted)
     }

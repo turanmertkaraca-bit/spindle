@@ -27,32 +27,35 @@ object Wire {
         val out = ArrayList<WireMessage>(messages.size * 2)
         for (m in messages) {
             when (m.role) {
-                Role.SYSTEM -> out.add(WireMessage(role = "system", text = m.parts.text()))
+                Role.SYSTEM -> out.add(WireMessage(role = "system", text = m.parts.text().ifEmpty { null }))
                 Role.USER -> out.add(
-                    WireMessage(role = "user", text = m.parts.text(), images = m.parts.images()),
+                    WireMessage(role = "user", text = m.parts.text().ifEmpty { null }, images = m.parts.images()),
                 )
                 Role.ASSISTANT -> {
                     val text = m.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
                     val reasoning = m.parts.filterIsInstance<Part.Reasoning>().joinToString("") { it.text }
-                    val calls = m.parts.filterIsInstance<Part.Tool>().map { it.call }
-                    out.add(
-                        WireMessage(
-                            role = "assistant",
-                            text = text.ifEmpty { null },
-                            reasoning = reasoning.ifEmpty { null },
-                            toolCalls = calls,
-                        ),
-                    )
-                    for (t in m.parts.filterIsInstance<Part.Tool>()) {
-                        val r = t.result ?: continue
+                    val toolParts = m.parts.filterIsInstance<Part.Tool>()
+                    if (text.isNotEmpty() || reasoning.isNotEmpty() || toolParts.isNotEmpty()) {
                         out.add(
                             WireMessage(
-                                role = "tool",
-                                text = r.output,
-                                toolCallId = t.call.id,
-                                toolName = t.call.name,
+                                role = "assistant",
+                                text = text.ifEmpty { null },
+                                reasoning = reasoning.ifEmpty { null },
+                                toolCalls = toolParts.map { it.call },
                             ),
                         )
+                        // Every advertised call needs a matching reply, even while the
+                        // tool is still pending/running, or providers reject the turn.
+                        for (t in toolParts) {
+                            out.add(
+                                WireMessage(
+                                    role = "tool",
+                                    text = t.result?.output ?: "(tool did not complete)",
+                                    toolCallId = t.call.id,
+                                    toolName = t.call.name,
+                                ),
+                            )
+                        }
                     }
                 }
                 Role.TOOL -> out.add(

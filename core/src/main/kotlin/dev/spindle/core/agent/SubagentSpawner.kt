@@ -1,6 +1,5 @@
 package dev.spindle.core.agent
 
-import dev.spindle.core.event.AgentEvent
 import dev.spindle.core.event.EventBus
 import dev.spindle.core.model.Ids
 import dev.spindle.core.model.Message
@@ -73,13 +72,15 @@ class SubagentSpawner(
             maxSteps = maxChildSteps,
         )
 
-        bus.emit(AgentEvent.StateChanged(childId, dev.spindle.core.model.SessionState.RUNNING))
+        // The child loop owns the StateChanged(RUNNING) and terminal events; the
+        // spawner only re-reads and touches updatedAt so it never clobbers the
+        // state the loop persisted.
         val finalMessage = try {
             loop.prompt(childId, spec.prompt, modelRef, agent, budget = ContextBudget())
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Throwable) {
-            store.updateSession(child.copy(updatedAt = System.currentTimeMillis()))
+            store.session(childId)?.let { store.updateSession(it.copy(updatedAt = System.currentTimeMillis())) }
             return SubagentResult(childId, "subagent failed: ${e.message}", false)
         }
 
@@ -87,8 +88,7 @@ class SubagentSpawner(
             .ifBlank { "(subagent produced no text)" }
         val clipped = if (text.length > maxChildOutputChars) text.take(maxChildOutputChars) + "…" else text
         val childUsage: Usage = store.messages(childId).fold(Usage()) { acc, m -> acc + m.usage }
-        store.updateSession(child.copy(updatedAt = System.currentTimeMillis()))
-        bus.emit(AgentEvent.StateChanged(childId, dev.spindle.core.model.SessionState.IDLE))
+        store.session(childId)?.let { store.updateSession(it.copy(updatedAt = System.currentTimeMillis())) }
 
         return SubagentResult(
             sessionId = childId,

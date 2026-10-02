@@ -41,10 +41,14 @@ class BashTool(
         val command = input.requireString("command")
         if (command.isBlank()) return ToolOutcome("command must not be blank", isError = true)
 
+        ctx.checkAborted()
+
         val pattern = command.trim().split(Regex("\\s+")).firstOrNull() ?: command
         if (!ctx.requestPermission("bash", command, pattern)) {
             return ToolOutcome("denied by user", isError = true)
         }
+
+        ctx.checkAborted()
 
         val directory = try {
             input.stringOrNull("cwd")?.let { resolveInsideCwd(ctx, it).toFile() } ?: ctx.cwd.toFile()

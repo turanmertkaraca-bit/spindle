@@ -5,10 +5,13 @@ import dev.spindle.core.tool.Tool
 import dev.spindle.core.tool.ToolContext
 import dev.spindle.core.tool.ToolOutcome
 import kotlinx.serialization.json.JsonObject
+import java.nio.charset.StandardCharsets
 import java.nio.file.FileSystems
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.PathMatcher
+import java.nio.file.attribute.BasicFileAttributes
 
 /** Regex content search across files under the working directory. */
 class GrepTool : Tool {
@@ -64,7 +67,15 @@ class GrepTool : Tool {
                 val iterator = stream.iterator()
                 while (iterator.hasNext()) {
                     val candidate = iterator.next()
-                    if (!Files.isRegularFile(candidate)) continue
+                    // NOFOLLOW + isRegularFile skips symlinks, FIFOs, sockets and devices.
+                    val attrs = try {
+                        Files.readAttributes(candidate, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+                    } catch (e: Exception) {
+                        continue
+                    }
+                    if (!attrs.isRegularFile) continue
+                    if (attrs.size() > Limits.GREP_MAX_FILE_BYTES) continue
+
                     val normalized = candidate.toAbsolutePath().normalize()
                     if (!normalized.startsWith(cwd)) continue
 
@@ -78,23 +89,36 @@ class GrepTool : Tool {
                     }
                     if (looksBinary(normalized)) continue
 
-                    val lines = try {
-                        Files.readAllLines(normalized)
-                    } catch (e: Exception) {
-                        continue
-                    }
-                    for ((index, line) in lines.withIndex()) {
-                        if (regex.containsMatchIn(line)) {
-                            results.add("${normalized.displayPath(cwd)}:${index + 1}: $line")
-                            if (results.size >= Limits.GREP_MAX_RESULTS) {
-                                truncated = true
-                                break
+                    try {
+                        Files.newBufferedReader(normalized, StandardCharsets.UTF_8).use { reader ->
+                            var lineNumber = 0
+                            while (true) {
+                                val line = reader.readLine() ?: break
+                                lineNumber++
+                                if (containsMatch(regex, line)) {
+                                    results.add("${normalized.displayPath(cwd)}:$lineNumber: ${capLine(line)}")
+                                    if (results.size >= Limits.GREP_MAX_RESULTS) {
+                                        truncated = true
+                                        break
+                                    }
+                                }
                             }
                         }
+                    } catch (e: RegexBudgetExceeded) {
+                        throw e
+                    } catch (e: Exception) {
+                        // Unreadable or non-UTF-8 file: skip it, keep searching.
                     }
                     if (truncated) break
                 }
             }
+        } catch (e: RegexBudgetExceeded) {
+            return ToolOutcome(
+                "Grep aborted: regular expression '$patternText' exceeded its backtracking " +
+                    "budget (possible catastrophic backtracking). Simplify the pattern.",
+                isError = true,
+                metadata = mapOf("truncated" to "true"),
+            )
         } catch (e: Exception) {
             return ToolOutcome("Grep failed: ${e.message}", isError = true)
         }
@@ -103,7 +127,7 @@ class GrepTool : Tool {
         val note = if (truncated) "\n\n…[grep: capped at ${Limits.GREP_MAX_RESULTS} matches]" else ""
         return ToolOutcome(
             output = results.joinToString("\n") + note,
-            metadata = mapOf("count" to results.size.toString()),
+            metadata = mapOf("count" to results.size.toString(), "truncated" to truncated.toString()),
         )
     }
 
@@ -113,22 +137,32 @@ class GrepTool : Tool {
             name == ".git" || name == "build" || name == "node_modules" || name == ".gradle"
         }
 
-    private fun looksBinary(path: Path): Boolean {
-        val name = path.fileName.toString().lowercase()
-        if (BINARY_EXTENSIONS.any { name.endsWith(it) }) return true
-        return try {
-            val bytes = Files.newInputStream(path).use { it.readNBytes(Limits.BINARY_SNIFF_BYTES) }
-            bytes.any { it == 0.toByte() }
-        } catch (e: Exception) {
-            true
+    private fun capLine(line: String): String =
+        if (line.length <= Limits.GREP_MAX_LINE_CHARS) line
+        else line.substring(0, Limits.GREP_MAX_LINE_CHARS) + "…"
+
+    /**
+     * Run [regex] against [line] with a hard budget on the number of character
+     * accesses. Catastrophic backtracking does exponential `charAt` work, so the
+     * budget aborts it quickly while leaving linear/near-linear patterns
+     * untouched. This is the pure-JDK equivalent of a regex timeout and cannot
+     * hang the tool.
+     */
+    private fun containsMatch(regex: Regex, line: String): Boolean {
+        val budget = Limits.GREP_MATCH_BUDGET_BASE + Limits.GREP_MATCH_BUDGET_PER_CHAR * line.length
+        var accesses = 0L
+        val bounded = object : CharSequence {
+            override val length: Int get() = line.length
+            override fun get(index: Int): Char {
+                if (++accesses > budget) throw RegexBudgetExceeded()
+                return line[index]
+            }
+
+            override fun subSequence(startIndex: Int, endIndex: Int): CharSequence =
+                line.subSequence(startIndex, endIndex)
         }
+        return regex.containsMatchIn(bounded)
     }
 
-    private companion object {
-        val BINARY_EXTENSIONS = listOf(
-            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", ".gz", ".tar",
-            ".jar", ".class", ".so", ".dylib", ".dll", ".exe", ".bin", ".woff", ".woff2",
-            ".ttf", ".otf", ".mp3", ".mp4", ".mov", ".avi", ".wasm",
-        )
-    }
+    private class RegexBudgetExceeded : RuntimeException()
 }

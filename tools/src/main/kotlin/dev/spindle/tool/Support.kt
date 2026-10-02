@@ -11,26 +11,39 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import java.net.InetSocketAddress
-import java.net.ProxySelector
+import java.net.Proxy
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.security.MessageDigest
 
 /** Shared caps so tool output can never blow up the model context. */
 internal object Limits {
     const val READ_MAX_LINES = 2000
+    const val READ_MAX_BYTES = 2 * 1024 * 1024
+    const val READ_MAX_SCAN_LINES = 1_000_000
     const val GLOB_MAX_RESULTS = 1000
     const val GREP_MAX_RESULTS = 1000
+    const val GREP_MAX_FILE_BYTES = 2 * 1024 * 1024
+    const val GREP_MAX_LINE_CHARS = 2000
+    const val GREP_MATCH_BUDGET_BASE = 1_000_000L
+    const val GREP_MATCH_BUDGET_PER_CHAR = 100L
     const val BINARY_SNIFF_BYTES = 8000
     const val BASH_MAX_OUTPUT_CHARS = 50_000
     const val WEB_MAX_CHARS = 20_000
+    const val WEB_MAX_BYTES = 1_000_000
     const val WEBSEARCH_MAX_CHARS = 12_000
+    const val WEBSEARCH_MAX_HTML_BYTES = 1_000_000
+    const val WEBSEARCH_MAX_HTML_CHARS = 1_000_000
 }
 
-/** Honour the sandbox proxy from the ambient environment when present. */
-internal fun ambientProxySelector(): ProxySelector? {
+/**
+ * Build a JDK proxy from the ambient sandbox environment when present. Kept
+ * here so every HTTP-backed tool (OkHttp) shares the same proxy-awareness.
+ */
+internal fun proxyFromEnvironment(): Proxy? {
     val raw = System.getenv("https_proxy")
         ?: System.getenv("HTTPS_PROXY")
         ?: System.getenv("http_proxy")
@@ -40,7 +53,7 @@ internal fun ambientProxySelector(): ProxySelector? {
         val uri = URI(if (raw.contains("://")) raw else "http://$raw")
         val host = uri.host ?: return null
         val port = if (uri.port > 0) uri.port else 80
-        ProxySelector.of(InetSocketAddress(host, port))
+        Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port))
     } catch (e: Exception) {
         null
     }
@@ -70,6 +83,11 @@ internal fun unescapeHtmlEntities(text: String): String {
  * Resolve [rawPath] against the sandbox [ToolContext.cwd] and refuse anything
  * that normalizes outside of it. This is the single choke point every
  * path-taking tool goes through.
+ *
+ * The lexical `..`/absolute check is necessary but not sufficient: `normalize()`
+ * never touches the filesystem, so a symlink inside cwd can point anywhere.
+ * [requireRealInside] closes that hole by canonicalizing the deepest existing
+ * ancestor of the candidate.
  */
 internal fun resolveInsideCwd(ctx: ToolContext, rawPath: String): Path {
     val cwd = ctx.cwd.toAbsolutePath().normalize()
@@ -77,7 +95,62 @@ internal fun resolveInsideCwd(ctx: ToolContext, rawPath: String): Path {
     if (resolved != cwd && !resolved.startsWith(cwd)) {
         throw IllegalArgumentException("Path escapes the working directory: $rawPath")
     }
+    requireRealInside(cwd, resolved, rawPath)
     return resolved
+}
+
+/**
+ * Canonical symlink guard: resolve the deepest *existing* ancestor of
+ * [candidate] with [Path.toRealPath] and require it to equal or live under the
+ * real path of [cwd]. A symlinked ancestor that escapes the sandbox is rejected;
+ * a symlink that still resolves back inside cwd is allowed. Any failure to
+ * canonicalize counts as an escape.
+ */
+internal fun requireRealInside(cwd: Path, candidate: Path, rawPath: String) {
+    val realCwd = try {
+        cwd.toRealPath()
+    } catch (e: Exception) {
+        throw IllegalArgumentException("Path escapes the working directory: $rawPath")
+    }
+    var ancestor: Path? = candidate
+    while (ancestor != null && !Files.exists(ancestor, LinkOption.NOFOLLOW_LINKS)) {
+        ancestor = ancestor.parent
+    }
+    val realAncestor = try {
+        ancestor?.toRealPath()
+    } catch (e: Exception) {
+        null
+    } ?: throw IllegalArgumentException("Path escapes the working directory: $rawPath")
+
+    if (realAncestor != realCwd && !realAncestor.startsWith(realCwd)) {
+        throw IllegalArgumentException("Path escapes the working directory: $rawPath")
+    }
+}
+
+/** True when the path links to a symlink or a non-regular file (FIFO, socket, device). */
+internal fun isNonRegularOrSymlink(path: Path): Boolean =
+    Files.isSymbolicLink(path) || !Files.isRegularFile(path)
+
+private val BINARY_EXTENSIONS = listOf(
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", ".gz", ".tar",
+    ".jar", ".class", ".so", ".dylib", ".dll", ".exe", ".bin", ".woff", ".woff2",
+    ".ttf", ".otf", ".mp3", ".mp4", ".mov", ".avi", ".wasm",
+)
+
+/**
+ * Cheap binary sniff shared by `read` and `grep`: a known binary extension or a
+ * NUL byte in the first [Limits.BINARY_SNIFF_BYTES] bytes. Failures are treated
+ * as binary so an unreadable file is never streamed as text.
+ */
+internal fun looksBinary(path: Path): Boolean {
+    val name = path.fileName?.toString()?.lowercase() ?: return true
+    if (BINARY_EXTENSIONS.any { name.endsWith(it) }) return true
+    return try {
+        val bytes = Files.newInputStream(path).use { it.readNBytes(Limits.BINARY_SNIFF_BYTES) }
+        bytes.any { it == 0.toByte() }
+    } catch (e: Exception) {
+        true
+    }
 }
 
 /** Path relative to cwd, using forward slashes for stable display. */
@@ -119,6 +192,10 @@ internal fun JsonObject.stringList(key: String): List<String> {
 
 internal fun capNote(shown: Int, total: Int, what: String): String =
     if (total > shown) "\n\n…[${what}: showing $shown of $total]" else ""
+
+/** Unified character-cap marker shared by the HTTP-backed tools. */
+internal fun charCapNote(label: String, limit: Int): String =
+    "\n\n…[$label: truncated at $limit chars]"
 
 /** Line contents of [text], ignoring a single trailing newline. */
 internal fun splitLines(text: String): List<String> =

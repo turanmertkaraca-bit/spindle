@@ -1,20 +1,20 @@
 package dev.spindle.core.agent
 
-import dev.spindle.core.model.Message
-import dev.spindle.core.model.MessageId
+import dev.spindle.core.model.Ids
 import dev.spindle.core.model.Part
 import dev.spindle.core.model.PartId
-import dev.spindle.core.model.Role
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.provider.ProviderRegistry
 import dev.spindle.core.store.SessionStore
+import dev.spindle.core.event.AgentEvent
 import dev.spindle.core.event.EventBus
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collect
 
 /**
  * Context management. [trim] shrinks the *content* of old turns without changing
  * the message count (safe: the model still sees the shape of the conversation).
- * [compact] replaces everything before the recent tail with one summary message.
+ * [compact] folds everything before the recent tail into one summary message.
  *
  * Both are conservative: the most recent turns and any open tool call are never
  * touched, because removing them breaks the assistant/tool pairing the providers
@@ -56,8 +56,9 @@ object Compaction {
     }
 
     /**
-     * Summarize the head of the session into one assistant message. Returns true
-     * when a compaction actually happened. A single summarization request is made
+     * Fold the head of the session into a single summary at the head of the
+     * conversation, leaving the recent tail verbatim. Returns true when a
+     * compaction actually happened. A single summarization request is made
      * against the cheapest available model; failures fall back to a deterministic
      * extract without calling the provider.
      */
@@ -72,7 +73,7 @@ object Compaction {
         if (messages.size <= KEEP_RECENT + 2) return false
 
         val head = messages.dropLast(KEEP_RECENT)
-        val tail = messages.takeLast(KEEP_RECENT)
+        if (head.isEmpty()) return false
         val headText = head.joinToString("\n\n") { m ->
             m.role.name.lowercase() + ": " + m.parts.joinToString(" ") { p ->
                 when (p) {
@@ -85,21 +86,21 @@ object Compaction {
         }
 
         val summary = summarize(modelRef, providers, headText)
-        val summaryMsg = Message(
-            id = MessageId("msg_" + dev.spindle.core.model.Ids.new("cmp")),
-            sessionId = sessionId,
-            role = Role.ASSISTANT,
-            parts = listOf(Part.Text(PartId(dev.spindle.core.model.Ids.new("prt")), AgentLoop.COMPACT_MARKER + " " + summary)),
-            createdAt = System.currentTimeMillis(),
+        val summaryPart = Part.Text(
+            PartId(Ids.new("prt")),
+            AgentLoop.COMPACT_MARKER + " " + summary,
         )
 
-        // Rebuild the session: summary + recent tail.
-        store.messages(sessionId).forEach { store.updateMessage(it.copy(parts = emptyList())) }
-        // Simplest correct approach with the current store SPI: delete by rewriting.
-        // (The SQLite store keeps history, so we mark compacted messages as empty parts
-        //  and prepend the summary, preserving ids for any UI references.)
-        store.appendMessage(summaryMsg)
-        bus.emit(dev.spindle.core.event.AgentEvent.MessageCreated(sessionId, summaryMsg.id.value, "assistant"))
+        // The store SPI has no insert-at-position, so the summary takes over the
+        // first head message and the rest of the head is emptied. The tail is
+        // never touched, which keeps the current user message and provider
+        // assistant/tool pairing intact.
+        val first = head.first()
+        store.updateMessage(first.copy(parts = listOf(summaryPart)))
+        bus.emit(AgentEvent.PartUpdated(sessionId, first.id.value, summaryPart))
+        for (m in head.drop(1)) {
+            if (m.parts.isNotEmpty()) store.updateMessage(m.copy(parts = emptyList()))
+        }
         return true
     }
 
@@ -119,6 +120,8 @@ object Compaction {
                 if (ev is dev.spindle.core.provider.ProviderEvent.Failure) throw RuntimeException(ev.message)
             }
             sb.toString().ifBlank { extract(text) }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Throwable) {
             extract(text)
         }

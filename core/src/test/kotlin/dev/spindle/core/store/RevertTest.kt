@@ -77,6 +77,25 @@ class RevertTest {
     }
 
     @Test
+    fun `revert refuses a symlinked path that escapes cwd`() = withTempDir { cwd ->
+        val outside = Files.createTempDirectory("revert-outside")
+        try {
+            val link = cwd.resolve("link")
+            try {
+                Files.createSymbolicLink(link, outside)
+            } catch (e: Exception) {
+                return@withTempDir
+            }
+            val result = Reverter.revert(snapshot("link/escape.txt", "x"), cwd)
+
+            assertIs<RevertResult.Failed>(result)
+            assertTrue(!Files.exists(outside.resolve("escape.txt")))
+        } finally {
+            outside.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
     fun `revertLatest returns no snapshot when none was recorded`() = runTest {
         val cwd = Files.createTempDirectory("revert-test")
         try {

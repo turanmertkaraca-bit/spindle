@@ -13,6 +13,12 @@ import java.nio.file.Files
 /**
  * Exact-string replacement in a file. Fails loudly when the target is missing
  * or (without `replaceAll`) ambiguous, and reports a unified-diff-ish summary.
+ *
+ * Match semantics: occurrences are found left-to-right and do **not** overlap,
+ * so a self-overlapping needle (e.g. `"aa"` in `"aaa"`) counts once and is
+ * replaced once. The replacement is rebuilt from the same occurrence list used
+ * for the uniqueness check, so a reported match can never silently turn into a
+ * different number of applied edits.
  */
 class EditTool : Tool {
     override val spec = ToolSpec(
@@ -74,18 +80,19 @@ class EditTool : Tool {
             )
         }
 
-        val updated = if (replaceAll) {
-            original.replace(oldString, newString)
-        } else {
-            original.replaceFirst(oldString, newString)
-        }
+        // Matches are non-overlapping and applied left-to-right. Rebuild from the
+        // same occurrence list used for counting so the applied replacements can
+        // never disagree with the reported match count (a self-overlapping
+        // oldString such as "aa" in "aaa" counts once and replaces once).
+        val selected = if (replaceAll) occurrences else occurrences.take(1)
+        val updated = applyReplacements(original, selected, oldString, newString)
 
         val rel = path.displayPath(ctx.cwd)
         val snapshotId = recordSnapshot(ctx, path, rel)
 
         return try {
             Files.writeString(path, updated, StandardCharsets.UTF_8)
-            val applied = if (replaceAll) occurrences.size else 1
+            val applied = selected.size
             val diff = buildDiff(
                 relPath = rel,
                 original = original,
@@ -94,15 +101,20 @@ class EditTool : Tool {
                 occurrences = occurrences,
                 replaceAll = replaceAll,
             )
-            val added = splitLines(newString).size * applied
-            val removed = splitLines(oldString).size * applied
-            val startLine = lineNumberAt(original, occurrences.first())
+            // Count only lines that actually changed. Counting the whole
+            // old/new blocks over-reports a multi-line edit whose middle line
+            // changed (e.g. "a\nb\nc" -> "a\nB\nc" is +1/-1, not +3/-3).
+            val stats = lineStats(oldString, newString)
+            val added = stats.added * applied
+            val removed = stats.removed * applied
+            val matchLine = lineNumberAt(original, selected.first())
+            val firstChanged = matchLine + stats.prefix
             val edit = FileEdit(
                 id = Ids.new("edit"),
                 sessionId = ctx.sessionId,
                 path = rel,
-                startLine = startLine,
-                endLine = if (added == 0) null else startLine + added - 1,
+                startLine = firstChanged,
+                endLine = if (stats.added == 0) null else firstChanged + stats.added - 1,
                 added = added,
                 removed = removed,
                 unifiedDiff = diff,
@@ -119,6 +131,55 @@ class EditTool : Tool {
         } catch (e: Exception) {
             ToolOutcome("Failed to write $raw: ${e.message}", isError = true)
         }
+    }
+
+    /** Apply [occurrences] (ascending) in one pass, splicing [newString] over each. */
+    private fun applyReplacements(
+        original: String,
+        occurrences: List<Int>,
+        oldString: String,
+        newString: String,
+    ): String {
+        if (occurrences.isEmpty()) return original
+        val removedChars = occurrences.size.toLong() * oldString.length
+        val capacity = (original.length - removedChars + occurrences.size.toLong() * newString.length)
+            .coerceAtLeast(0L)
+            .coerceAtMost(Int.MAX_VALUE.toLong())
+            .toInt()
+        val builder = StringBuilder(capacity)
+        var cursor = 0
+        for (index in occurrences) {
+            builder.append(original, cursor, index)
+            builder.append(newString)
+            cursor = index + oldString.length
+        }
+        builder.append(original, cursor, original.length)
+        return builder.toString()
+    }
+
+    /**
+     * Line-level diff stats for a single replacement: trims the common line
+     * prefix/suffix from the old and new blocks so unchanged surrounding lines
+     * are not counted as added/removed.
+     */
+    private fun lineStats(oldString: String, newString: String): LineStats {
+        val oldLines = oldString.split('\n')
+        val newLines = newString.split('\n')
+        var prefix = 0
+        while (prefix < oldLines.size && prefix < newLines.size && oldLines[prefix] == newLines[prefix]) {
+            prefix++
+        }
+        var suffix = 0
+        while (suffix < oldLines.size - prefix && suffix < newLines.size - prefix &&
+            oldLines[oldLines.size - 1 - suffix] == newLines[newLines.size - 1 - suffix]
+        ) {
+            suffix++
+        }
+        return LineStats(
+            added = newLines.size - prefix - suffix,
+            removed = oldLines.size - prefix - suffix,
+            prefix = prefix,
+        )
     }
 
     private fun findOccurrences(haystack: String, needle: String): List<Int> {
@@ -162,4 +223,6 @@ class EditTool : Tool {
         }
         return line
     }
+
+    private data class LineStats(val added: Int, val removed: Int, val prefix: Int)
 }

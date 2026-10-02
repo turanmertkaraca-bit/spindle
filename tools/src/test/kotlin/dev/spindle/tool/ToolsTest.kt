@@ -15,6 +15,8 @@ import dev.spindle.core.tool.ToolProgress
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import java.io.File
+import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
@@ -576,6 +578,176 @@ class ToolsTest {
             assertEquals("77", outcome.metadata["tokens"])
             assertNotNull(outcome.metadata["cost"])
         }
+    }
+
+    @Test
+    fun symlinkDirectoryEscapeIsRejected() = runTest {
+        withTempDir { dir ->
+            val outside = Files.createTempDirectory("spindle-outside")
+            try {
+                Files.writeString(outside.resolve("secret.txt"), "TOP SECRET")
+                val link = Files.createSymbolicLink(dir.resolve("link"), outside)
+                val ctx = FakeToolContext(dir)
+
+                val read = ReadTool().run(obj("""{"path":"link/secret.txt"}"""), ctx)
+                assertTrue(read.isError, read.output)
+                assertTrue(read.output.contains("escape", ignoreCase = true), read.output)
+
+                val write = WriteTool().run(obj("""{"path":"link/new.txt","content":"pwned"}"""), ctx)
+                assertTrue(write.isError, write.output)
+                assertFalse(Files.exists(outside.resolve("new.txt")), "write escaped through symlink")
+
+                val edit = EditTool().run(
+                    obj("""{"path":"link/secret.txt","oldString":"TOP","newString":"BOTTOM"}"""),
+                    ctx,
+                )
+                assertTrue(edit.isError, edit.output)
+                assertEquals("TOP SECRET", Files.readString(outside.resolve("secret.txt")))
+
+                val patch = ApplyPatchTool().run(
+                    obj("""{"patchText":"*** Begin Patch\n*** Add File: link/evil.txt\n+x\n*** End Patch"}"""),
+                    ctx,
+                )
+                assertTrue(patch.isError, patch.output)
+                assertFalse(Files.exists(outside.resolve("evil.txt")), "patch escaped through symlink")
+
+                val shell = FakeShell(ShellResult(0, "must not run"))
+                val bash = BashTool(shell).run(obj("""{"command":"echo hi","cwd":"link"}"""), ctx)
+                assertTrue(bash.isError, bash.output)
+                assertEquals(0, shell.calls)
+
+                assertTrue(Files.isSymbolicLink(link))
+            } finally {
+                outside.toFile().deleteRecursively()
+            }
+        }
+    }
+
+    @Test
+    fun symlinkedFilesAndDirsAreSkippedByGlobAndGrep() = runTest {
+        withTempDir { dir ->
+            val outside = Files.createTempDirectory("spindle-outside")
+            try {
+                Files.writeString(outside.resolve("secret.txt"), "needle-secret\n")
+                Files.createSymbolicLink(dir.resolve("alias.txt"), outside.resolve("secret.txt"))
+                Files.createSymbolicLink(dir.resolve("linkdir"), outside)
+                Files.writeString(dir.resolve("real.txt"), "public needle\n")
+                val ctx = FakeToolContext(dir)
+
+                val glob = GlobTool().run(obj("""{"pattern":"**/*.txt"}"""), ctx)
+                assertFalse(glob.isError, glob.output)
+                assertTrue(glob.output.contains("real.txt"), glob.output)
+                assertFalse(glob.output.contains("alias.txt"), glob.output)
+                assertFalse(glob.output.contains("linkdir"), glob.output)
+
+                val grep = GrepTool().run(obj("""{"pattern":"needle"}"""), ctx)
+                assertFalse(grep.isError, grep.output)
+                assertFalse(grep.output.contains("alias.txt"), grep.output)
+                assertFalse(grep.output.contains("secret"), grep.output)
+            } finally {
+                outside.toFile().deleteRecursively()
+            }
+        }
+    }
+
+    @Test
+    fun readRefusesOversizedAndBinaryFiles() = runTest {
+        withTempDir { dir ->
+            val ctx = FakeToolContext(dir)
+            Files.write(dir.resolve("big.txt"), ByteArray(Limits.READ_MAX_BYTES + 1) { 'a'.toByte() })
+            val started = System.nanoTime()
+            val big = ReadTool().run(obj("""{"path":"big.txt"}"""), ctx)
+            val elapsedMs = (System.nanoTime() - started) / 1_000_000
+            assertTrue(big.isError, big.output)
+            assertTrue(big.output.contains("too large", ignoreCase = true), big.output)
+            assertTrue(elapsedMs < 5_000, "oversize guard took ${elapsedMs}ms")
+            assertEquals("true", big.metadata["truncated"])
+
+            Files.write(dir.resolve("nul.bin"), byteArrayOf('a'.toByte(), 0, 'b'.toByte()))
+            val binary = ReadTool().run(obj("""{"path":"nul.bin"}"""), ctx)
+            assertTrue(binary.isError, binary.output)
+            assertTrue(binary.output.contains("binary", ignoreCase = true), binary.output)
+        }
+    }
+
+    @Test
+    fun grepBoundsCatastrophicBacktracking() = runTest {
+        withTempDir { dir ->
+            val ctx = FakeToolContext(dir)
+            Files.writeString(dir.resolve("redos.txt"), "a".repeat(40_000) + "b\n")
+            val started = System.nanoTime()
+            val outcome = GrepTool().run(obj("""{"pattern":"(a+)+$"}"""), ctx)
+            val elapsedMs = (System.nanoTime() - started) / 1_000_000
+            assertTrue(elapsedMs < 5_000, "grep took ${elapsedMs}ms on a pathological pattern")
+            assertTrue(outcome.isError, "expected the regex budget to abort, got: ${outcome.output}")
+        }
+    }
+
+    @Test
+    fun applyPatchPartialFailureRevertsAllWrites() = runTest {
+        withTempDir { dir ->
+            val ctx = FakeToolContext(dir)
+            Files.writeString(dir.resolve("blocker"), "orig")
+            val outcome = ApplyPatchTool().run(
+                obj(
+                    """
+                    {"patchText":"*** Begin Patch\n*** Add File: ok.txt\n+ok\n*** Add File: blocker/inside.txt\n+x\n*** End Patch"}
+                    """.trimIndent(),
+                ),
+                ctx,
+            )
+            assertTrue(outcome.isError, outcome.output)
+            assertFalse(Files.exists(dir.resolve("ok.txt")), "partial write must be rolled back")
+            assertTrue(Files.isRegularFile(dir.resolve("blocker")))
+            assertEquals("orig", Files.readString(dir.resolve("blocker")))
+        }
+    }
+
+    @Test
+    fun webfetchRejectsLoopbackTargets() = runTest {
+        withTempDir { dir ->
+            val ctx = FakeToolContext(dir)
+            val loopback = WebFetchTool().run(obj("""{"url":"http://127.0.0.1:1/"}"""), ctx)
+            assertTrue(loopback.isError, loopback.output)
+            assertTrue(loopback.output.contains("Refusing", ignoreCase = true), loopback.output)
+
+            val localhost = WebFetchTool().run(obj("""{"url":"http://localhost/"}"""), ctx)
+            assertTrue(localhost.isError, localhost.output)
+        }
+    }
+
+    @Test
+    fun webfetchRejectsRedirectToLoopback() = runTest {
+        val transport = object : HttpResponseTransport {
+            override suspend fun get(uri: URI, maxBytes: Int): HttpResponseData {
+                assertEquals("8.8.8.8", uri.host)
+                return HttpResponseData(
+                    status = 302,
+                    location = "http://127.0.0.1:1/",
+                    body = ByteArray(0),
+                    truncated = false,
+                )
+            }
+        }
+        val result = fetchFollowingRedirects(URI("http://8.8.8.8/"), transport, 1024)
+        assertTrue(result is FetchResult.Failure, "expected redirect rejection, got: $result")
+        assertTrue(
+            (result as FetchResult.Failure).message.contains("Refusing", ignoreCase = true),
+            result.message,
+        )
+    }
+
+    @Test
+    fun sourceDoesNotUseJdkHttpClient() {
+        val root = listOf(
+            File("src/main/kotlin/dev/spindle/tool"),
+            File("tools/src/main/kotlin/dev/spindle/tool"),
+        ).firstOrNull { it.isDirectory } ?: return
+        val offenders = root.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .filter { it.readText().contains("java.net.http") }
+            .toList()
+        assertTrue(offenders.isEmpty(), "still reference java.net.http: $offenders")
     }
 
     @Test

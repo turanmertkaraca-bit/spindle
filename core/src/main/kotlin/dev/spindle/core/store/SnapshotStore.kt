@@ -18,7 +18,7 @@ interface SnapshotStore {
 
     suspend fun delete(ids: List<String>)
 
-    /** Drop snapshots older than [keep] per session to stay bounded. Returns removed count. */
+    /** Keep at most the newest [keep] snapshots per session. Returns removed count. */
     suspend fun prune(keep: Int = 500): Int
 }
 
@@ -45,11 +45,19 @@ class InMemorySnapshotStore : SnapshotStore {
     }
 
     override suspend fun prune(keep: Int): Int {
+        val cap = keep.coerceAtLeast(0)
         synchronized(lock) {
-            if (items.size <= keep) return 0
-            val removed = items.size - keep
-            repeat(removed) { items.removeAt(0) }
-            return removed
+            val removeIds = HashSet<String>()
+            for ((_, snapshots) in items.groupBy { it.sessionId }) {
+                if (snapshots.size <= cap) continue
+                snapshots.sortedBy { it.createdAt }
+                    .take(snapshots.size - cap)
+                    .forEach { removeIds += it.id }
+            }
+            if (removeIds.isEmpty()) return 0
+            val before = items.size
+            items.removeAll { it.id in removeIds }
+            return before - items.size
         }
     }
 }

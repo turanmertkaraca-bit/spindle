@@ -7,6 +7,14 @@ import kotlinx.coroutines.delay
 object Retry {
     fun isRetryable(message: String): Boolean {
         val m = message.lowercase()
+        // Explicit non-retryable signals win over the retryable markers: a 500
+        // buried in "invalid api key (500)" or a 512 in "context length 512
+        // exceeded" must not be retried.
+        if (Regex("\\b40[0134]\\b").containsMatchIn(m)) return false
+        if ("invalid api key" in m) return false
+        if ("unauthorized" in m) return false
+        if ("context length" in m) return false
+        if ("content filter" in m) return false
         return when {
             // HTTP-ish status markers the adapters embed in Failure messages.
             Regex("\\b429\\b").containsMatchIn(m) -> true
@@ -18,13 +26,7 @@ object Retry {
             "temporarily unavailable" in m -> true
             "overloaded" in m -> true
             "rate limit" in m -> true
-            "eof" in m -> true
-            // Explicit non-retryable signals.
-            Regex("\\b40[0134]\\b").containsMatchIn(m) -> false
-            "invalid api key" in m -> false
-            "unauthorized" in m -> false
-            "context length" in m -> false
-            "content filter" in m -> false
+            Regex("\\beof\\b").containsMatchIn(m) -> true
             else -> false
         }
     }

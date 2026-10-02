@@ -49,6 +49,16 @@ class RetryTest {
     }
 
     @Test
+    fun `terminal markers beat embedded status codes`() {
+        assertFalse(Retry.isRetryable("context length 512 exceeded"))
+        assertFalse(Retry.isRetryable("invalid api key (500)"))
+        assertFalse(Retry.isRetryable("thereof"))
+        assertFalse(Retry.isRetryable("error 1500"))
+        assertFalse(Retry.isRetryable("the code sha512 does not match"))
+        assertTrue(Retry.isRetryable("HTTP 500 internal server error"))
+    }
+
+    @Test
     fun `backoff grows with attempts and stays bounded`() {
         val base = 500L
         val cap = 8_000L
