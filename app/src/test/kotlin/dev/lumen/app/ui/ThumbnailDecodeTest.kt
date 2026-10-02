@@ -67,6 +67,13 @@ class ThumbnailDecodeTest {
     }
 
     @Test
+    fun `looksLikeImage recognizes real signatures and rejects text`() {
+        assertTrue(looksLikeImage(pngBytes(4, 4)))
+        assertTrue(!looksLikeImage(ByteArray(0)))
+        assertTrue(!looksLikeImage("not an image".toByteArray()))
+    }
+
+    @Test
     fun `hashKey is stable and distinguishes payloads`() {
         val a = Base64.encodeToString(ByteArray(64) { it.toByte() }, Base64.NO_WRAP)
         val b = Base64.encodeToString(ByteArray(64) { (it + 1).toByte() }, Base64.NO_WRAP)

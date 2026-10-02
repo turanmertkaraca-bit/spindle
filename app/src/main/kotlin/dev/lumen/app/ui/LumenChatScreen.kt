@@ -908,6 +908,7 @@ internal fun hashKey(base64: String): String {
  */
 internal fun decodeThumbnail(bytes: ByteArray, reqW: Int, reqH: Int): Bitmap? {
     if (bytes.isEmpty()) return null
+    if (!looksLikeImage(bytes)) return null
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
@@ -917,6 +918,31 @@ internal fun decodeThumbnail(bytes: ByteArray, reqW: Int, reqH: Int): Bitmap? {
         inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight, w, h)
     }
     return runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) }.getOrNull()
+}
+
+/**
+ * Cheap magic-byte check for the image formats [BitmapFactory] can decode. This
+ * keeps garbage from reaching the platform decoder (whose JVM shadow is more
+ * permissive than a real device) and is also correct on device.
+ */
+internal fun looksLikeImage(bytes: ByteArray): Boolean {
+    fun startsWith(vararg sig: Int): Boolean {
+        if (bytes.size < sig.size) return false
+        for (i in sig.indices) if ((bytes[i].toInt() and 0xff) != sig[i]) return false
+        return true
+    }
+    // PNG, JPEG, GIF, WEBP (RIFF....WEBP), BMP.
+    if (startsWith(0x89, 0x50, 0x4e, 0x47)) return true
+    if (startsWith(0xff, 0xd8, 0xff)) return true
+    if (startsWith(0x47, 0x49, 0x46, 0x38)) return true
+    if (startsWith(0x52, 0x49, 0x46, 0x46) && bytes.size >= 12 &&
+        (bytes[8].toInt() and 0xff) == 0x57 && (bytes[9].toInt() and 0xff) == 0x45 &&
+        (bytes[10].toInt() and 0xff) == 0x42 && (bytes[11].toInt() and 0xff) == 0x50
+    ) {
+        return true
+    }
+    if (startsWith(0x42, 0x4d)) return true
+    return false
 }
 
 /**
