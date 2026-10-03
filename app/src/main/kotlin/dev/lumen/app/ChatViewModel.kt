@@ -78,6 +78,8 @@ data class SessionRow(
     val preview: String,
     val pinned: Boolean = false,
     val archived: Boolean = false,
+    /** Normalized tags on the session, oldest first; used for chips and filtering. */
+    val tags: List<String> = emptyList(),
 )
 
 /**
@@ -218,6 +220,13 @@ data class ChatState(
 
     /** Home shows archived sessions when this is on (default hides them). */
     val showArchived: Boolean = false,
+    /**
+     * Active tag filters on Home. A session matches when it carries ANY of
+     * these tags (OR, not AND), so adding a tag widens the listing.
+     */
+    val tagFilter: Set<String> = emptySet(),
+    /** Every tag present on a loaded session, sorted, for the filter bar. */
+    val availableTags: List<String> = emptyList(),
     /** Full-text hits for [searchQuery]; null when no search is active. */
     val search: List<SearchHit>? = null,
     /** The text currently in the home search field. */
@@ -962,6 +971,50 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * Add [tag] to session [id]. Tags are normalized (trimmed, lowercased),
+     * blank input is ignored, duplicates collapse, the tag is capped at
+     * [MAX_TAG_LENGTH] and each session at [MAX_TAGS_PER_SESSION].
+     */
+    fun addSessionTag(id: String, tag: String) {
+        val clean = normalizeTag(tag) ?: return
+        viewModelScope.launch {
+            val session = store.session(SessionId(id)) ?: return@launch
+            val current = normalizedTags(session.tags)
+            if (clean in current || current.size >= MAX_TAGS_PER_SESSION) return@launch
+            store.updateSession(session.copy(tags = current + clean))
+            refreshSessions()
+        }
+    }
+
+    /** Remove [tag] from session [id]; a tag the session does not carry is a no-op. */
+    fun removeSessionTag(id: String, tag: String) {
+        val clean = normalizeTag(tag) ?: return
+        viewModelScope.launch {
+            val session = store.session(SessionId(id)) ?: return@launch
+            val current = normalizedTags(session.tags)
+            if (clean !in current) return@launch
+            store.updateSession(session.copy(tags = current - clean))
+            refreshSessions()
+        }
+    }
+
+    /** Toggle [tag] in the Home filter; blank input is ignored. */
+    fun toggleTagFilter(tag: String) {
+        val clean = normalizeTag(tag) ?: return
+        val current = _state.value.tagFilter
+        val next = if (clean in current) current - clean else current + clean
+        _state.value = _state.value.copy(tagFilter = next)
+        viewModelScope.launch { refreshSessions() }
+    }
+
+    /** Drop every active tag filter. */
+    fun clearTagFilters() {
+        if (_state.value.tagFilter.isEmpty()) return
+        _state.value = _state.value.copy(tagFilter = emptySet())
+        viewModelScope.launch { refreshSessions() }
+    }
+
     /** Show or hide archived sessions on Home. */
     fun setShowArchived(on: Boolean) {
         _state.value = _state.value.copy(showArchived = on)
@@ -1040,10 +1093,25 @@ class ChatViewModel(
                     preview = preview,
                     pinned = s.pinned,
                     archived = s.archived,
+                    tags = normalizedTags(s.tags),
                 )
             }
-        _state.value = _state.value.copy(sessions = rows)
+        _state.value = _state.value.copy(
+            sessions = filterSessionsByTags(rows, _state.value.tagFilter),
+            availableTags = rows.asSequence().flatMap { it.tags }.distinct().sorted().toList(),
+        )
     }
+
+    /** Trim/lowercase a tag, rejecting blank input and capping its length. */
+    private fun normalizeTag(raw: String): String? {
+        val clean = raw.trim().lowercase()
+        if (clean.isEmpty()) return null
+        return clean.take(MAX_TAG_LENGTH)
+    }
+
+    /** Normalized, deduped tags for display, capped at [MAX_TAGS_PER_SESSION]. */
+    private fun normalizedTags(tags: List<String>): List<String> =
+        tags.mapNotNull { normalizeTag(it) }.distinct().take(MAX_TAGS_PER_SESSION)
 
     // ---- file peek ----
 
@@ -1900,6 +1968,12 @@ class ChatViewModel(
         /** Upper bound on retained diagnostics lines. */
         const val MAX_DIAG_LINES = 300
 
+        /** Longest normalized tag accepted; longer input is truncated. */
+        const val MAX_TAG_LENGTH = 32
+
+        /** Most tags one session may carry; further adds are ignored. */
+        const val MAX_TAGS_PER_SESSION = 10
+
         /** Storage scan budget, shared across every measured tree. */
         private const val SCAN_BUDGET_MS = 20_000L
         private const val MAX_SCAN_DEPTH = 40
@@ -1952,6 +2026,16 @@ class ChatViewModel(
             }
     }
 }
+
+/**
+ * The sessions visible under a set of active tag filters. A session matches when
+ * it carries ANY of [selectedTags] (OR, not AND), so selecting more tags widens
+ * the listing instead of narrowing it. An empty selection returns every row.
+ * Pure so filtering is unit-testable without a store or Compose.
+ */
+internal fun filterSessionsByTags(rows: List<SessionRow>, selectedTags: Set<String>): List<SessionRow> =
+    if (selectedTags.isEmpty()) rows
+    else rows.filter { row -> row.tags.any { it in selectedTags } }
 
 /**
  * Pure backlink matching, separated so it is unit-testable without a store.

@@ -37,6 +37,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -106,6 +107,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.Backlink
@@ -435,57 +437,36 @@ fun LumenChatScreen(
                 Column(Modifier.fillMaxSize()) {
                     if (onHome != null) {
                         Row(
-                            Modifier.fillMaxWidth().padding(start = 10.dp, end = 16.dp, top = 6.dp),
+                            Modifier.fillMaxWidth().padding(start = 10.dp, end = 12.dp, top = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(
-                                "‹",
-                                color = colors.dim, fontFamily = Mono, fontSize = 20.sp,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .clickable { onHome() }
-                                    .padding(horizontal = 8.dp, vertical = 2.dp)
-                                    .testTag("home"),
+                            BarControl(
+                                label = "\u2039", tag = "home", colors = colors,
+                                tint = colors.dim, fontSize = 17.sp, onClick = onHome,
                             )
-                            Spacer(Modifier.width(6.dp))
+                            Spacer(Modifier.width(10.dp))
                             Text(
                                 title.ifBlank { "chat" },
                                 color = colors.fg, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f),
                             )
-                            if (onFork != null) {
-                                Text(
-                                    "fork",
-                                    color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable { onFork() }
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                                        .testTag("fork"),
-                                )
-                            }
-                            if (onFiles != null) {
-                                Text(
-                                    "files",
-                                    color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable { onFiles() }
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                                        .testTag("open-files"),
-                                )
-                            }
-                            if (onTerminal != null) {
-                                Text(
-                                    "shell",
-                                    color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable { onTerminal() }
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                                        .testTag("open-terminal"),
-                                )
+                            Spacer(Modifier.width(10.dp))
+                            // A fixed row of equally-treated controls, so a long
+                            // title ellipsizes instead of crowding the buttons.
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (onFork != null) {
+                                    BarControl("fork", "fork", colors, colors.accent, onClick = onFork)
+                                }
+                                if (onFiles != null) {
+                                    BarControl("files", "open-files", colors, colors.accent, onClick = onFiles)
+                                }
+                                if (onTerminal != null) {
+                                    BarControl("shell", "open-terminal", colors, colors.accent, onClick = onTerminal)
+                                }
                             }
                         }
                     }
@@ -627,6 +608,37 @@ private fun NewCue(colors: LumenColors, onClick: () -> Unit) {
             "\u2193 new",
             color = colors.water, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 0.6.sp,
         )
+    }
+}
+
+/**
+ * A top-bar affordance with a real touch target. Bare monospace text was easy to
+ * miss; this boxes every action (back, fork, files, shell) in the same surface
+ * pill with a >=44dp target so all four read and tap identically.
+ */
+@Composable
+private fun BarControl(
+    label: String,
+    tag: String,
+    colors: LumenColors,
+    tint: Color,
+    fontSize: TextUnit = 12.sp,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(11.dp)
+    Box(
+        Modifier
+            .heightIn(min = 44.dp)
+            .widthIn(min = 44.dp)
+            .clip(shape)
+            .background(colors.surface)
+            .border(1.dp, colors.rule, shape)
+            .clickable { onClick() }
+            .padding(horizontal = 11.dp)
+            .testTag(tag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = tint, fontFamily = Mono, fontSize = fontSize, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -1974,6 +1986,10 @@ private fun Composer(
     onCompleteFiles: (String) -> List<String> = { emptyList() },
 ) {
     val canSend = input.isNotBlank() || attachments.isNotEmpty()
+    // The field owns its focus; the placeholder hides while focused so the caret
+    // and its first glyph can never overlap the hint.
+    val fieldInteraction = remember { MutableInteractionSource() }
+    val inputFocused by fieldInteraction.collectIsFocusedAsState()
     val atToken = remember(input) { AtToken.find(input)?.groupValues?.get(1) }
     // The completion walk can recurse the whole workspace, so it must never run
     // during composition. Hoist it into a LaunchedEffect keyed on the stable
@@ -2053,15 +2069,23 @@ private fun Composer(
                 )
                 Spacer(Modifier.width(8.dp))
             }
+            val fieldShape = RoundedCornerShape(50)
             Box(
                 Modifier.weight(1f)
-                    .clip(RoundedCornerShape(50))
+                    .clip(fieldShape)
                     .background(colors.surface)
-                    .border(1.dp, colors.rule, RoundedCornerShape(50))
-                    .padding(horizontal = 16.dp, vertical = 11.dp),
+                    // Focus ring: the rule hairline warms to the water accent the
+                    // moment the field takes focus, so the active input is obvious.
+                    .border(1.dp, if (inputFocused) colors.water else colors.rule, fieldShape)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
-                if (input.isEmpty()) {
-                    Text("ask the agent…", color = colors.faint, fontFamily = Mono, fontSize = 14.sp)
+                // A real placeholder: shown only while empty and unfocused, at the
+                // exact content origin of the field, so it never overlaps the caret.
+                if (input.isEmpty() && !inputFocused) {
+                    Text(
+                        "ask the agent…", color = colors.faint, fontFamily = Mono, fontSize = 14.sp,
+                        modifier = Modifier.testTag("composer-hint"),
+                    )
                 }
                 BasicTextField(
                     value = input,
@@ -2070,7 +2094,10 @@ private fun Composer(
                     textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 14.sp),
                     cursorBrush = SolidColor(colors.water),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
+                    // Never send while busy: the send affordance is a stop button
+                    // then, and the IME action must not race it into a double-send.
+                    keyboardActions = KeyboardActions(onSend = { if (canSend && !busy) onSend() }),
+                    interactionSource = fieldInteraction,
                     modifier = Modifier.fillMaxWidth().testTag("composer"),
                 )
             }
@@ -2087,19 +2114,23 @@ private fun Composer(
                     modifier = Modifier.clickable { onToggleTheme() }.padding(horizontal = 6.dp).testTag("theme"),
                 )
             }
+            // The primary action: a filled 44dp target. Idle-with-text is a bright
+            // spectral send; busy is a solid danger stop; blank-and-idle is a dim,
+            // bordered, disabled send so the control never disappears or shifts.
+            val actionShape = RoundedCornerShape(50)
             Box(
                 Modifier
                     .graphicsLayer { scaleX = scale; scaleY = scale }
-                    .size(42.dp)
-                    .clip(RoundedCornerShape(50))
+                    .size(44.dp)
+                    .clip(actionShape)
                     .background(
                         when {
-                            busy -> Brush.linearGradient(listOf(colors.danger(), colors.danger()))
+                            busy -> SolidColor(colors.danger())
                             canSend -> Brush.linearGradient(listOf(colors.bloomA, colors.bloomB, colors.bloomC))
-                            else -> Brush.linearGradient(listOf(colors.surface, colors.surface))
+                            else -> SolidColor(colors.surface)
                         },
                     )
-                    .then(if (!busy && !canSend) Modifier.border(1.dp, colors.rule, RoundedCornerShape(50)) else Modifier)
+                    .then(if (!busy && !canSend) Modifier.border(1.dp, colors.rule, actionShape) else Modifier)
                     .clickable(
                         enabled = busy || canSend,
                         interactionSource = interaction,
@@ -2216,7 +2247,7 @@ private fun HintNotice(message: String, colors: LumenColors) {
         Text(
             message, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
             maxLines = 2, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f).testTag("composer-hint"),
+            modifier = Modifier.weight(1f).testTag("composer-notice"),
         )
     }
 }

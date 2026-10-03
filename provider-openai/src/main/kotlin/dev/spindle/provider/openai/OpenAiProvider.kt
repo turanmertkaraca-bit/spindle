@@ -46,6 +46,110 @@ private val json = Json {
 
 private val JSON_MEDIA: MediaType = "application/json; charset=utf-8".toMediaType()
 
+// Sanity bounds for live `/models` metadata. Anything outside is ignored so a
+// malformed or future payload cannot poison a resolved model's capabilities.
+private const val MAX_CONTEXT_WINDOW = 100_000_000
+private const val MAX_OUTPUT_TOKENS = 1_000_000
+private const val MAX_PRICE_PER_M = 10_000.0
+
+// Pricing units are decided by schema key, never guessed from magnitude:
+//   * OpenRouter `pricing.*`  — USD per token, always scaled by 1e6.
+//   * models.dev `cost.*`     — USD per 1M tokens, used as-is.
+// A price that is implausible for its declared unit is dropped, so the embedded
+// snapshot wins rather than a wrong number. This is deliberate: a magnitude
+// threshold (e.g. "< 1.0 means per-token") misreads a legitimate cheap
+// per-1M price such as 0.05 when it arrives under `cost`, and would silently
+// reinterpret a per-token value >= 1 as if it were per-1M.
+private const val PER_TOKEN_SCALE = 1_000_000.0
+
+/**
+ * Live entries replace embedded ones by id; embedded-only ids are preserved so a
+ * default model always resolves even when the live listing omits it.
+ */
+private fun mergeById(embedded: List<ModelInfo>, live: List<ModelInfo>): List<ModelInfo> {
+    val merged = LinkedHashMap<String, ModelInfo>(embedded.size + live.size)
+    for (m in embedded) merged[m.id] = m
+    for (m in live) merged[m.id] = m
+    return merged.values.toList()
+}
+
+/**
+ * Overlay whichever capability/price/context fields the endpoint actually
+ * provides onto [base], leaving every omitted field untouched. Unknown keys and
+ * unexpected shapes are ignored rather than throwing.
+ */
+private fun enrichModel(base: ModelInfo, o: JsonObject): ModelInfo {
+    val caps = o["capabilities"] as? JsonObject
+    val pricing = o["pricing"] as? JsonObject
+    val cost = o["cost"] as? JsonObject
+    val top = o["top_provider"] as? JsonObject
+    val limit = o["limit"] as? JsonObject
+
+    val context = o["context_length"].boundedInt(1, MAX_CONTEXT_WINDOW)
+        ?: o["context_window"].boundedInt(1, MAX_CONTEXT_WINDOW)
+        ?: top?.get("context_length").boundedInt(1, MAX_CONTEXT_WINDOW)
+        ?: limit?.get("context").boundedInt(1, MAX_CONTEXT_WINDOW)
+    val maxOutput = o["max_output_tokens"].boundedInt(1, MAX_OUTPUT_TOKENS)
+        ?: top?.get("max_completion_tokens").boundedInt(1, MAX_OUTPUT_TOKENS)
+        ?: limit?.get("output").boundedInt(1, MAX_OUTPUT_TOKENS)
+
+    return base.copy(
+        label = o.str("name")?.takeIf { it.isNotBlank() } ?: base.label,
+        contextWindow = context ?: base.contextWindow,
+        maxOutputTokens = maxOutput ?: base.maxOutputTokens,
+        supportsTools = caps?.get("tools").bool() ?: o["tool_call"].bool() ?: base.supportsTools,
+        supportsReasoning = caps?.get("reasoning").bool() ?: o["reasoning"].bool() ?: base.supportsReasoning,
+        supportsVision = caps?.get("vision").bool() ?: inputHasImage(o) ?: base.supportsVision,
+        inputCostPerM = perTokenPrice(pricing?.get("prompt"))
+            ?: perMillionPrice(cost?.get("input")) ?: base.inputCostPerM,
+        outputCostPerM = perTokenPrice(pricing?.get("completion"))
+            ?: perMillionPrice(cost?.get("output")) ?: base.outputCostPerM,
+        cacheReadCostPerM = perTokenPrice(pricing?.get("input_cache_read") ?: pricing?.get("cache_read"))
+            ?: perMillionPrice(cost?.get("cache_read")) ?: base.cacheReadCostPerM,
+        cacheWriteCostPerM = perTokenPrice(pricing?.get("input_cache_write") ?: pricing?.get("cache_write"))
+            ?: perMillionPrice(cost?.get("cache_write")) ?: base.cacheWriteCostPerM,
+    )
+}
+
+/** OpenRouter-style USD-per-token price, unconditionally scaled to USD per 1M. */
+private fun perTokenPrice(el: JsonElement?): Double? {
+    val v = el.num() ?: return null
+    if (!v.isFinite() || v < 0.0) return null
+    return (v * PER_TOKEN_SCALE).takeIf { it.isFinite() && it <= MAX_PRICE_PER_M }
+}
+
+/** models.dev-style USD-per-1M price, accepted as-is. */
+private fun perMillionPrice(el: JsonElement?): Double? {
+    val v = el.num() ?: return null
+    if (!v.isFinite() || v < 0.0 || v > MAX_PRICE_PER_M) return null
+    return v
+}
+
+private fun inputHasImage(o: JsonObject): Boolean? {
+    val arch = o["architecture"] as? JsonObject
+    if (arch != null) {
+        val modalities = arch["input_modalities"] as? JsonArray
+        if (modalities != null) {
+            return modalities.any { (it as? JsonPrimitive)?.content?.contains("image") == true }
+        }
+        arch.str("modality")?.let { return it.contains("image") }
+    }
+    // models.dev advertises vision as `modalities.input` containing "image".
+    val inputs = (o["modalities"] as? JsonObject)?.get("input") as? JsonArray ?: return null
+    return inputs.any { (it as? JsonPrimitive)?.content?.contains("image") == true }
+}
+
+private fun JsonElement?.boundedInt(min: Int, max: Int): Int? {
+    val v = num()?.toInt() ?: return null
+    return v.takeIf { it in min..max }
+}
+
+private fun JsonElement?.num(): Double? =
+    (this as? JsonPrimitive)?.content?.toDoubleOrNull()
+
+private fun JsonElement?.bool(): Boolean? =
+    (this as? JsonPrimitive)?.content?.toBooleanStrictOrNull()
+
 /**
  * Streaming adapter for OpenAI-compatible `/chat/completions` endpoints.
  *
@@ -86,19 +190,21 @@ class OpenAiProvider(
                 val data = runCatching {
                     json.parseToJsonElement(text).jsonObject["data"] as? JsonArray
                 }.getOrNull() ?: return@runCatching defaultModels
+                val defaultsById = defaultModels.associateBy { it.id }
                 val mapped = data.mapNotNull { el ->
                     val o = el as? JsonObject ?: return@mapNotNull null
-                    val mid = o.str("id") ?: return@mapNotNull null
-                    ModelInfo(
+                    val mid = o.str("id")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                    // Embed-build the entry from its fallback (if any) so fields the
+                    // endpoint does not advertise keep their embedded value.
+                    val base = defaultsById[mid] ?: ModelInfo(
                         providerId = id,
                         id = mid,
                         label = mid,
-                        contextWindow = 128_000,
-                        supportsTools = true,
                         supportsReasoning = supportsReasoning(mid),
                     )
+                    enrichModel(base, o)
                 }
-                if (mapped.isEmpty()) defaultModels else mapped
+                if (mapped.isEmpty()) defaultModels else mergeById(defaultModels, mapped)
             }
         }.getOrElse { defaultModels }
     }

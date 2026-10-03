@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -14,6 +16,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.UiImage
@@ -359,7 +362,7 @@ class LumenChatScreenTest {
         compose.setContent {
             LumenChatScreen(steps(2), input = "hi", busy = false, error = null, modifier = viewport, ambient = false)
         }
-        compose.onNodeWithTag("send").assertIsDisplayed()
+        compose.onNodeWithTag("send").assertIsDisplayed().assertIsEnabled()
     }
 
     @Test
@@ -368,6 +371,76 @@ class LumenChatScreenTest {
             LumenChatScreen(steps(2), input = "", busy = true, error = null, modifier = viewport, ambient = false)
         }
         compose.onNodeWithTag("stop").assertIsDisplayed()
+        // There is no send affordance at all while busy, so a stray tap or IME
+        // send cannot race the stop control into a second prompt.
+        check(compose.onAllNodesWithTag("send").fetchSemanticsNodes().isEmpty()) {
+            "send must be absent while busy"
+        }
+    }
+
+    @Test
+    fun `the send control is disabled while the input is blank`() {
+        val input = mutableStateOf("")
+        var sent = 0
+        compose.setContent {
+            LumenChatScreen(
+                steps(2), input = input.value, busy = false, error = null, modifier = viewport, ambient = false,
+                onInput = { input.value = it }, onSend = { sent++ },
+            )
+        }
+        compose.onNodeWithTag("send").assertIsNotEnabled()
+        compose.onNodeWithTag("send").performClick()
+        compose.waitForIdle()
+        assertEquals(0, sent)
+        // A real prompt lights the button up and the tap goes through.
+        compose.runOnIdle { input.value = "go" }
+        compose.waitForIdle()
+        compose.onNodeWithTag("send").assertIsEnabled()
+        compose.onNodeWithTag("send").performClick()
+        compose.waitForIdle()
+        assertEquals(1, sent)
+    }
+
+    @Test
+    fun `the composer hint hides once text is present`() {
+        val input = mutableStateOf("")
+        compose.setContent {
+            LumenChatScreen(
+                steps(1), input = input.value, busy = false, error = null, modifier = viewport, ambient = false,
+                onInput = { input.value = it },
+            )
+        }
+        compose.onNodeWithTag("composer-hint").assertIsDisplayed()
+        compose.onNodeWithTag("composer").performClick()
+        compose.onNodeWithTag("composer").performTextInput("hello")
+        compose.waitForIdle()
+        check(compose.onAllNodesWithTag("composer-hint").fetchSemanticsNodes().isEmpty()) {
+            "the placeholder must disappear once the field has text"
+        }
+    }
+
+    @Test
+    fun `the app bar controls are tappable and invoke their callbacks`() {
+        var home = 0
+        var fork = 0
+        var files = 0
+        var shell = 0
+        compose.setContent {
+            LumenChatScreen(
+                steps(1), input = "", busy = false, error = null, modifier = viewport, ambient = false,
+                title = "a very long chat title that should ellipsize rather than crowd the controls",
+                onHome = { home++ }, onFork = { fork++ }, onFiles = { files++ }, onTerminal = { shell++ },
+            )
+        }
+        compose.onNodeWithTag("home").performClick()
+        compose.onNodeWithTag("fork").performClick()
+        compose.onNodeWithTag("open-files").performClick()
+        compose.onNodeWithTag("open-terminal").performClick()
+        compose.waitForIdle()
+        assertEquals(1, home)
+        assertEquals(1, fork)
+        assertEquals(1, files)
+        assertEquals(1, shell)
     }
 
     @Test

@@ -3,6 +3,7 @@ package dev.lumen.app.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -78,6 +80,21 @@ fun HomeScreen(
     showArchived: Boolean = false,
     /** Toggle the listing of archived sessions. */
     onShowArchived: (Boolean) -> Unit = {},
+    /**
+     * Active tag filters. A session matches when it carries ANY of these tags
+     * (OR), so tapping more chips widens the list rather than narrowing it.
+     */
+    tagFilter: Set<String> = emptySet(),
+    /** Every tag present on a loaded session, for the filter bar. */
+    availableTags: List<String> = emptyList(),
+    /** Toggle a tag in the active filter. */
+    onToggleTagFilter: (String) -> Unit = {},
+    /** Clear every active tag filter. */
+    onClearTagFilters: () -> Unit = {},
+    /** Add a tag to a session. */
+    onAddTag: (String, String) -> Unit = { _, _ -> },
+    /** Remove a tag from a session. */
+    onRemoveTag: (String, String) -> Unit = { _, _ -> },
 ) {
     // Destructive delete needs a confirmation; holds the id pending deletion.
     var deleteTarget by remember { mutableStateOf<String?>(null) }
@@ -187,6 +204,41 @@ fun HomeScreen(
                     .testTag("show-archived"),
             )
         }
+
+        // Tag filter bar: every known tag is a toggle chip; a selected chip shows
+        // an "×" so the active filter is removable. Hidden when there are none.
+        val filterTags = (availableTags + tagFilter).distinct().sorted()
+        if (filterTags.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("tags", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 1.2.sp)
+                filterTags.forEach { tag ->
+                    val selected = tag in tagFilter
+                    TagChip(
+                        colors = colors,
+                        text = if (selected) "$tag ×" else tag,
+                        selected = selected,
+                        tag = "tag-filter-$tag",
+                        onClick = { onToggleTagFilter(tag) },
+                    )
+                }
+                if (tagFilter.isNotEmpty()) {
+                    Text(
+                        "clear",
+                        color = colors.accent, fontFamily = Mono, fontSize = 11.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { onClearTagFilters() }
+                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                            .testTag("clear-tags"),
+                    )
+                }
+            }
+        }
         Spacer(Modifier.height(8.dp))
 
         if (search != null) {
@@ -223,7 +275,10 @@ fun HomeScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(Modifier.size(10.dp).background(colors.faint, WaterShapes.droplet(tail = 0.55f)))
                     Spacer(Modifier.height(16.dp))
-                    Text("no chats yet", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
+                    Text(
+                        if (tagFilter.isNotEmpty()) "no chats for these tags" else "no chats yet",
+                        color = colors.faint, fontFamily = Mono, fontSize = 13.sp,
+                    )
                 }
             }
         } else {
@@ -231,7 +286,9 @@ fun HomeScreen(
                 items(sessions.distinctBy { it.id }, key = { it.id }) { s ->
                     var expanded by remember { mutableStateOf(false) }
                     var renaming by remember { mutableStateOf(false) }
+                    var tagging by remember { mutableStateOf(false) }
                     var draft by remember(s.title) { mutableStateOf(s.title) }
+                    var tagDraft by remember { mutableStateOf("") }
                     Column(Modifier.fillMaxWidth()) {
                         Row(
                             Modifier.fillMaxWidth()
@@ -255,6 +312,23 @@ fun HomeScreen(
                                         s.preview, color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
                                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                                     )
+                                }
+                                if (s.tags.isNotEmpty()) {
+                                    Spacer(Modifier.height(5.dp))
+                                    Row(
+                                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                    ) {
+                                        s.tags.forEach { tag ->
+                                            TagChip(
+                                                colors = colors,
+                                                text = tag,
+                                                selected = tag in tagFilter,
+                                                tag = "session-tag-${s.id}-$tag",
+                                                onClick = { onToggleTagFilter(tag) },
+                                            )
+                                        }
+                                    }
                                 }
                             }
                             Spacer(Modifier.width(10.dp))
@@ -298,6 +372,53 @@ fun HomeScreen(
                                         expanded = false
                                     }
                                 }
+                            } else if (tagging) {
+                                Column(
+                                    Modifier.fillMaxWidth()
+                                        .padding(start = 32.dp, end = 12.dp, bottom = 8.dp)
+                                        .testTag("tag-editor-${s.id}"),
+                                ) {
+                                    if (s.tags.isNotEmpty()) {
+                                        Row(
+                                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        ) {
+                                            s.tags.forEach { tag ->
+                                                RowAction(colors, "$tag ×", "remove-tag-${s.id}-$tag") {
+                                                    onRemoveTag(s.id, tag)
+                                                }
+                                            }
+                                        }
+                                        Spacer(Modifier.height(8.dp))
+                                    }
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            Modifier.weight(1f)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .border(1.dp, colors.rule, RoundedCornerShape(8.dp))
+                                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                                        ) {
+                                            if (tagDraft.isEmpty()) {
+                                                Text("add tag…", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
+                                            }
+                                            BasicTextField(
+                                                value = tagDraft,
+                                                onValueChange = { tagDraft = it },
+                                                singleLine = true,
+                                                textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 13.sp),
+                                                cursorBrush = SolidColor(colors.water),
+                                                modifier = Modifier.fillMaxWidth().testTag("tag-field-${s.id}"),
+                                            )
+                                        }
+                                        Spacer(Modifier.width(8.dp))
+                                        RowAction(colors, "add", "tag-save-${s.id}") {
+                                            onAddTag(s.id, tagDraft)
+                                            tagDraft = ""
+                                        }
+                                        Spacer(Modifier.width(6.dp))
+                                        RowAction(colors, "done", "tag-done-${s.id}") { tagging = false }
+                                    }
+                                }
                             } else {
                                 Row(
                                     Modifier.fillMaxWidth()
@@ -308,6 +429,7 @@ fun HomeScreen(
                                     RowAction(colors, if (s.pinned) "unpin" else "pin", "pin-${s.id}") { onPin(s.id, !s.pinned) }
                                     RowAction(colors, if (s.archived) "unarchive" else "archive", "archive-${s.id}") { onArchive(s.id, !s.archived) }
                                     RowAction(colors, "rename", "rename-${s.id}") { draft = s.title; renaming = true }
+                                    RowAction(colors, "tag", "tag-${s.id}") { tagDraft = ""; tagging = true }
                                     RowAction(colors, "fork", "fork-${s.id}") { onFork(s.id) }
                                     RowAction(colors, "delete", "delete-${s.id}") { deleteTarget = s.id }
                                 }
@@ -371,6 +493,30 @@ private fun RowAction(colors: LumenColors, label: String, tag: String, onClick: 
             .border(1.dp, colors.rule, RoundedCornerShape(6.dp))
             .clickable { onClick() }
             .padding(horizontal = 8.dp, vertical = 4.dp)
+            .testTag(tag),
+    )
+}
+
+/** A small tag pill. Tapping it toggles the tag as a Home filter. */
+@Composable
+private fun TagChip(
+    colors: LumenColors,
+    text: String,
+    selected: Boolean,
+    tag: String,
+    onClick: () -> Unit,
+) {
+    Text(
+        text,
+        color = if (selected) colors.fg else colors.dim,
+        fontFamily = Mono, fontSize = 10.5.sp,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .border(1.dp, if (selected) colors.water else colors.rule, RoundedCornerShape(6.dp))
+            .background(if (selected) colors.surface else Color.Transparent)
+            .clickable { onClick() }
+            .padding(horizontal = 7.dp, vertical = 3.dp)
             .testTag(tag),
     )
 }
