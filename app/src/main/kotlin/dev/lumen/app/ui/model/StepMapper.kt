@@ -17,7 +17,7 @@ object StepMapper {
      * The stable row identity for a part, derived from the id alone, so the same
      * row shows the same tag whether it was streamed live or rebuilt from the store.
      */
-    private fun tag(id: String) =
+    internal fun tag(id: String) =
         Integer.toHexString(0x100000 + (id.hashCode() and 0xFFFFF)).takeLast(6)
 
     fun fromMessages(messages: List<Message>): List<UiStep> {
@@ -201,8 +201,52 @@ object StepMapper {
         return lines.drop(structured.coerceAtLeast(0))
     }
 
-    private fun oneLine(s: String): String =
-        s.replace(Regex("\\s+"), " ").trim().let { if (it.length > 140) it.take(140) + "…" else it }
+    /**
+     * Collapse whitespace to single spaces, trim, and cap at 140 chars. Written
+     * against a [CharSequence] so the streaming buffer can summarize a growing
+     * [StringBuilder] in O(140) instead of copying/regexing the whole body on
+     * every frame. Whitespace is matched exactly as the old `\s` did.
+     */
+    internal fun oneLine(s: CharSequence): String {
+        // The old implementation collapsed ASCII whitespace runs with `\s+` and
+        // then called `String.trim()`, which is Unicode-aware. Trimming the
+        // edges first is equivalent (edges are removed either way) and lets the
+        // scan stop after the first 141 collapsed characters even though the
+        // source can be arbitrarily long.
+        var start = 0
+        var end = s.length
+        while (start < end && isSummaryEdgeSpace(s[start])) start++
+        while (end > start && isSummaryEdgeSpace(s[end - 1])) end--
+        val out = StringBuilder(144)
+        var pendingSpace = false
+        var i = start
+        while (i < end) {
+            val c = s[i]
+            if (isSummarySpace(c)) {
+                if (out.isNotEmpty()) pendingSpace = true
+            } else {
+                if (pendingSpace) {
+                    out.append(' ')
+                    pendingSpace = false
+                }
+                out.append(c)
+                if (out.length > 140) return out.take(140).toString() + "…"
+            }
+            i++
+        }
+        return out.toString()
+    }
+
+    /** Whitespace the old regex `\s+` collapsed (ASCII only, like Java's). */
+    private fun isSummarySpace(c: Char): Boolean =
+        c == ' ' || c == '\t' || c == '\n' || c == '\u000B' || c == '\u000C' || c == '\r'
+
+    /**
+     * Whitespace the old `String.trim()` stripped at the edges: Java/Kotlin
+     * `Char.isWhitespace()` is Unicode-aware, so NBSP and other space chars
+     * count here even though the collapse regex did not touch them.
+     */
+    private fun isSummaryEdgeSpace(c: Char): Boolean = isSummarySpace(c) || c.isWhitespace()
 
     /**
      * Apply a live event to the row list. Returns the new list. Kept here (not in
@@ -238,21 +282,144 @@ object StepMapper {
         summary = oneLine(text), body = text.trim(),
     )
 
-    /** Append-or-grow a streaming text row by partId. */
+    /**
+     * Append-or-grow a streaming text row by partId. Single-shot convenience
+     * over [DeltaBuffer] for callers that hold an immutable list; the streaming
+     * path uses one long-lived [DeltaBuffer] so it never re-concatenates.
+     */
     fun applyDelta(current: List<UiStep>, partId: String, delta: String, kind: StepKind, label: String): List<UiStep> {
-        val i = current.indexOfFirst { it.id == partId }
-        return if (i >= 0) {
-            val old = current[i]
-            val body = old.body + delta
-            current.toMutableList().also {
-                it[i] = old.copy(body = body, summary = oneLine(body))
-            }
-        } else {
-            current + UiStep(
-                id = partId, kind = kind, label = label, tag = Integer.toHexString(0x100000 + (partId.hashCode() and 0xFFFFF)).takeLast(6),
-                summary = oneLine(delta), body = delta,
-            )
+        val buffer = DeltaBuffer()
+        buffer.reset(current)
+        buffer.append(partId, delta, kind, label)
+        return buffer.snapshot()
+    }
+
+    /**
+     * A running accumulator for streamed rows. Text lives in a per-part
+     * [StringBuilder] rather than being re-concatenated into an immutable
+     * [UiStep.body] on every token, so an append is amortized O(delta) and the
+     * whole list is only materialized when [snapshot] is called (the view model
+     * throttles that to a frame-sized cadence). Structural changes go through
+     * [transform]/[rebase] so a rebuild that raced a newer delta cannot drop it.
+     *
+     * Guarded by the monitor so an Unconfined test dispatcher (or any future
+     * multi-threaded caller) cannot tear the maps; production is single-threaded
+     * and pays nothing. The public [applyDelta] stays pure for tests.
+     */
+    class DeltaBuffer {
+        private var working: MutableList<UiStep> = ArrayList()
+        private val index = HashMap<String, Int>()
+        private val bodies = LinkedHashMap<String, StringBuilder>()
+        private val kinds = HashMap<String, StepKind>()
+        private val labels = HashMap<String, String>()
+        private var pending = false
+
+        /** Deltas are buffered and not yet reflected by [snapshot]. */
+        @Synchronized
+        fun hasPending(): Boolean = pending
+
+        /** Replace the rows wholesale (session load, full store rebuild). */
+        @Synchronized
+        fun reset(steps: List<UiStep>) {
+            working = ArrayList(steps)
+            index.clear()
+            bodies.clear()
+            kinds.clear()
+            labels.clear()
+            pending = false
+            for (i in steps.indices) index[steps[i].id] = i
         }
+
+        /** Append [delta] to [partId], creating the row on first sight. */
+        @Synchronized
+        fun append(partId: String, delta: String, kind: StepKind, label: String) {
+            val i = index[partId]
+            if (i == null) {
+                index[partId] = working.size
+                working.add(
+                    UiStep(
+                        id = partId, kind = kind, label = label, tag = StepMapper.tag(partId),
+                        summary = "", body = "",
+                    ),
+                )
+                bodies[partId] = StringBuilder(delta)
+                kinds[partId] = kind
+                labels[partId] = label
+            } else {
+                val sb = bodies.getOrPut(partId) { StringBuilder(working[i].body) }
+                kinds.putIfAbsent(partId, working[i].kind)
+                labels.putIfAbsent(partId, working[i].label)
+                sb.append(delta)
+            }
+            pending = true
+        }
+
+        /**
+         * The rows with every buffered delta applied. Materializes the streaming
+         * bodies once; cheap enough for a per-frame caller, far cheaper than
+         * doing it per token.
+         */
+        @Synchronized
+        fun snapshot(): List<UiStep> {
+            pending = false
+            if (bodies.isEmpty()) return ArrayList(working)
+            val out = ArrayList<UiStep>(working.size)
+            for (step in working) {
+                val sb = bodies[step.id]
+                out += if (sb == null) step else step.copy(body = sb.toString(), summary = StepMapper.oneLine(sb))
+            }
+            return out
+        }
+
+        /**
+         * Fold pending deltas in, apply a structural change, and adopt the
+         * result. Used for events that add/merge rows (tool start, optimistic
+         * echo, enrichment) so buffered text is never lost.
+         */
+        @Synchronized
+        fun transform(f: (List<UiStep>) -> List<UiStep>) {
+            reset(f(snapshot()))
+        }
+
+        /**
+         * Adopt a store-fresh [newBase] without dropping deltas that arrived
+         * while it was being read. A part the store already covers to at least
+         * our accumulated body is trusted; a part the store lags is extended
+         * with just the missing tail; a part absent from the store is replayed.
+         */
+        @Synchronized
+        fun rebase(newBase: List<UiStep>) {
+            if (bodies.isEmpty()) {
+                reset(newBase)
+                return
+            }
+            val tails = ArrayList<PendingTail>(bodies.size)
+            for ((id, sb) in bodies) {
+                tails += PendingTail(
+                    id = id,
+                    acc = sb.toString(),
+                    kind = kinds[id] ?: StepKind.ASSISTANT,
+                    label = labels[id] ?: "",
+                )
+            }
+            reset(newBase)
+            for (t in tails) {
+                val existing = index[t.id]?.let { working[it] }
+                when {
+                    existing == null -> append(t.id, t.acc, t.kind, t.label)
+                    existing.body == t.acc -> Unit
+                    t.acc.startsWith(existing.body) -> append(t.id, t.acc.substring(existing.body.length), t.kind, t.label)
+                    else -> Unit
+                }
+            }
+        }
+
+        private data class PendingTail(
+            val id: String,
+            val acc: String,
+            val kind: StepKind,
+            val label: String,
+        )
     }
 
     /** Id of the optimistic user row; a rebuild replaces it with the store row. */

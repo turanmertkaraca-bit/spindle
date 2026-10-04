@@ -2,18 +2,22 @@ package dev.lumen.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -54,6 +58,42 @@ private const val FILE_TAG = "file"
 private const val FILE_LINE_TAG = "file-line"
 
 /**
+ * Layout bounds. Text layout (`StaticLayout`) is super-linear and allocation
+ * heavy, so a multi-hundred-KB string must never be laid out as one Text on a
+ * streaming frame:
+ *
+ *  - while a body is streaming only its tail ([STREAM_WINDOW] chars) is parsed
+ *    and laid out, so growth stays bounded and the newest answer stays visible;
+ *  - a finished body longer than [BODY_MAX] renders a bounded prefix until the
+ *    reader asks for everything, which is then shown in a height-bounded scroll
+ *    box laid out in [BODY_CHUNK]-char pieces.
+ */
+private const val STREAM_WINDOW = 6_000
+private const val BODY_MAX = 8_000
+private const val BODY_CHUNK = 4_000
+
+/**
+ * Split [text] into pieces of at most [size] characters, preferring a newline
+ * break in the second half of a piece so prose stays readable. Shared with the
+ * reasoning/literal windows, so no single Text ever sees an unbounded string.
+ */
+internal fun textChunks(text: String, size: Int): List<String> {
+    if (text.length <= size) return listOf(text)
+    val out = ArrayList<String>(text.length / size + 1)
+    var start = 0
+    while (start < text.length) {
+        var end = (start + size).coerceAtMost(text.length)
+        if (end < text.length) {
+            val nl = text.lastIndexOf('\n', end - 1)
+            if (nl > start + size / 2) end = nl + 1
+        }
+        out += text.substring(start, end)
+        start = end
+    }
+    return out
+}
+
+/**
  * Renders assistant prose as markdown using [LumenColors] only. The parse is
  * pure and memoised on the source string, so streaming updates re-parse at most
  * once per body change. User turns and reasoning stay plain text elsewhere.
@@ -69,21 +109,105 @@ fun MarkdownBody(
     markdown: String,
     colors: LumenColors,
     modifier: Modifier = Modifier,
+    streaming: Boolean = false,
     cwd: String = "",
     exists: (String) -> Boolean = { false },
     touchedPaths: Set<String> = emptySet(),
     onOpenFile: (String, Int?) -> Unit = { _, _ -> },
 ) {
-    val blocks = remember(markdown) { Markdown.parse(markdown) }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (block in blocks) {
-            when (block) {
-                is MdBlock.Heading -> MarkdownHeading(block, colors)
-                is MdBlock.Paragraph -> MarkdownParagraph(block.spans, colors, cwd, exists, touchedPaths, onOpenFile)
-                is MdBlock.Bullet -> MarkdownList(block.items, colors, ordered = false, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile)
-                is MdBlock.Ordered -> MarkdownList(block.items, colors, ordered = true, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile)
-                is MdBlock.Code -> MarkdownCode(block, colors)
+    // The parse is memoised on whatever string is actually laid out, never on
+    // the unbounded source. While streaming we window to the tail so the newest
+    // text is what grows on screen; once finished an oversized body windows to a
+    // bounded prefix with an explicit opt-in to the whole thing.
+    val cap = if (streaming) STREAM_WINDOW else BODY_MAX
+    var showFull by remember(markdown) { mutableStateOf(false) }
+
+    when {
+        markdown.length <= cap -> {
+            val blocks = remember(markdown) { Markdown.parse(markdown) }
+            Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile)
             }
+        }
+
+        streaming -> {
+            val shown = "\u2026\n" + markdown.takeLast(cap)
+            val blocks = remember(shown) { Markdown.parse(shown) }
+            Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile)
+            }
+        }
+
+        showFull -> {
+            Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    Column {
+                        for (chunk in textChunks(markdown, BODY_CHUNK)) {
+                            Text(
+                                chunk,
+                                color = colors.fg,
+                                fontFamily = MdMono,
+                                fontSize = 14.sp,
+                                lineHeight = 21.sp,
+                            )
+                        }
+                    }
+                }
+                Text(
+                    "show less",
+                    color = colors.accent, fontFamily = MdMono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .border(1.dp, colors.rule, RoundedCornerShape(6.dp))
+                        .clickable { showFull = false }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .testTag("md-show-less"),
+                )
+            }
+        }
+
+        else -> {
+            val shown = markdown.take(cap)
+            val blocks = remember(shown) { Markdown.parse(shown) }
+            Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile)
+                Text(
+                    "\u2026[${markdown.length - cap} chars hidden] \u00b7 show full",
+                    color = colors.accent, fontFamily = MdMono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .border(1.dp, colors.rule, RoundedCornerShape(6.dp))
+                        .clickable { showFull = true }
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                        .testTag("md-show-full"),
+                )
+            }
+        }
+    }
+}
+
+/** Draws parsed blocks in order; shared by every [MarkdownBody] window. */
+@Composable
+private fun MarkdownBlocks(
+    blocks: List<MdBlock>,
+    colors: LumenColors,
+    cwd: String,
+    exists: (String) -> Boolean,
+    touchedPaths: Set<String>,
+    onOpenFile: (String, Int?) -> Unit,
+) {
+    for (block in blocks) {
+        when (block) {
+            is MdBlock.Heading -> MarkdownHeading(block, colors)
+            is MdBlock.Paragraph -> MarkdownParagraph(block.spans, colors, cwd, exists, touchedPaths, onOpenFile)
+            is MdBlock.Bullet -> MarkdownList(block.items, colors, ordered = false, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile)
+            is MdBlock.Ordered -> MarkdownList(block.items, colors, ordered = true, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile)
+            is MdBlock.Code -> MarkdownCode(block, colors)
         }
     }
 }

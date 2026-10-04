@@ -12,6 +12,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
@@ -63,6 +65,24 @@ class LumenChatScreenTest {
         val c = compose.onAllNodesWithText(text).fetchSemanticsNodes().size
         check(c == 0) { "expected no node with text '$text', found $c" }
     }
+
+    /**
+     * The longest single laid-out string the whole tree currently holds. If a
+     * 200k-char source were rendered as one Text this would report ~200k; a
+     * bounded window/chunk keeps it near the UI's cap.
+     */
+    private fun maxRenderedTextLength(): Int =
+        compose
+            .onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.Text), useUnmergedTree = true)
+            .fetchSemanticsNodes()
+            .flatMap { node ->
+                if (node.config.contains(SemanticsProperties.Text)) {
+                    node.config[SemanticsProperties.Text]
+                } else {
+                    emptyList()
+                }
+            }
+            .maxOfOrNull { it.text.length } ?: 0
 
     /** Two files, +12/−3, matching the screenshot fixture. */
     private fun sampleChanges(): RunChanges {
@@ -607,6 +627,77 @@ class LumenChatScreenTest {
         compose.waitForIdle()
         check(compose.onAllNodesWithText(think, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) {
             "the pill opened but the body text did not render"
+        }
+    }
+
+    @Test
+    fun `a huge reasoning block lays out a bounded prefix until show all`() {
+        val start = "THINK_START_MARKER"
+        val end = "THINK_END_MARKER"
+        val think = start + "reasoning ".repeat(20_000) + end
+        check(think.length > 190_000) { "fixture should be a pathological 200k string" }
+        compose.setContent {
+            LumenChatScreen(
+                listOf(
+                    UiStep(
+                        "t", StepKind.ASSISTANT, "ASSISTANT", "x", "answer", "the answer",
+                        think = think,
+                    ),
+                ),
+                input = "", busy = false, error = null, modifier = viewport, ambient = false,
+            )
+        }
+        // Collapsed: only the header + size, none of the reasoning laid out.
+        compose.onNodeWithText("thinking · ${think.length} chars").assertIsDisplayed()
+        check(compose.onAllNodesWithText(start, substring = true, useUnmergedTree = true).fetchSemanticsNodes().isEmpty()) {
+            "a collapsed reasoning pill must not lay out the reasoning body"
+        }
+        // Expand: a bounded prefix plus a truncation affordance.
+        compose.onNodeWithTag("think-toggle").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        compose.onNodeWithTag("think-body", useUnmergedTree = true).assertExists()
+        compose.onNodeWithText("chars hidden", substring = true, useUnmergedTree = true).assertExists()
+        check(compose.onAllNodesWithText(end, substring = true, useUnmergedTree = true).fetchSemanticsNodes().isEmpty()) {
+            "the opened window must stop before the end of a 200k string"
+        }
+        check(maxRenderedTextLength() <= 7_000) {
+            "the expanded window laid out ${maxRenderedTextLength()} chars; it must stay near the cap"
+        }
+        // Opt in: the whole reasoning becomes reachable, still chunked.
+        compose.onNodeWithTag("think-show-all", useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        check(compose.onAllNodesWithText(end, substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) {
+            "show all must make the end of the reasoning reachable"
+        }
+        check(maxRenderedTextLength() <= 7_000) {
+            "show all must chunk the full string; a single Text held ${maxRenderedTextLength()} chars"
+        }
+    }
+
+    @Test
+    fun `a long streaming body lays out only a bounded tail`() {
+        val head = "STREAM_HEAD_MARKER"
+        val tail = "STREAM_TAIL_MARKER"
+        val body = head + "streamed ".repeat(20_000) + tail
+        check(body.length > 170_000) { "fixture should be a pathological streaming body" }
+        compose.setContent {
+            LumenChatScreen(
+                listOf(
+                    UiStep("a", StepKind.ASSISTANT, "ASSISTANT", "x", "streaming", body, running = true),
+                ),
+                input = "", busy = true, error = null, modifier = viewport, ambient = false, haptics = false,
+            )
+        }
+        compose.waitForIdle()
+        // The newest text is on screen...
+        compose.onNodeWithText(tail, substring = true, useUnmergedTree = true).assertExists()
+        // ...but the accumulated head is windowed away and no Text is unbounded.
+        check(compose.onAllNodesWithText(head, substring = true, useUnmergedTree = true).fetchSemanticsNodes().isEmpty()) {
+            "a streaming body must not lay out its full accumulated text"
+        }
+        check(maxRenderedTextLength() <= 7_000) {
+            "a streamed frame laid out ${maxRenderedTextLength()} chars; each Text must stay bounded"
         }
     }
 }

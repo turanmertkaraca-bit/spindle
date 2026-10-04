@@ -13,7 +13,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.AnimationState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -133,6 +132,16 @@ private val Mono = FontFamily.Monospace
 
 /** Fling friction: higher bleeds energy faster, so a flick never races away. */
 private const val FLING_FRICTION = 3.0f
+
+/**
+ * Layout bounds for reasoning and literal bodies. A multi-hundred-KB string laid
+ * out as one Text allocates and measures for hundreds of ms per frame; these cap
+ * what any single layout sees. The opened reasoning window and the opt-in full
+ * view share [textChunks] so no single Text is ever unbounded.
+ */
+private const val THINK_WINDOW_CHARS = 6_000
+private const val TEXT_CHUNK_CHARS = 4_000
+private const val LITERAL_MAX_CHARS = 8_000
 
 /** A calmer fling for the timeline: it stops in a short, predictable glide. */
 private fun calmFling(friction: Float = FLING_FRICTION): FlingBehavior = object : FlingBehavior {
@@ -759,10 +768,7 @@ private fun MessageRow(
                     UserImages(step.images, colors)
                     if (step.body.isNotBlank()) {
                         Spacer(Modifier.height(8.dp))
-                        Text(
-                            step.body,
-                            color = colors.fg, fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp,
-                        )
+                        WindowedText(step.body, colors)
                     }
                 } else if (step.running && step.body.isBlank()) {
                     Text("thinking…", color = colors.water.copy(alpha = 0.5f + 0.5f * pulse()), fontFamily = Mono, fontSize = 14.sp)
@@ -770,20 +776,20 @@ private fun MessageRow(
                     val body = step.body.ifBlank { step.summary }
                     // Assistant prose is markdown; the user's own words and every
                     // other row stay literal, so "what I typed is what I see".
+                    // The literal path is still windowed, so a pathological paste
+                    // cannot lay out an unbounded string.
                     if (step.kind == StepKind.ASSISTANT) {
                         MarkdownBody(
                             markdown = body,
                             colors = colors,
+                            streaming = step.running,
                             cwd = cwd,
                             exists = exists,
                             touchedPaths = touchedPaths,
                             onOpenFile = onOpenFile,
                         )
                     } else {
-                        Text(
-                            body,
-                            color = colors.fg, fontFamily = Mono, fontSize = 14.sp, lineHeight = 21.sp,
-                        )
+                        WindowedText(body, colors)
                     }
                 }
 
@@ -1210,10 +1216,11 @@ private fun ToolCardBody(step: UiStep, colors: LumenColors, isSub: Boolean, puls
                 showTree -> step.childSteps.forEach { child ->
                     ChildTreeRow(child, depth = 0, colors = colors, pulse = pulse)
                 }
-                entries.isEmpty() -> Text(
+                entries.isEmpty() -> RawOutputText(
                     step.body.ifBlank { step.summary },
-                    color = colors.dim, fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp,
-                    modifier = Modifier.testTag("tool-output-0"),
+                    colors = colors,
+                    modifier = Modifier,
+                    tag = "tool-output-0",
                 )
                 else -> {
                     for ((k, r) in entries.withIndex()) {
@@ -1253,10 +1260,11 @@ private fun ToolCardBody(step: UiStep, colors: LumenColors, isSub: Boolean, puls
                     }
                     if (extra.isNotEmpty()) {
                         Spacer(Modifier.height(7.dp))
-                        Text(
+                        RawOutputText(
                             extra.joinToString("\n"),
-                            color = colors.dim, fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp,
-                            modifier = Modifier.fillMaxWidth().testTag("tool-output-rest"),
+                            colors = colors,
+                            modifier = Modifier.fillMaxWidth(),
+                            tag = "tool-output-rest",
                         )
                     }
                 }
@@ -1586,10 +1594,18 @@ private fun ToolStatusPill(failed: Boolean, running: Boolean, loading: Boolean, 
 /**
  * The reasoning folded into a step: a one-line header that expands on tap. It
  * starts collapsed, so once the answer arrives the thinking tucks away.
+ *
+ * Layout is bounded at every step: collapsed shows only the header and char
+ * count, the opened body lays out at most [THINK_WINDOW_CHARS] and offers a
+ * "show all" opt-in, and that full view renders the string as [TEXT_CHUNK_CHARS]
+ * pieces inside a height-bounded scroll box. Crucially there is NO
+ * `animateContentSize`: a growing, unbounded text under it re-measured the whole
+ * string every frame, which is the jitter + ANR from the field report.
  */
 @Composable
 private fun ThinkSection(think: String, colors: LumenColors) {
     var open by remember(think) { mutableStateOf(false) }
+    var showAll by remember(think) { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
@@ -1597,12 +1613,6 @@ private fun ThinkSection(think: String, colors: LumenColors) {
             .background(colors.water.copy(alpha = 0.10f))
             .clickable { open = !open }
             .padding(horizontal = 10.dp, vertical = 7.dp)
-            .animateContentSize(
-                animationSpec = spring(
-                    dampingRatio = Spring.DampingRatioNoBouncy,
-                    stiffness = Spring.StiffnessMediumLow,
-                ),
-            )
             .testTag("think-toggle"),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1618,14 +1628,146 @@ private fun ThinkSection(think: String, colors: LumenColors) {
             enter = expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
             exit = shrinkVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut(),
         ) {
-            Column {
+            Column(Modifier.testTag("think-body")) {
                 Spacer(Modifier.height(6.dp))
-                Text(
-                    think,
-                    color = colors.dim, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp,
-                    modifier = Modifier.testTag("think-body"),
-                )
+                if (showAll) {
+                    // Explicit opt-in: the whole reasoning, chunked so each
+                    // StaticLayout stays small, inside a bounded scroll box.
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        Column {
+                            for (chunk in textChunks(think, TEXT_CHUNK_CHARS)) {
+                                Text(
+                                    chunk,
+                                    color = colors.dim, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp,
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        "show less",
+                        color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .border(1.dp, colors.water.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                            .clickable { showAll = false }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .testTag("think-show-less"),
+                    )
+                } else {
+                    Text(
+                        think.take(THINK_WINDOW_CHARS),
+                        color = colors.dim, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp,
+                    )
+                    if (think.length > THINK_WINDOW_CHARS) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "\u2026[${think.length - THINK_WINDOW_CHARS} chars hidden] \u00b7 show all",
+                            color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .border(1.dp, colors.water.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                                .clickable { showAll = true }
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                .testTag("think-show-all"),
+                        )
+                    }
+                }
             }
+        }
+    }
+}
+
+/**
+ * A literal (non-markdown) body, bounded the same way: short text renders as a
+ * plain [Text], a pathological long one windows to a prefix with an explicit
+ * "show all" that lays the whole thing out in a height-bounded scroll box.
+ * Used for the user's own words and any non-assistant, non-tool body.
+ */
+@Composable
+private fun WindowedText(
+    text: String,
+    colors: LumenColors,
+    modifier: Modifier = Modifier,
+    color: Color = colors.fg,
+    fontSize: TextUnit = 14.sp,
+    lineHeight: TextUnit = 21.sp,
+) {
+    var showAll by remember(text) { mutableStateOf(false) }
+    if (text.length <= LITERAL_MAX_CHARS) {
+        Text(
+            text,
+            color = color, fontFamily = Mono, fontSize = fontSize, lineHeight = lineHeight,
+            modifier = modifier,
+        )
+        return
+    }
+    Column(modifier) {
+        if (showAll) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Column {
+                    for (chunk in textChunks(text, TEXT_CHUNK_CHARS)) {
+                        Text(chunk, color = color, fontFamily = Mono, fontSize = fontSize, lineHeight = lineHeight)
+                    }
+                }
+            }
+            Text(
+                "show less",
+                color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .border(1.dp, colors.rule, RoundedCornerShape(6.dp))
+                    .clickable { showAll = false }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .testTag("literal-show-less"),
+            )
+        } else {
+            Text(
+                text.take(LITERAL_MAX_CHARS),
+                color = color, fontFamily = Mono, fontSize = fontSize, lineHeight = lineHeight,
+            )
+            Text(
+                "\u2026[${text.length - LITERAL_MAX_CHARS} chars hidden] \u00b7 show all",
+                color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .border(1.dp, colors.rule, RoundedCornerShape(6.dp))
+                    .clickable { showAll = true }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .testTag("literal-show-all"),
+            )
+        }
+    }
+}
+
+/**
+ * A monospace tool-output block. Short output stays a single Text (tag on the
+ * Text itself, preserving hit-testing and scroll-to); a pathological result is
+ * chunked so no single layout is unbounded. The card around it is already
+ * height-bounded, so this only trims the per-layout cost.
+ */
+@Composable
+private fun RawOutputText(text: String, colors: LumenColors, modifier: Modifier, tag: String) {
+    if (text.length <= LITERAL_MAX_CHARS) {
+        Text(
+            text,
+            color = colors.dim, fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp,
+            modifier = modifier.testTag(tag),
+        )
+        return
+    }
+    Column(modifier.testTag(tag)) {
+        for (chunk in textChunks(text, TEXT_CHUNK_CHARS)) {
+            Text(chunk, color = colors.dim, fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp)
         }
     }
 }

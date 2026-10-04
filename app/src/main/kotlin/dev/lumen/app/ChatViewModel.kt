@@ -69,6 +69,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.attribute.BasicFileAttributes
+import java.util.concurrent.ConcurrentHashMap
 
 /** One row on the home screen. */
 data class SessionRow(
@@ -330,6 +331,29 @@ class ChatViewModel(
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
     private var runJob: Job? = null
+
+    /**
+     * The live streaming accumulator. Text deltas are appended to per-part
+     * [StringBuilder]s here and only materialized into [ChatState.steps] on a
+     * throttled cadence, so a long stream never re-concatenates its whole body
+     * or copies the whole row list once per token. Every non-delta step mutation
+     * goes through it too ([StepMapper.DeltaBuffer.transform]/[reset]/[rebase]),
+     * so buffered text is never lost.
+     */
+    private val stream = StepMapper.DeltaBuffer()
+
+    /**
+     * Bumped whenever the timeline is replaced wholesale (session open/new,
+     * rewind, close). A rebuild that read the store before such a replacement
+     * must not publish its now-stale snapshot over the fresh rows.
+     */
+    private var timelineGeneration = 0
+
+    /** Scheduled delta flush; coalesces a burst of tokens into one state publish. */
+    private var deltaFlushJob: Job? = null
+
+    /** Coalesces rebuild requests while one is in flight (see [RebuildCoalescer]). */
+    private val rebuilds = RebuildCoalescer()
 
     /** The session id of the in-flight run, so [stop] can clear its live marker. */
     private var runningSessionId: String? = null
@@ -865,6 +889,7 @@ class ChatViewModel(
                 ),
             )
             if (token != sessionOpenToken) return@launch
+            replaceTimeline(emptyList())
             _state.value = _state.value.copy(
                 currentSessionId = id.value,
                 steps = emptyList(),
@@ -891,9 +916,11 @@ class ChatViewModel(
             val messages = store.messages(sid)
             val session = store.session(sid)
             if (token != sessionOpenToken) return@launch
+            val steps = enrich(StepMapper.fromMessages(messages))
+            replaceTimeline(steps)
             _state.value = _state.value.copy(
                 currentSessionId = id,
-                steps = enrich(StepMapper.fromMessages(messages)),
+                steps = steps,
                 input = "",
                 error = null,
                 busy = session?.state == SessionState.RUNNING,
@@ -913,6 +940,7 @@ class ChatViewModel(
      */
     fun closeChat() {
         sessionOpenToken++
+        replaceTimeline(emptyList())
         _state.value = _state.value.copy(
             currentSessionId = null,
             steps = emptyList(),
@@ -1046,8 +1074,10 @@ class ChatViewModel(
             val sid = SessionId(current)
             store.rewind(sid, MessageId(messageId))
             val messages = store.messages(sid)
+            val steps = enrich(StepMapper.fromMessages(messages))
+            replaceTimeline(steps)
             _state.value = _state.value.copy(
-                steps = enrich(StepMapper.fromMessages(messages)),
+                steps = steps,
                 usage = messages.fold(Usage()) { acc, m -> acc + m.usage },
                 changes = RunChanges.EMPTY,
                 error = null,
@@ -1677,18 +1707,17 @@ class ChatViewModel(
                 is AgentEvent.PartDelta -> {
                     val kind = if (e.kind == DeltaKind.REASONING) StepKind.THINKING else StepKind.ASSISTANT
                     val label = if (kind == StepKind.THINKING) "THINKING" else "ASSISTANT"
-                    _state.value = _state.value.copy(
-                        steps = StepMapper.applyDelta(_state.value.steps, e.partId.value, e.delta, kind, label),
-                    )
+                    stream.append(e.partId.value, e.delta, kind, label)
+                    scheduleDeltaFlush()
                 }
-                is AgentEvent.PartUpdated -> rebuild(SessionId(current))
-                is AgentEvent.ToolFinished -> rebuild(SessionId(current))
+                is AgentEvent.PartUpdated -> requestRebuild(SessionId(current))
+                is AgentEvent.ToolFinished -> requestRebuild(SessionId(current))
                 is AgentEvent.ToolCallStarted -> {
                     diag("tool: " + e.name)
-                    _state.value = _state.value.copy(steps = StepMapper.applyEvent(_state.value.steps, e))
+                    applyEvent(e)
                 }
                 is AgentEvent.Progress -> {
-                    _state.value = _state.value.copy(steps = StepMapper.applyEvent(_state.value.steps, e))
+                    applyEvent(e)
                     // Keep the ongoing notification's progress line in step.
                     context?.let { ctx -> runCatching { RunService.update(ctx, e.message) } }
                 }
@@ -1702,16 +1731,20 @@ class ChatViewModel(
                     _state.value.copy(changes = _state.value.changes + e.edit)
                 is AgentEvent.StateChanged -> {
                     val busy = e.state == dev.spindle.core.model.SessionState.RUNNING
+                    // A state change is authoritative: flush whatever streamed
+                    // before re-reading, so no text is stranded in the buffer.
+                    flushDeltas()
                     _state.value = _state.value.copy(busy = busy, todos = loadTodos(SessionId(current)))
                     if (!busy) {
                         // The store is the truth: replace optimistic/partial rows
                         // (the common case after a stop) with what was saved.
-                        rebuild(SessionId(current))
+                        requestRebuild(SessionId(current))
                         refreshSessions()
                     }
                 }
                 is AgentEvent.Error -> {
                     diag("error: " + e.message)
+                    flushDeltas()
                     _state.value = _state.value.copy(error = e.message)
                 }
                 else -> Unit
@@ -1719,11 +1752,85 @@ class ChatViewModel(
         }
     }
 
-    private suspend fun rebuild(sid: SessionId) {
-        _state.value = _state.value.copy(
-            steps = enrich(StepMapper.fromMessages(store.messages(sid))),
-            todos = loadTodos(sid),
-        )
+    /** Fold a structural event into the buffer without dropping streamed text. */
+    private fun applyEvent(e: AgentEvent) {
+        stream.transform { StepMapper.applyEvent(it, e) }
+        publishSteps()
+    }
+
+    /** Publish the accumulator's current rows (materializing buffered deltas). */
+    private fun publishSteps() {
+        _state.value = _state.value.copy(steps = stream.snapshot())
+    }
+
+    /**
+     * Replace the timeline wholesale (session open/new, rewind, close). Bumping
+     * [timelineGeneration] invalidates any rebuild that read the store before
+     * this replacement, so a stale snapshot cannot be published over the fresh
+     * rows (e.g. undoing a rewind).
+     */
+    private fun replaceTimeline(steps: List<UiStep>) {
+        timelineGeneration++
+        stream.reset(steps)
+    }
+
+    /**
+     * Coalesce a burst of deltas into one state publish. Tokens only append to
+     * the accumulator; a single delayed flush lands them, so a long stream costs
+     * O(delta) per token instead of a full list/body rebuild per token.
+     */
+    private fun scheduleDeltaFlush() {
+        if (deltaFlushJob?.isActive == true) return
+        deltaFlushJob = viewModelScope.launch {
+            delay(DELTA_COALESCE_MS)
+            if (stream.hasPending()) publishSteps()
+        }
+    }
+
+    /** Publish any buffered deltas immediately (terminal/structural events). */
+    private fun flushDeltas() {
+        deltaFlushJob?.cancel()
+        deltaFlushJob = null
+        if (stream.hasPending()) publishSteps()
+    }
+
+    /**
+     * Re-read and re-map the whole session from the store. Runs the parse and
+     * child enrichment on [Dispatchers.Default] and coalesces concurrent
+     * requests: while a pass is in flight, further requests only mark it dirty,
+     * so a burst of [AgentEvent.PartUpdated]s cannot stack full rebuilds.
+     */
+    private fun requestRebuild(sid: SessionId) {
+        flushDeltas()
+        if (!rebuilds.request()) return
+        viewModelScope.launch {
+            try {
+                // [sid] is the session the request came from, but the user may
+                // switch sessions while the pass is in flight. Re-read the
+                // *current* session on every iteration so a coalesced request
+                // that raced a switch rebuilds what is actually on screen
+                // instead of being consumed and dropped.
+                var target = sid
+                while (true) {
+                    val generation = timelineGeneration
+                    val built = withContext(Dispatchers.Default) {
+                        val messages = store.messages(target)
+                        enrich(StepMapper.fromMessages(messages)) to loadTodos(target)
+                    }
+                    // A wholesale replacement (rewind/open/close) landed while
+                    // this pass ran; its store snapshot is stale, so drop it.
+                    if (generation != timelineGeneration) break
+                    if (_state.value.currentSessionId == target.value) {
+                        stream.rebase(built.first)
+                        _state.value = _state.value.copy(steps = stream.snapshot(), todos = built.second)
+                    }
+                    if (!rebuilds.finish()) break
+                    target = _state.value.currentSessionId?.let { SessionId(it) } ?: break
+                }
+            } finally {
+                rebuilds.reset()
+            }
+        }
     }
 
     /** Read the session's todo list, tolerating a store that cannot answer. */
@@ -1742,10 +1849,14 @@ class ChatViewModel(
      * demand ([expandSubagent]) and cached, because [enrich] runs on every
      * streaming rebuild and must not read every child session each time.
      */
-    private val childCache = mutableMapOf<String, List<UiStep>>()
+    private val childCache = ConcurrentHashMap<String, List<UiStep>>()
 
-    /** Subagent ids the user has explicitly expanded; kept open across rebuilds. */
-    private val expandedChildren = mutableSetOf<String>()
+    /**
+     * Subagent ids the user has explicitly expanded; kept open across rebuilds.
+     * Concurrent because [enrich] now runs off the main thread on the rebuild
+     * dispatcher while taps arrive on the main thread.
+     */
+    private val expandedChildren: MutableSet<String> = ConcurrentHashMap.newKeySet<String>()
 
     private suspend fun enrich(steps: List<UiStep>): List<UiStep> = steps.map { step ->
         val child = step.childId ?: return@map step
@@ -1764,9 +1875,8 @@ class ChatViewModel(
         // Match on `childId`, not `id`: groupSteps rewrites a folded row's id to
         // the preceding THINKING row's id, so `id` may not exist in the raw list.
         fun patch(f: (UiStep) -> UiStep) {
-            _state.value = _state.value.copy(
-                steps = _state.value.steps.map { if (it.childId == child) f(it) else it },
-            )
+            stream.transform { current -> current.map { if (it.childId == child) f(it) else it } }
+            publishSteps()
         }
         if (step.childSteps.isNotEmpty()) {
             // Already loaded — toggle it closed.
@@ -1816,18 +1926,21 @@ class ChatViewModel(
 
         // Optimistic echo + busy, both SYNCHRONOUS with the tap, so the user
         // sees their own bubble and the stop affordance instantly instead of
-        // waiting for the agent's first event round-trip.
+        // waiting for the agent's first event round-trip. Route through the
+        // accumulator so any still-buffered deltas fold in rather than vanish.
+        stream.transform { current ->
+            // Replace any stale optimistic row (a prior run stopped before a
+            // store rebuild) so the timeline never holds two rows with the same
+            // id — a duplicate LazyColumn key crashes the app.
+            current.filterNot { it.id == StepMapper.PENDING_USER_ID } + StepMapper.optimisticUser(text)
+        }
         _state.value = _state.value.copy(
             input = "",
             error = null,
             hint = if (blind) "the selected model may not support images" else null,
             busy = true,
             attachments = emptyList(),
-            // Replace any stale optimistic row (a prior run stopped before a
-            // store rebuild) so the timeline never holds two rows with the same
-            // id — a duplicate LazyColumn key crashes the app.
-            steps = _state.value.steps.filterNot { it.id == StepMapper.PENDING_USER_ID } +
-                StepMapper.optimisticUser(text),
+            steps = stream.snapshot(),
         )
 
         // Keep the run alive while backgrounded and visible in the shade.
@@ -1917,6 +2030,9 @@ class ChatViewModel(
         runJob?.cancel()
         runningSessionId?.let { runningSessions?.remove(it) }
         runningSessionId = null
+        // Land the last buffered tokens now instead of leaving them to the
+        // coalescing timer (which the ViewModel may not outlive).
+        flushDeltas()
         clearAsks()
         watcher?.stop()
         context?.let { ctx -> runCatching { RunService.stop(ctx) } }
@@ -1990,6 +2106,13 @@ class ChatViewModel(
         /** Quiet period before a session search query is actually executed. */
         internal const val SEARCH_DEBOUNCE_MS = 150L
 
+        /**
+         * How long a burst of token deltas accumulates before one state publish.
+         * Roughly two to three frames: long enough to slash allocations, short
+         * enough that the stream still feels live.
+         */
+        internal const val DELTA_COALESCE_MS = 40L
+
         fun Factory(context: Context, workspace: java.io.File): androidx.lifecycle.ViewModelProvider.Factory {
             val app = context.applicationContext as? LumenApp ?: error("LumenApp must own ChatViewModel")
             return Factory(app.container, app.applicationScope, app.events, app.runningSessions, workspace)
@@ -2024,6 +2147,51 @@ class ChatViewModel(
                     runningSessions = runningSessions,
                 ) as T
             }
+    }
+}
+
+/**
+ * Coalesces bursty rebuild requests. While a rebuild pass is in flight, further
+ * requests only set [dirty] instead of stacking another pass; the running loop
+ * picks up the dirty flag and runs exactly one more pass. Pure state machine so
+ * the coalescing rule is unit-testable without coroutines or a store.
+ */
+internal class RebuildCoalescer {
+    /** True between a [request] that returned true and its matching [finish]. */
+    var inFlight: Boolean = false
+        private set
+
+    /** True when a request arrived while a pass was already in flight. */
+    var dirty: Boolean = false
+        private set
+
+    /** Claim the rebuild slot; false means the caller should just mark dirty. */
+    @Synchronized
+    fun request(): Boolean {
+        if (inFlight) {
+            dirty = true
+            return false
+        }
+        inFlight = true
+        return true
+    }
+
+    /** Finish the current pass; true means another pass is needed. */
+    @Synchronized
+    fun finish(): Boolean {
+        if (dirty) {
+            dirty = false
+            return true
+        }
+        inFlight = false
+        return false
+    }
+
+    /** Abandon any in-flight pass (e.g. the session changed underneath it). */
+    @Synchronized
+    fun reset() {
+        inFlight = false
+        dirty = false
     }
 }
 
