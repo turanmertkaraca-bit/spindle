@@ -8,10 +8,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -19,10 +21,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,16 +39,172 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.SessionRow
 import dev.spindle.core.store.SearchHit
 
 private val Mono = FontFamily.Monospace
+
+// --- Shared screen chrome ----------------------------------------------------
+//
+// One top-bar language for every non-chat screen: an optional back affordance
+// with a real 44dp target, a truncating title, and a grouped row of actions.
+// Primary actions fill with the spectral `water`; secondary ones stay quiet.
+// Kept in this file (same package) so Home, Files, Terminal, Canvas, Settings,
+// Storage and Diagnostics all read identically.
+
+/** A single item in a [LumenMenuButton]. */
+internal data class TopMenuAction(val label: String, val tag: String, val onClick: () -> Unit)
+
+/**
+ * A quiet, square back affordance. Sized for touch rather than decoration so it
+ * never reads as the two-character `‹` it used to be.
+ */
+@Composable
+internal fun LumenBackButton(colors: LumenColors, tag: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(44.dp)
+            .clip(LumenShapes.control)
+            .background(colors.surface)
+            .border(1.dp, colors.rule, LumenShapes.control)
+            .clickable { onClick() }
+            .semantics { contentDescription = "back" }
+            .testTag(tag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("\u2039", color = colors.dim, fontFamily = Mono, fontSize = 22.sp, fontWeight = FontWeight.Light)
+    }
+}
+
+/**
+ * A top-bar action. [primary] fills with `water` and reads as the screen's main
+ * verb; otherwise it is a hairline surface pill. Both carry a >=40dp target.
+ */
+@Composable
+internal fun LumenBarAction(
+    colors: LumenColors,
+    label: String,
+    tag: String,
+    onClick: () -> Unit,
+    primary: Boolean = false,
+    enabled: Boolean = true,
+    contentDescription: String? = null,
+) {
+    val shape = LumenShapes.pill
+    val filled = primary && enabled
+    var m = Modifier
+        .heightIn(min = 40.dp)
+        .clip(shape)
+        .then(
+            if (filled) {
+                Modifier.background(colors.water)
+            } else {
+                Modifier.background(colors.surface).border(1.dp, colors.rule, shape)
+            },
+        )
+        .clickable(enabled = enabled) { onClick() }
+        .padding(horizontal = 14.dp)
+    if (contentDescription != null) m = m.semantics { this.contentDescription = contentDescription }
+    Box(m.testTag(tag), contentAlignment = Alignment.Center) {
+        Text(
+            label,
+            color = when {
+                !enabled -> colors.faint
+                filled -> colors.bg
+                else -> colors.dim
+            },
+            fontFamily = Mono, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * A top-bar button that opens a small menu of secondary actions, so a busy
+ * header can tuck its less-common verbs away without hiding them.
+ */
+@Composable
+internal fun LumenMenuButton(
+    colors: LumenColors,
+    label: String,
+    tag: String,
+    items: List<TopMenuAction>,
+    primary: Boolean = false,
+    contentDescription: String? = null,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        LumenBarAction(
+            colors = colors,
+            label = label,
+            tag = tag,
+            onClick = { open = true },
+            primary = primary,
+            contentDescription = contentDescription,
+        )
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            containerColor = colors.surface,
+        ) {
+            items.forEach { item ->
+                DropdownMenuItem(
+                    text = { Text(item.label, color = colors.fg, fontFamily = Mono, fontSize = 13.sp) },
+                    onClick = { open = false; item.onClick() },
+                    modifier = Modifier.testTag(item.tag),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The shared screen header. Pass [onBack] for a back affordance and fill
+ * [actions] with [LumenBarAction]/[LumenMenuButton]s. The title always claims
+ * the free space (and ellipsizes) so controls never crowd it.
+ */
+@Composable
+internal fun LumenTopBar(
+    colors: LumenColors,
+    title: String,
+    modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
+    backTag: String = "back",
+    titleTag: String? = null,
+    titleSize: TextUnit = 16.sp,
+    actions: @Composable RowScope.() -> Unit = {},
+) {
+    Row(
+        modifier.fillMaxWidth().padding(start = 6.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (onBack != null) {
+            LumenBackButton(colors, backTag, onBack)
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(
+            title,
+            color = colors.fg, fontFamily = Mono, fontSize = titleSize, fontWeight = FontWeight.Medium,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = if (titleTag != null) Modifier.weight(1f).testTag(titleTag) else Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(10.dp))
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            content = actions,
+        )
+    }
+}
 
 /** The home screen: recent chats, a new chat, and a way into settings. */
 @Composable
@@ -98,66 +257,38 @@ fun HomeScreen(
 ) {
     // Destructive delete needs a confirmation; holds the id pending deletion.
     var deleteTarget by remember { mutableStateOf<String?>(null) }
+
+    // Secondary destinations tuck into one quiet menu so the header stays calm.
+    val menuItems = buildList {
+        onFiles?.let { add(TopMenuAction("Files", "files", it)) }
+        onTerminal?.let { add(TopMenuAction("Terminal", "terminal", it)) }
+        add(TopMenuAction("Settings", "settings", onSettings))
+    }
+
     Column(
         modifier.fillMaxSize().background(colors.bg).imePadding()
-            .padding(start = 20.dp, end = 20.dp, top = 56.dp, bottom = 20.dp),
+            .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 20.dp),
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("lumen", color = colors.fg, fontFamily = Mono, fontSize = 26.sp, fontWeight = FontWeight.Medium)
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        LumenTopBar(
+            colors = colors,
+            title = "lumen",
+            titleSize = 26.sp,
+            actions = {
                 if (onToggleTheme != null) {
-                    Text(
-                        "◐",
-                        color = colors.faint, fontFamily = Mono, fontSize = 16.sp,
-                        modifier = Modifier
-                            .clip(LumenShapes.small)
-                            .clickable { onToggleTheme() }
-                            .padding(4.dp)
-                            .testTag("theme"),
+                    LumenBarAction(
+                        colors = colors, label = "\u25d0", tag = "theme", onClick = onToggleTheme,
+                        contentDescription = "toggle theme",
                     )
                 }
-                Spacer(Modifier.width(4.dp))
-                if (onFiles != null) {
-                    Text(
-                        "files",
-                        color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
-                        modifier = Modifier
-                            .clip(LumenShapes.small)
-                            .clickable { onFiles() }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                            .testTag("files"),
-                    )
-                    Spacer(Modifier.width(2.dp))
-                }
-                if (onTerminal != null) {
-                    Text(
-                        ">_",
-                        color = colors.dim, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                        modifier = Modifier
-                            .clip(LumenShapes.small)
-                            .clickable { onTerminal() }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                            .testTag("terminal"),
-                    )
-                    Spacer(Modifier.width(2.dp))
-                }
-                Text(
-                    "settings",
-                    color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
-                    modifier = Modifier
-                        .clip(LumenShapes.small)
-                        .clickable { onSettings() }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                        .testTag("settings"),
+                LumenMenuButton(
+                    colors = colors, label = "\u22ef", tag = "home-menu", items = menuItems,
+                    contentDescription = "more destinations",
                 )
-            }
-        }
-        Spacer(Modifier.height(24.dp))
+            },
+        )
+        Spacer(Modifier.height(20.dp))
 
+        // The one obvious thing to do on this screen.
         Box(
             Modifier.fillMaxWidth()
                 .clip(LumenShapes.pill)
@@ -167,19 +298,22 @@ fun HomeScreen(
                 .testTag("new-chat"),
             contentAlignment = Alignment.Center,
         ) {
-            Text("new chat", color = colors.bg, fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(7.dp).background(colors.bg.copy(alpha = 0.85f), WaterShapes.droplet(tail = 0.55f)))
+                Spacer(Modifier.width(10.dp))
+                Text("New chat", color = colors.bg, fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            }
         }
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(18.dp))
 
         Box(
             Modifier.fillMaxWidth()
                 .clip(LumenShapes.pill)
                 .background(colors.surface)
-                .border(1.dp, colors.rule, LumenShapes.pill)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 16.dp, vertical = 11.dp),
         ) {
             if (searchQuery.isEmpty()) {
-                Text("search chats…", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
+                Text("Search chats", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
             }
             BasicTextField(
                 value = searchQuery,
@@ -191,25 +325,12 @@ fun HomeScreen(
                 modifier = Modifier.fillMaxWidth().testTag("search"),
             )
         }
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Text(
-                if (showArchived) "hide archived" else "archived",
-                color = if (showArchived) colors.accent else colors.faint,
-                fontFamily = Mono, fontSize = 11.sp,
-                modifier = Modifier
-                    .clip(LumenShapes.small)
-                    .clickable { onShowArchived(!showArchived) }
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .testTag("show-archived"),
-            )
-        }
 
         // Tag filter bar: every known tag is a toggle chip; a selected chip shows
         // an "×" so the active filter is removable. Hidden when there are none.
         val filterTags = (availableTags + tagFilter).distinct().sorted()
         if (filterTags.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -239,12 +360,30 @@ fun HomeScreen(
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "${sessions.size} ${if (sessions.size == 1) "chat" else "chats"}",
+                color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 0.6.sp,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                if (showArchived) "Hide archived" else "Show archived",
+                color = if (showArchived) colors.accent else colors.faint,
+                fontFamily = Mono, fontSize = 11.sp,
+                modifier = Modifier
+                    .clip(LumenShapes.small)
+                    .clickable { onShowArchived(!showArchived) }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .testTag("show-archived"),
+            )
+        }
+        Spacer(Modifier.height(4.dp))
 
         if (search != null) {
             if (search.isEmpty()) {
                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                    StateHint(colors, "no matches", detail = "try a different query", tag = "search-empty")
+                    StateHint(colors, "No matches", detail = "Try a different word", tag = "search-empty")
                 }
             } else {
                 LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("search-results")) {
@@ -272,14 +411,12 @@ fun HomeScreen(
             }
         } else if (sessions.isEmpty()) {
             Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(Modifier.size(10.dp).background(colors.faint, WaterShapes.droplet(tail = 0.55f)))
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        if (tagFilter.isNotEmpty()) "no chats for these tags" else "no chats yet",
-                        color = colors.faint, fontFamily = Mono, fontSize = 13.sp,
-                    )
-                }
+                StateHint(
+                    colors = colors,
+                    text = if (tagFilter.isNotEmpty()) "No chats with these tags" else "No chats yet",
+                    detail = if (tagFilter.isNotEmpty()) "Clear the filters to see everything" else "Start a new chat to begin",
+                    tag = "home-empty",
+                )
             }
         } else {
             LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("sessions")) {
@@ -353,7 +490,7 @@ fun HomeScreen(
                                     Box(
                                         Modifier.weight(1f)
                                             .clip(LumenShapes.inset)
-                                            .border(1.dp, colors.rule, LumenShapes.inset)
+                                            .background(colors.surface)
                                             .padding(horizontal = 10.dp, vertical = 8.dp),
                                     ) {
                                         BasicTextField(
@@ -395,11 +532,11 @@ fun HomeScreen(
                                         Box(
                                             Modifier.weight(1f)
                                                 .clip(LumenShapes.inset)
-                                                .border(1.dp, colors.rule, LumenShapes.inset)
+                                                .background(colors.surface)
                                                 .padding(horizontal = 10.dp, vertical = 8.dp),
                                         ) {
                                             if (tagDraft.isEmpty()) {
-                                                Text("add tag…", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
+                                                Text("Add a tag", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
                                             }
                                             BasicTextField(
                                                 value = tagDraft,
@@ -424,14 +561,14 @@ fun HomeScreen(
                                     Modifier.fillMaxWidth()
                                         .padding(start = 32.dp, end = 12.dp, bottom = 8.dp)
                                         .testTag("actions-${s.id}"),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 ) {
                                     RowAction(colors, if (s.pinned) "unpin" else "pin", "pin-${s.id}") { onPin(s.id, !s.pinned) }
                                     RowAction(colors, if (s.archived) "unarchive" else "archive", "archive-${s.id}") { onArchive(s.id, !s.archived) }
                                     RowAction(colors, "rename", "rename-${s.id}") { draft = s.title; renaming = true }
                                     RowAction(colors, "tag", "tag-${s.id}") { tagDraft = ""; tagging = true }
                                     RowAction(colors, "fork", "fork-${s.id}") { onFork(s.id) }
-                                    RowAction(colors, "delete", "delete-${s.id}") { deleteTarget = s.id }
+                                    RowAction(colors, "delete", "delete-${s.id}", destructive = true) { deleteTarget = s.id }
                                 }
                             }
                         }
@@ -448,16 +585,16 @@ fun HomeScreen(
             containerColor = colors.surface,
             titleContentColor = colors.fg,
             textContentColor = colors.dim,
-            title = { Text("delete chat", fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium) },
+            title = { Text("Delete chat?", fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium) },
             text = {
                 Text(
-                    "delete \"${sessions.firstOrNull { it.id == id }?.title ?: "this chat"}\" and its messages?",
+                    "\"${sessions.firstOrNull { it.id == id }?.title ?: "this chat"}\" and all of its messages will be removed. This cannot be undone.",
                     fontFamily = Mono, fontSize = 12.5.sp, lineHeight = 18.sp,
                 )
             },
             confirmButton = {
                 Text(
-                    "delete", color = colors.accent, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    "Delete", color = LumenAlert, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
                         .clip(LumenShapes.small)
                         .clickable {
@@ -470,7 +607,7 @@ fun HomeScreen(
             },
             dismissButton = {
                 Text(
-                    "cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
+                    "Cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
                     modifier = Modifier
                         .clip(LumenShapes.small)
                         .clickable { deleteTarget = null }
@@ -482,17 +619,27 @@ fun HomeScreen(
     }
 }
 
-/** A compact bordered action used in an expanded session row. */
+/**
+ * A quiet action used in an expanded session row. Borderless so a row of six
+ * reads as a calm strip of words rather than a wall of boxes.
+ */
 @Composable
-private fun RowAction(colors: LumenColors, label: String, tag: String, onClick: () -> Unit) {
+private fun RowAction(
+    colors: LumenColors,
+    label: String,
+    tag: String,
+    destructive: Boolean = false,
+    onClick: () -> Unit,
+) {
     Text(
         label,
-        color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
+        color = if (destructive) LumenAlert else colors.dim,
+        fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
         modifier = Modifier
             .clip(LumenShapes.small)
-            .border(1.dp, colors.rule, LumenShapes.small)
+            .background(colors.surface)
             .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .padding(horizontal = 9.dp, vertical = 6.dp)
             .testTag(tag),
     )
 }
@@ -513,8 +660,8 @@ private fun TagChip(
         maxLines = 1,
         modifier = Modifier
             .clip(LumenShapes.small)
-            .border(1.dp, if (selected) colors.water else colors.rule, LumenShapes.small)
             .background(if (selected) colors.surface else Color.Transparent)
+            .border(1.dp, if (selected) colors.water else colors.rule, LumenShapes.small)
             .clickable { onClick() }
             .padding(horizontal = 7.dp, vertical = 3.dp)
             .testTag(tag),

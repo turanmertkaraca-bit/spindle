@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -54,9 +53,9 @@ private val Mono = FontFamily.Monospace
 
 /** A short, single-line nudge appended under the key field for each provider. */
 private val KeyHints: Map<String, String> = mapOf(
-    "opencode-go" to "paste the key from your OpenCode Go account.",
-    "deepseek" to "paste the key from platform.deepseek.com.",
-    "openrouter" to "paste a key from openrouter.ai/keys.",
+    "opencode-go" to "Paste the key from your OpenCode Go account.",
+    "deepseek" to "Paste the key from platform.deepseek.com.",
+    "openrouter" to "Paste a key from openrouter.ai/keys.",
 )
 
 /** The "failed" colour, matching the chat screen's ErrorNotice. */
@@ -86,30 +85,24 @@ fun KeyScreen(
 
     Column(
         modifier.fillMaxSize().background(colors.bg).imePadding()
-            .padding(start = 20.dp, end = 20.dp, top = 64.dp, bottom = 24.dp),
+            .padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 24.dp),
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("lumen", color = colors.fg, fontFamily = Mono, fontSize = 26.sp, fontWeight = FontWeight.Medium)
-            if (onToggleTheme != null) {
-                Text(
-                    "◐",
-                    color = colors.faint, fontFamily = Mono, fontSize = 16.sp,
-                    modifier = Modifier
-                        .clip(LumenShapes.small)
-                        .clickable { onToggleTheme() }
-                        .padding(4.dp)
-                        .testTag("theme")
-                        .semantics { contentDescription = "toggle theme" },
-                )
-            }
-        }
-        Spacer(Modifier.height(6.dp))
+        LumenTopBar(
+            colors = colors,
+            title = "lumen",
+            titleSize = 26.sp,
+            actions = {
+                if (onToggleTheme != null) {
+                    LumenBarAction(
+                        colors = colors, label = "\u25d0", tag = "theme", onClick = onToggleTheme,
+                        contentDescription = "toggle theme",
+                    )
+                }
+            },
+        )
+        Spacer(Modifier.height(4.dp))
         Text(
-            "connect a provider to start",
+            "Connect a provider to start",
             color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
         )
         Spacer(Modifier.height(28.dp))
@@ -128,8 +121,8 @@ fun KeyScreen(
                     fontFamily = Mono, fontSize = 13.sp,
                     modifier = Modifier
                         .clip(LumenShapes.inset)
-                        .border(1.dp, if (selected) colors.water else colors.rule, LumenShapes.inset)
                         .background(if (selected) colors.surface else Color.Transparent)
+                        .border(1.dp, if (selected) colors.water else colors.rule, LumenShapes.inset)
                         .clickable { provider = p.first }
                         .padding(horizontal = 14.dp, vertical = 9.dp)
                         .testTag("provider-${p.first}")
@@ -144,7 +137,6 @@ fun KeyScreen(
         Row(
             Modifier.fillMaxWidth().clip(LumenShapes.panel)
                 .background(colors.surface)
-                .border(1.dp, colors.rule, LumenShapes.panel)
                 .padding(start = 12.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -167,15 +159,15 @@ fun KeyScreen(
                 decorationBox = { inner ->
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
                         if (key.isEmpty()) {
-                            Text("paste your key…", color = colors.faint, fontFamily = Mono, fontSize = 14.sp)
+                            Text("Paste your key", color = colors.faint, fontFamily = Mono, fontSize = 14.sp)
                         }
                         inner()
                     }
                 },
             )
             Text(
-                if (visible) "hide" else "show",
-                color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
+                if (visible) "Hide" else "Show",
+                color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
                 modifier = Modifier
                     .clip(LumenShapes.small)
                     .clickable { visible = !visible }
@@ -183,7 +175,7 @@ fun KeyScreen(
                     .semantics { contentDescription = if (visible) "hide key" else "show key" },
             )
             Text(
-                "paste",
+                "Paste",
                 color = colors.accent, fontFamily = Mono, fontSize = 12.sp,
                 modifier = Modifier
                     .clip(LumenShapes.small)
@@ -197,7 +189,7 @@ fun KeyScreen(
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            KeyHints[provider] ?: "paste the key for the provider you picked.",
+            KeyHints[provider] ?: "Paste the key for the provider you picked.",
             color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
         )
 
@@ -206,8 +198,7 @@ fun KeyScreen(
             Row(
                 Modifier.fillMaxWidth()
                     .clip(LumenShapes.panel)
-                    .background(colors.rule)
-                    .border(1.dp, colors.alert().copy(alpha = 0.45f), LumenShapes.panel)
+                    .background(colors.surface)
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -225,7 +216,7 @@ fun KeyScreen(
         Box(
             Modifier.fillMaxWidth()
                 .clip(LumenShapes.pill)
-                .background(if (canGo) colors.water else Color.Transparent)
+                .background(if (canGo) colors.water else colors.surface)
                 .border(1.dp, if (canGo) Color.Transparent else colors.rule, LumenShapes.pill)
                 .clickable(enabled = canGo) { onSubmit(provider, key) }
                 .padding(vertical = 14.dp)
@@ -233,14 +224,14 @@ fun KeyScreen(
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                if (busy) "connecting…" else "continue",
+                if (busy) "Connecting…" else "Continue",
                 color = if (canGo) colors.bg else colors.faint,
                 fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium,
             )
         }
         Spacer(Modifier.weight(1f))
         Text(
-            "keys stay on this device.\nthey are sent only to the provider you pick.",
+            "Keys stay on this device.\nThey are sent only to the provider you pick.",
             color = colors.faint, fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp,
         )
     }

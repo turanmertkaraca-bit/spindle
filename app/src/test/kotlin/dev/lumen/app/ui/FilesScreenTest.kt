@@ -75,6 +75,14 @@ class FilesScreenTest {
     }
 
     @Test
+    fun `an empty folder renders a centered self-explanatory empty state`() {
+        compose.setContent { screen(FilesState(dir = "", entries = emptyList())) }
+
+        compose.onNodeWithTag("files-empty").assertIsDisplayed()
+        compose.onNodeWithText("This folder is empty").assertIsDisplayed()
+    }
+
+    @Test
     fun `a truncated editor notes it and disables save`() {
         compose.setContent {
             screen(

@@ -105,41 +105,25 @@ fun CanvasScreen(
     }
 
     Column(modifier.fillMaxSize().background(colors.bg)) {
-        Row(
-            Modifier.fillMaxWidth().background(colors.surface)
-                .padding(start = 10.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "\u2039", color = colors.dim, fontFamily = Mono, fontSize = 20.sp,
-                modifier = Modifier
-                    .clip(LumenShapes.small)
-                    .clickable { onBack() }
-                    .padding(horizontal = 8.dp, vertical = 2.dp)
-                    .testTag("canvas-back"),
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(
-                "\u25b6 $sourceName",
-                color = colors.fg, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).testTag("canvas-title"),
-            )
-            Text(
-                "reload", color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                modifier = Modifier
-                    .clip(LumenShapes.small)
-                    .clickable { requested += 1 }
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .testTag("canvas-reload"),
-            )
-        }
+        LumenTopBar(
+            colors = colors,
+            title = "\u25b6 $sourceName",
+            titleTag = "canvas-title",
+            onBack = onBack,
+            backTag = "canvas-back",
+            actions = {
+                LumenBarAction(
+                    colors = colors, label = "Reload", tag = "canvas-reload",
+                    onClick = { requested += 1 },
+                )
+            },
+        )
         if (html.isBlank()) {
             Box(
                 Modifier.fillMaxWidth().weight(1f),
                 contentAlignment = Alignment.Center,
             ) {
-                StateHint(colors, "nothing to render", detail = "the page has no HTML", tag = "canvas-empty")
+                StateHint(colors, "Nothing to render", detail = "This page has no HTML", tag = "canvas-empty")
             }
         } else {
             key(reload) {

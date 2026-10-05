@@ -1,8 +1,6 @@
 package dev.lumen.app.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -56,46 +53,30 @@ fun DiagnosticsScreen(
 
     Column(
         modifier.fillMaxSize().background(colors.bg).imePadding()
-            .padding(start = 20.dp, end = 20.dp, top = 56.dp, bottom = 20.dp),
+            .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 20.dp),
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("diagnostics", color = colors.fg, fontFamily = Mono, fontSize = 22.sp, fontWeight = FontWeight.Medium)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "copy",
-                    color = colors.dim, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clip(LumenShapes.small)
-                        .clickable {
+        LumenTopBar(
+            colors = colors,
+            title = "Diagnostics",
+            titleSize = 20.sp,
+            onBack = onBack,
+            backTag = "diag-back",
+            actions = {
+                // Copy and clear are rare; tuck them behind one quiet menu.
+                LumenMenuButton(
+                    colors = colors,
+                    label = "\u22ef",
+                    tag = "diag-more",
+                    contentDescription = "log actions",
+                    items = listOf(
+                        TopMenuAction("Copy log", "diag-copy") {
                             clipboard.setText(AnnotatedString(diag.joinToString("\n") { "${stamp(it.at)} ${it.text}" }))
-                        }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                        .testTag("diag-copy"),
+                        },
+                        TopMenuAction("Clear log", "diag-clear", onClear),
+                    ),
                 )
-                Text(
-                    "clear",
-                    color = colors.dim, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clip(LumenShapes.small)
-                        .clickable { onClear() }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                        .testTag("diag-clear"),
-                )
-                Text(
-                    "done",
-                    color = colors.accent, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clip(LumenShapes.small)
-                        .clickable { onBack() }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                        .testTag("diag-back"),
-                )
-            }
-        }
+            },
+        )
         Spacer(Modifier.height(18.dp))
 
         Text("linux environment", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
@@ -103,9 +84,8 @@ fun DiagnosticsScreen(
         Column(
             Modifier.fillMaxWidth()
                 .clip(LumenShapes.card)
-                .border(1.dp, colors.rule, LumenShapes.card)
                 .background(colors.surface)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
         ) {
             EnvRow(colors, "alpine", if (linux.alpineReady) "ready" else "not installed", linux.alpineReady)
             Spacer(Modifier.height(4.dp))
@@ -119,30 +99,18 @@ fun DiagnosticsScreen(
                 Spacer(Modifier.height(6.dp))
                 Text(it, color = colors.water, fontFamily = Mono, fontSize = 11.sp)
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val enabled = !linux.installing
-                Text(
-                    if (linux.installing) "installing…" else "install debian",
-                    color = if (enabled) colors.accent else colors.faint,
-                    fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clip(LumenShapes.pill)
-                        .border(1.dp, if (enabled) colors.rule else colors.faint, LumenShapes.pill)
-                        .clickable(enabled = enabled) { onInstallDebian() }
-                        .padding(horizontal = 14.dp, vertical = 9.dp)
-                        .testTag("install-debian"),
+                LumenBarAction(
+                    colors = colors,
+                    label = if (linux.installing) "Installing…" else "Install Debian",
+                    tag = "install-debian",
+                    onClick = onInstallDebian,
+                    primary = true,
+                    enabled = enabled,
                 )
-                Text(
-                    "refresh",
-                    color = colors.dim, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clip(LumenShapes.pill)
-                        .border(1.dp, colors.rule, LumenShapes.pill)
-                        .clickable { onRefreshLinux() }
-                        .padding(horizontal = 14.dp, vertical = 9.dp)
-                        .testTag("linux-refresh"),
-                )
+                LumenBarAction(colors, "Refresh", "linux-refresh", onRefreshLinux)
             }
         }
         Spacer(Modifier.height(18.dp))
@@ -150,11 +118,11 @@ fun DiagnosticsScreen(
         Text("event log", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
         Spacer(Modifier.height(8.dp))
         if (diag.isEmpty()) {
-            StateHint(colors, "no events yet", detail = "activity will appear here", tag = "diag-empty")
+            StateHint(colors, "No events yet", detail = "Activity will appear here", tag = "diag-empty")
         } else {
             LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("diag-log")) {
                 itemsIndexed(diag) { _, line ->
-                    Row(Modifier.fillMaxWidth().padding(vertical = 1.dp)) {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
                         Text(stamp(line.at), color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp)
                         Spacer(Modifier.width(8.dp))
                         Text(line.text, color = colors.fg, fontFamily = Mono, fontSize = 11.5.sp)

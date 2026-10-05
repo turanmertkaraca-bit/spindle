@@ -14,9 +14,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -61,25 +61,17 @@ fun SettingsScreen(
     Column(
         modifier.fillMaxSize().background(colors.bg).imePadding()
             .verticalScroll(rememberScrollState())
-            .padding(start = 20.dp, end = 20.dp, top = 56.dp, bottom = 24.dp),
+            .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 28.dp),
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("settings", color = colors.fg, fontFamily = Mono, fontSize = 22.sp, fontWeight = FontWeight.Medium)
-            Text(
-                "done",
-                color = colors.accent, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                modifier = Modifier
-                    .clip(LumenShapes.small)
-                    .clickable { onBack() }
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
-                    .testTag("settings-done"),
-            )
-        }
-        Spacer(Modifier.height(24.dp))
+        LumenTopBar(
+            colors = colors,
+            title = "Settings",
+            titleSize = 20.sp,
+            actions = {
+                LumenBarAction(colors, "Done", "settings-done", onBack, primary = true)
+            },
+        )
+        Spacer(Modifier.height(20.dp))
 
         Text("provider", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
         Spacer(Modifier.height(8.dp))
@@ -97,7 +89,7 @@ fun SettingsScreen(
         Spacer(Modifier.height(8.dp))
         val models = ProviderCatalogue.defaultModels(provider)
         if (models.isEmpty()) {
-            StateHint(colors, "no models configured", detail = "check the provider or add a key", tag = "models-empty")
+            StateHint(colors, "No models configured", detail = "Check the provider or add a key", tag = "models-empty")
         }
         for (m in models) {
             val ref = "$provider/${m.id}"
@@ -106,21 +98,25 @@ fun SettingsScreen(
                 Modifier.fillMaxWidth()
                     .padding(vertical = 2.dp)
                     .clip(LumenShapes.panel)
-                    .border(1.dp, if (selected) colors.water else colors.rule, LumenShapes.panel)
                     .background(if (selected) colors.surface else Color.Transparent)
                     .clickable { onModel(ref) }
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                    .padding(horizontal = 12.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                Box(
+                    Modifier.size(6.dp)
+                        .background(if (selected) colors.water else Color.Transparent, WaterShapes.droplet(tail = 0.5f)),
+                )
+                Spacer(Modifier.width(10.dp))
                 Text(
                     m.label ?: m.id,
-                    color = colors.fg, fontFamily = Mono, fontSize = 13.sp,
+                    color = if (selected) colors.fg else colors.dim, fontFamily = Mono, fontSize = 13.sp,
                     modifier = Modifier.weight(1f),
                 )
                 Text(
                     "${m.contextWindow / 1000}k",
-                    color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
+                    color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
                 )
             }
         }
@@ -138,7 +134,7 @@ fun SettingsScreen(
         Text("budget", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
         Spacer(Modifier.height(8.dp))
         Text(
-            "stop a session before it spends more than this",
+            "Stop a session before it spends more than this",
             color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
         )
         Spacer(Modifier.height(8.dp))
@@ -161,7 +157,7 @@ fun SettingsScreen(
                 Text("ask before tools", color = colors.fg, fontFamily = Mono, fontSize = 13.sp)
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    "confirm each tool before it runs",
+                    "Confirm each tool before it runs",
                     color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
                 )
             }
@@ -187,17 +183,18 @@ fun SettingsScreen(
         Spacer(Modifier.height(6.dp))
         SettingsLink(colors, "diagnostics", "linux environment · event log", "settings-diagnostics", onDiagnostics)
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(28.dp))
         Box(
             Modifier.fillMaxWidth()
                 .clip(LumenShapes.pill)
+                .background(colors.surface)
                 .border(1.dp, colors.rule, LumenShapes.pill)
                 .clickable { onEditKey() }
                 .padding(vertical = 14.dp)
                 .testTag("edit-key"),
             contentAlignment = Alignment.Center,
         ) {
-            Text("update api key", color = colors.fg, fontFamily = Mono, fontSize = 14.sp)
+            Text("Change API key", color = colors.dim, fontFamily = Mono, fontSize = 14.sp)
         }
     }
 }
@@ -213,9 +210,9 @@ private fun SettingsLink(
     Row(
         Modifier.fillMaxWidth()
             .clip(LumenShapes.card)
-            .border(1.dp, colors.rule, LumenShapes.card)
+            .background(colors.surface)
             .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 11.dp)
+            .padding(horizontal = 14.dp, vertical = 13.dp)
             .testTag(tag),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
@@ -243,8 +240,8 @@ private fun chip(
         fontFamily = Mono, fontSize = 13.sp,
         modifier = Modifier
             .clip(LumenShapes.inset)
-            .border(1.dp, if (selected) colors.water else colors.rule, LumenShapes.inset)
             .background(if (selected) colors.surface else Color.Transparent)
+            .border(1.dp, if (selected) colors.water else colors.rule, LumenShapes.inset)
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 9.dp)
             .testTag(tag),

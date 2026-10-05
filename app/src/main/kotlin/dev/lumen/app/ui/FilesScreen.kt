@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,7 +18,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -104,46 +104,68 @@ fun FilesScreen(
         AdaptiveTwoPane(
             list = {
                 Column(Modifier.fillMaxSize()) {
-                    FilesHeader(colors, dir, onBack = onBack, onUp = onUp, onNew = { newKind = it })
+                    LumenTopBar(
+                        colors = colors,
+                        title = "Files",
+                        onBack = onBack,
+                        backTag = "files-back",
+                        actions = {
+                            if (dir.isNotEmpty()) {
+                                LumenBarAction(colors, "Up", "files-up", onUp)
+                            }
+                            LumenMenuButton(
+                                colors = colors,
+                                label = "New",
+                                tag = "files-new",
+                                primary = true,
+                                contentDescription = "create new",
+                                items = listOf(
+                                    TopMenuAction("New file", "new-file") { onNew(NewKind.File) },
+                                    TopMenuAction("New folder", "new-folder") { onNew(NewKind.Folder) },
+                                ),
+                            )
+                        },
+                    )
 
                     Breadcrumb(colors, dir, onOpenDir)
 
                     val listing = files
-                    val listingError = listing?.error
                     if (listing == null) {
-                        Hint(colors, "loading files…")
-                    } else if (listingError != null && listing.entries.isEmpty()) {
-                        Hint(colors, listingError, error = true)
+                        CenteredHint(colors, "Loading files…")
                     } else {
-                        LazyColumn(
-                            Modifier.fillMaxWidth().weight(1f).testTag("files-list"),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        ) {
-                            if (listingError != null) {
-                                item(key = "__error") {
-                                    Text(
-                                        listingError, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp).testTag("files-error"),
+                        val listingError = listing.error
+                        if (listingError != null && listing.entries.isEmpty()) {
+                            CenteredHint(colors, listingError, error = true)
+                        } else if (listing.entries.isEmpty()) {
+                            CenteredHint(
+                                colors,
+                                "This folder is empty",
+                                detail = "Use New to add a file or folder",
+                                tag = "files-empty",
+                            )
+                        } else {
+                            LazyColumn(
+                                Modifier.fillMaxWidth().weight(1f).testTag("files-list"),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            ) {
+                                if (listingError != null) {
+                                    item(key = "__error") {
+                                        Text(
+                                            listingError, color = LumenAlert, fontFamily = Mono, fontSize = 11.sp,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp).testTag("files-error"),
+                                        )
+                                    }
+                                }
+                                items(listing.entries, key = { it.path }) { entry ->
+                                    EntryRow(
+                                        colors = colors,
+                                        entry = entry,
+                                        onEnter = onEnter,
+                                        onRename = { renameTarget = it },
+                                        onDelete = { deleteTarget = it },
+                                        onOpenCanvas = onOpenCanvas,
                                     )
                                 }
-                            }
-                            if (listing.entries.isEmpty() && listingError == null) {
-                                item(key = "__empty") {
-                                    Text(
-                                        "empty folder", color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 14.dp).testTag("files-empty"),
-                                    )
-                                }
-                            }
-                            items(listing.entries, key = { it.path }) { entry ->
-                                EntryRow(
-                                    colors = colors,
-                                    entry = entry,
-                                    onEnter = onEnter,
-                                    onRename = { renameTarget = it },
-                                    onDelete = { deleteTarget = it },
-                                    onOpenCanvas = onOpenCanvas,
-                                )
                             }
                         }
                     }
@@ -157,8 +179,8 @@ fun FilesScreen(
     newKind?.let { kind ->
         NameDialog(
             colors = colors,
-            title = if (kind == NewKind.File) "new file" else "new folder",
-            confirm = "create",
+            title = if (kind == NewKind.File) "New file" else "New folder",
+            confirm = "Create",
             onDismiss = { newKind = null },
             onConfirm = { name ->
                 if (kind == NewKind.File) onCreateFile(dir, name) else onCreateDir(dir, name)
@@ -170,8 +192,8 @@ fun FilesScreen(
     renameTarget?.let { entry ->
         NameDialog(
             colors = colors,
-            title = "rename",
-            confirm = "rename",
+            title = "Rename",
+            confirm = "Rename",
             initial = entry.name,
             onDismiss = { renameTarget = null },
             onConfirm = { name ->
@@ -184,13 +206,14 @@ fun FilesScreen(
     deleteTarget?.let { entry ->
         ConfirmDialog(
             colors = colors,
-            title = "delete",
+            title = if (entry.isDir) "Delete folder?" else "Delete file?",
             message = if (entry.isDir) {
-                "delete folder \"${entry.name}\" and everything inside it?"
+                "\"${entry.name}\" and everything inside it will be removed. This cannot be undone."
             } else {
-                "delete \"${entry.name}\"?"
+                "\"${entry.name}\" will be removed. This cannot be undone."
             },
-            confirm = "delete",
+            confirm = "Delete",
+            destructive = true,
             onDismiss = { deleteTarget = null },
             onConfirm = {
                 onDelete(entry.path, entry.isDir)
@@ -202,9 +225,9 @@ fun FilesScreen(
     pendingSave?.let { (path, content) ->
         ConfirmDialog(
             colors = colors,
-            title = "overwrite",
-            message = "overwrite \"${path.substringAfterLast('/')}\"?",
-            confirm = "overwrite",
+            title = "Overwrite file?",
+            message = "\"${path.substringAfterLast('/')}\" already has contents. Saving replaces them.",
+            confirm = "Overwrite",
             onDismiss = { pendingSave = null },
             onConfirm = {
                 onSaveFile(path, content)
@@ -215,62 +238,12 @@ fun FilesScreen(
 }
 
 @Composable
-private fun FilesHeader(
-    colors: LumenColors,
-    dir: String,
-    onBack: () -> Unit,
-    onUp: () -> Unit,
-    onNew: (NewKind) -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth().padding(start = 10.dp, end = 14.dp, top = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            "‹", color = colors.dim, fontFamily = Mono, fontSize = 20.sp,
-            modifier = Modifier
-                .clip(LumenShapes.small)
-                .clickable { onBack() }
-                .padding(horizontal = 8.dp, vertical = 2.dp)
-                .testTag("files-back"),
-        )
-        Spacer(Modifier.width(6.dp))
-        Text("files", color = colors.fg, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-        Spacer(Modifier.weight(1f))
-        if (dir.isNotEmpty()) {
-            HeaderAction(colors, "up", "files-up", onUp)
-            Spacer(Modifier.width(4.dp))
-        }
-        HeaderAction(colors, "+ file", "new-file") { onNew(NewKind.File) }
-        Spacer(Modifier.width(4.dp))
-        HeaderAction(colors, "+ folder", "new-folder") { onNew(NewKind.Folder) }
-    }
-}
-
-@Composable
-private fun HeaderAction(
-    colors: LumenColors,
-    label: String,
-    tag: String,
-    onClick: () -> Unit,
-) {
-    Text(
-        label, color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-        modifier = Modifier
-            .clip(LumenShapes.small)
-            .clickable { onClick() }
-            .padding(horizontal = 7.dp, vertical = 5.dp)
-            .testTag(tag),
-    )
-}
-
-@Composable
 private fun Breadcrumb(colors: LumenColors, dir: String, onOpenDir: (String) -> Unit) {
     val segments = dir.split('/').filter { it.isNotEmpty() }
     Row(
         Modifier.fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 6.dp),
+            .padding(horizontal = 18.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -315,21 +288,22 @@ private fun EntryRow(
     var menu by remember { mutableStateOf(false) }
     Row(
         Modifier.fillMaxWidth()
-            .clip(LumenShapes.card)
+            .padding(horizontal = 4.dp)
+            .clip(LumenShapes.inset)
             .clickable { onEnter(entry) }
-            .padding(start = 12.dp, end = 6.dp, top = 9.dp, bottom = 9.dp)
+            .padding(start = 12.dp, end = 6.dp, top = 11.dp, bottom = 11.dp)
             .testTag("entry-${entry.path}"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            if (entry.isDir) "▸" else "·",
+            if (entry.isDir) "\u25b8" else "\u00b7",
             color = if (entry.isDir) colors.water else colors.faint,
             fontFamily = Mono, fontSize = 13.sp,
             modifier = Modifier.width(18.dp),
         )
         Spacer(Modifier.width(6.dp))
         Text(
-            if (entry.isDir) "${entry.name}/" else entry.name,
+            entry.name,
             color = colors.fg, fontFamily = Mono, fontSize = 13.sp,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
@@ -340,12 +314,13 @@ private fun EntryRow(
             if (isHtml(entry.name)) {
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "\u25b6 view",
+                    "\u25b6 View",
                     color = colors.water, fontFamily = Mono, fontSize = 10.5.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
                         .clip(LumenShapes.small)
+                        .background(colors.surface)
                         .clickable { onOpenCanvas(entry.path) }
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .padding(horizontal = 7.dp, vertical = 3.dp)
                         .testTag("view-${entry.path}"),
                 )
             }
@@ -356,7 +331,7 @@ private fun EntryRow(
                 modifier = Modifier
                     .clip(LumenShapes.small)
                     .clickable { menu = true }
-                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
                     .testTag("menu-${entry.path}"),
             )
             DropdownMenu(
@@ -365,12 +340,12 @@ private fun EntryRow(
                 containerColor = colors.surface,
             ) {
                 DropdownMenuItem(
-                    text = { Text("rename", color = colors.fg, fontFamily = Mono, fontSize = 12.5.sp) },
+                    text = { Text("Rename", color = colors.fg, fontFamily = Mono, fontSize = 13.sp) },
                     onClick = { menu = false; onRename(entry) },
                     modifier = Modifier.testTag("rename-${entry.path}"),
                 )
                 DropdownMenuItem(
-                    text = { Text("delete", color = colors.fg, fontFamily = Mono, fontSize = 12.5.sp) },
+                    text = { Text("Delete", color = LumenAlert, fontFamily = Mono, fontSize = 13.sp) },
                     onClick = { menu = false; onDelete(entry) },
                     modifier = Modifier.testTag("delete-${entry.path}"),
                 )
@@ -405,41 +380,35 @@ private fun EditorOverlay(
     }
 
     Column(Modifier.fillMaxSize().background(colors.bg)) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                editor.path, color = colors.fg, fontFamily = Mono, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).testTag("editor-path"),
-            )
-            Spacer(Modifier.width(10.dp))
-            HeaderAction(colors, "cancel", "editor-cancel", onCancel)
-            Spacer(Modifier.width(4.dp))
-            val canSave = !editor.truncated && !failed
-            Text(
-                if (editor.truncated) "truncated" else "save",
-                color = if (canSave) colors.accent else colors.faint,
-                fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                modifier = Modifier
-                    .clip(LumenShapes.small)
-                    .clickable(enabled = canSave) { onSave(draft) }
-                    .padding(horizontal = 7.dp, vertical = 5.dp)
-                    .testTag("editor-save"),
-            )
-        }
+        LumenTopBar(
+            colors = colors,
+            title = editor.path,
+            titleTag = "editor-path",
+            titleSize = 13.sp,
+            actions = {
+                LumenBarAction(colors, "Cancel", "editor-cancel", onCancel)
+                val canSave = !editor.truncated && !failed
+                LumenBarAction(
+                    colors = colors,
+                    label = if (editor.truncated) "Truncated" else "Save",
+                    tag = "editor-save",
+                    onClick = { onSave(draft) },
+                    primary = true,
+                    enabled = canSave,
+                )
+            },
+        )
 
         if (failed) {
             Text(
-                editor.error.orEmpty(), color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
+                editor.error.orEmpty(), color = LumenAlert, fontFamily = Mono, fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
             )
             return@Column
         }
         if (editor.truncated) {
             Text(
-                "truncated at ${editor.lines.size} lines — save disabled",
+                "File is too long to edit safely — saving is off",
                 color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.4.sp,
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp).testTag("editor-truncated"),
             )
@@ -447,7 +416,7 @@ private fun EditorOverlay(
         Box(
             Modifier.weight(1f).fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 14.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
         ) {
             BasicTextField(
                 value = draft,
@@ -490,7 +459,7 @@ private fun NameDialog(
                 cursorBrush = SolidColor(colors.water),
                 modifier = Modifier.fillMaxWidth()
                     .clip(LumenShapes.inset)
-                    .border(1.dp, colors.rule, LumenShapes.inset)
+                    .background(colors.bg)
                     .padding(10.dp)
                     .testTag("name-input"),
             )
@@ -509,7 +478,7 @@ private fun NameDialog(
         },
         dismissButton = {
             Text(
-                "cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
+                "Cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
                 modifier = Modifier
                     .clip(LumenShapes.small)
                     .clickable { onDismiss() }
@@ -528,6 +497,7 @@ private fun ConfirmDialog(
     confirm: String,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
+    destructive: Boolean = false,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -538,7 +508,9 @@ private fun ConfirmDialog(
         text = { Text(message, fontFamily = Mono, fontSize = 12.5.sp, lineHeight = 18.sp) },
         confirmButton = {
             Text(
-                confirm, color = colors.accent, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                confirm,
+                color = if (destructive) LumenAlert else colors.accent,
+                fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .clip(LumenShapes.small)
                     .clickable { onConfirm() }
@@ -548,7 +520,7 @@ private fun ConfirmDialog(
         },
         dismissButton = {
             Text(
-                "cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
+                "Cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
                 modifier = Modifier
                     .clip(LumenShapes.small)
                     .clickable { onDismiss() }
@@ -560,9 +532,15 @@ private fun ConfirmDialog(
 }
 
 @Composable
-private fun Hint(colors: LumenColors, text: String, error: Boolean = false) {
-    Box(Modifier.fillMaxWidth().padding(vertical = 40.dp), contentAlignment = Alignment.Center) {
-        StateHint(colors, text, tint = if (error) LumenAlert else colors.water)
+private fun ColumnScope.CenteredHint(
+    colors: LumenColors,
+    text: String,
+    detail: String? = null,
+    tag: String? = null,
+    error: Boolean = false,
+) {
+    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+        StateHint(colors, text, detail = detail, tag = tag, tint = if (error) LumenAlert else colors.water)
     }
 }
 
