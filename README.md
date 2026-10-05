@@ -30,17 +30,21 @@ JVM (including GitHub Actions).
 
 ## Status
 
-Backend is feature-complete, and the native Android/Compose app (`:app`,
-`dev.lumen.app`) is built on it: streaming providers with per-model Zen/Go
-routing (Claude/Qwen → `/messages`; GPT/Grok `/responses` deliberately
-rejected), durable sessions, 14 tools (incl. `skill` + read-only
-`external-directory`), opt-in `json_schema` structured output (engine-only; no
-host opts in yet), subagent delegation, retries, cancellation, per-session
-prompt serialization, and context compaction. The UI has had its polish pass
-(shared tokens/motion, calm empty/loading/error states; light+dark screenshot
-sweep over every screen). See `docs/HANDOFF.md` (read first), `docs/PLAN.md`,
-`docs/SPEC.md` and `docs/PARITY.md` (what we ported from opencode and what we
-deliberately did not).
+**`0.1.1`** (`versionCode 2`). Backend is feature-complete, and the native
+Android/Compose app (`:app`, `dev.lumen.app`) is built on it: streaming providers
+with per-model Zen/Go routing (`/messages` for Claude/Qwen, **fixture-tested**;
+GPT/Grok `/responses` deliberately rejected), durable sessions, 14 tools (incl.
+`skill` + read-only `external-directory`), opt-in `json_schema` structured output
+(engine-only; no host opts in yet), subagent delegation, retries, cancellation,
+per-session prompt serialization, and context compaction. The UI has had the base
+polish pass plus two refinement passes (shared tokens/motion, calm
+empty/loading/error states, one-line tool cards, shared screen chrome, lighter
+surfaces; light+dark screenshot sweep over every screen, ~85 PNGs, 0 render
+errors). Live Zen/Go Claude/GPT is **out of scope by owner decision** (Go
+subscription only, no paid API credits), not blocked pending a key. See
+`docs/HANDOFF.md` (read first), `docs/PLAN.md`, `docs/SPEC.md` and
+`docs/PARITY.md` (what we ported from opencode and what we deliberately did
+not).
 
 ## Build
 
@@ -54,11 +58,12 @@ deliberately did not).
 There is no keyless path — live calls always need a key. A paid
 `OPENROUTER_API_KEY` (and the committed recorded SSE fixtures) is the primary
 verified path; an OpenCode free-tier key also works for **free models on
-`/chat/completions`** (e.g. `--provider opencode-go --model space-bunny-free`),
-but the free tier 403s Claude/GPT on every surface, so the **live** Zen/Go
-`/messages` (Claude/Qwen) and `/responses` (GPT/Grok) paths stay blocked on a
-paid key. Routing itself is wired and fixture-tested; `/responses` is
-deliberately rejected, not mis-routed.
+`/chat/completions`** (e.g. `--provider opencode-go --model space-bunny-free`).
+The free tier 403s Claude/GPT on every surface, so live Zen/Go Claude/GPT parity
+is **deliberately closed / deprioritized** — the owner has an OpenCode Go
+subscription only and will not add paid API credits (do not chase it). Routing
+itself is wired and fixture-tested (`/messages` for Claude/Qwen); `/responses`
+(GPT/Grok) is intentionally rejected, not mis-routed.
 
 ```
 ./gradlew :cli:run --args="--provider openrouter --model openrouter/auto --prompt \"...\" --yes"

@@ -39,10 +39,13 @@ Legend: `[x]` done · `[~]` partial · `[ ]` todo · `[—]` deliberately deferr
       `/responses` targets return an explicit terminal `Failure` — `/responses`
       is **deliberately not implemented**, not silently mis-routed. Routing is
       fixture + unit tested.
-- [~] Live Claude/GPT streams **blocked**: needs a PAID OpenCode key to record
-      real streams; the free tier returns 403 "Model access is disabled" for
-      Claude/GPT on `/messages`, `/responses` and `/chat/completions`. Only free
-      models (`space-bunny-free`) run live, on Go `/chat/completions`.
+- [—] Live Claude/GPT streams **not pursued (deprioritized by owner decision)**:
+      the free tier returns 403 "Model access is disabled" for Claude/GPT on
+      `/messages`, `/responses` and `/chat/completions`, and the owner has an
+      OpenCode Go subscription only and will **not** add paid API credits. Only
+      free models (`space-bunny-free`) run live, on Go `/chat/completions`.
+      Routing itself is implemented + fixture-tested (`/messages`); this is a
+      closed scope decision, not a dangling "waiting on a key" task.
 
 ## M3 — SQLite store — `[x]` DONE
 
@@ -136,10 +139,11 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
 - [x] Per-session run serialization (`AgentLoop.prompt` holds a per-session
       `Mutex`; different sessions still run concurrently).
 - [x] Provider routing parity: Zen/Go per-model wire routing (`1845a77`) —
-      Claude/Qwen → `/messages` via the Anthropic adapter; GPT/Grok → explicit
-      terminal `Failure` for `/responses` (**deliberately rejected**). Fixture +
-      routing tests committed. Live Claude/GPT remains **blocked** on a paid
-      OpenCode key (free tier 403s).
+      Claude/Qwen → `/messages` via the Anthropic adapter (fixture-tested ✅);
+      GPT/Grok → explicit terminal `Failure` for `/responses` (**deliberately
+      rejected**). Fixture + routing tests committed. Live Claude/GPT is **out of
+      scope by owner decision** (OpenCode Go subscription only, no paid API
+      credits), not blocked-pending-a-key.
 - [x] Structured output opt-in (`bf86874`): `ResponseFormat(name, schemaJson,
       strict)` + defaulted `ChatRequest.responseFormat` and
       `AgentConfig.responseFormat`; the OpenAI-compatible adapter emits
@@ -207,23 +211,35 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
       **pending**; `PerfSampler` logs a `perf:` line to diagnostics per run.
 - [x] CI green gate + screenshot evidence (light+dark across every screen,
       uploaded as the `lumen-screenshots` artifact); APK update-in-place.
+- [x] UI polish landed in three passes: base (`ea2e38e` + `189b695`), refinement
+      1 (`fa9ff1a` chat timeline + `dab4f39` shared screen chrome + `1422eb1`
+      FilesScreen fix) and refinement 2 (`47fd30b` lighter/calmer). The light+dark
+      sweep covers every screen: ~85 PNGs (59 screens + 26 animation frames),
+      0 render errors.
+- [x] Release housekeeping: `app/build.gradle.kts` bumped to `versionCode = 2`,
+      `versionName = "0.1.1"` (bump per release; never reuse a version number).
 
 ## Risks
 
 - **Provider drift** — remote APIs change shape without notice. Mitigation: record
   real SSE bodies as fixtures and assert the exact `ProviderEvent` stream per
   provider; re-record on failures instead of guessing. Live checks are manual.
-- **Free-tier limits** — OpenCode has no keyless path, but a free-tier key DOES
-  work for **free models on `/chat/completions`** (e.g. `space-bunny-free`);
-  free tier returns 403 "Model access is disabled" for Claude/GPT on
-  `/messages`, `/responses` and `/chat/completions`, so per-model routing is
-  implemented and fixture-tested but the **live** Claude/GPT paths stay blocked
-  until a paid key. `:models`
-  on opencode.ai is public, so a 200 is not proof a key is valid. Live smoke
-  needs a `DEEPSEEK_API_KEY` / `OPENROUTER_API_KEY` / `OPENCODE_API_KEY` /
-  `ANTHROPIC_API_KEY` GitHub secret and is manual-only (`workflow_dispatch`), so
-  no PR can spend tokens. Verified 2026-10 with `OPENROUTER_API_KEY` (paid) and a
-  free OpenCode key (`opencode-go` + `space-bunny-free`).
+  DeepSeek/OpenRouter live paths are the ones exercised; Zen/Go live
+  Claude/GPT is a closed scope decision (below), so there is less live surface to
+  drift.
+- **Free-tier limits / routing scope** — OpenCode has no keyless path, but a
+  free-tier key DOES work for **free models on `/chat/completions`** (e.g.
+  `space-bunny-free`); the free tier returns 403 "Model access is disabled" for
+  Claude/GPT on `/messages`, `/responses` and `/chat/completions`. Per-model
+  routing is implemented and fixture-tested (`/messages`), and `/responses` is
+  deliberately rejected. **Live Claude/GPT is deprioritized/closing by owner
+  decision** (OpenCode Go subscription only; no paid API credits will be added),
+  so it is *not* a blocker to chase. `:models` on opencode.ai is public, so a 200
+  is not proof a key is valid. Live smoke needs a `DEEPSEEK_API_KEY` /
+  `OPENROUTER_API_KEY` / `OPENCODE_API_KEY` / `ANTHROPIC_API_KEY` GitHub secret
+  and is manual-only (`workflow_dispatch`), so no PR can spend tokens. Verified
+  2026-10 with `OPENROUTER_API_KEY` (paid) and a free OpenCode key
+  (`opencode-go` + `space-bunny-free`).
 - **Tool path safety** — a bad resolve lets a tool read or write outside `cwd`
   (`..`, absolute paths, symlinks). Mitigation: normalize + containment checks on
   every path argument and adversarial tests per escape vector.

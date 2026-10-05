@@ -801,7 +801,9 @@ These are explicit non-goals. They are not bugs; do not build them now.
   `chat/completions` and `messages` (Claude-family/Qwen) only. `/responses` is
   **intentionally rejected**, not merely deferred: `OpenCodeRoutingProvider`
   returns an explicit terminal `Failure` rather than guessing the wire format.
-  Live Claude/GPT streams are separately **blocked** on a paid OpenCode key (free
-  tier 403s `messages`/`responses`/`chat/completions` for Claude/GPT).
+  Live Claude/GPT streams are separately **out of scope by owner decision**
+  (OpenCode Go subscription only, no paid API credits; the free tier 403s
+  `messages`/`responses`/`chat/completions` for Claude/GPT) — deliberately closed,
+  not blocked-pending-a-key.
 - **Parallel tool execution** — tools run sequentially in call order.
 - **ULID ids / cross-process uniqueness** — `Ids.new` is process-monotonic only.

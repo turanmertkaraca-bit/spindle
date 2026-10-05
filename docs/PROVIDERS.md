@@ -78,8 +78,10 @@ interchangeable:
 - **Free tier blocks Claude/GPT:** returns **403 "Model access is disabled"** on
   `/messages` (Claude/Qwen) and `/responses` (GPT/Grok), and also on
   `/chat/completions`. Per-model routing is implemented + fixture-tested
-  (`1845a77`); only the **live** Claude/GPT verification is blocked until a paid
-  OpenCode key can record real streams.
+  (`1845a77`, `/messages` ✅). **Live Claude/GPT verification is deliberately out
+  of scope** by owner decision (OpenCode Go subscription only; no paid API
+  credits will be added) — not blocked-pending-a-key. `/responses` stays
+  intentionally dropped.
 - **Go additionally requires** a stable `x-opencode-session: <sessionId>` and a
   custom `User-Agent` on every request (see the Go section above); a
   missing/changing session id can drop affinity.

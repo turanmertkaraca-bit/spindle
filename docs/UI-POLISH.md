@@ -48,6 +48,41 @@ Items 3–6 below are now done:
   `lumen-screenshots` CI artifact. `189b695` was the follow-up Canvas import
   compile fix found by CI.
 
+## Refinement pass 1 (`fa9ff1a` + `dab4f39` + `1422eb1`)
+
+Two follow-up passes tightened the earlier polish. Pass 1:
+
+- **Chat timeline (`fa9ff1a`).** Tool cards collapse to a single line
+  (tool + key arg + status) with plain-language failure text and cleaned
+  output; thinking renders as a subtle single line; the assistant hash label is
+  replaced by the **agent name**; prose drops monospace (kept only for
+  code/paths); calmer spacing/elevation and no-bounce motion.
+  `StepMapper` gained tool-detail projection and `StepMapperToolDetailTest`.
+- **Shared screen chrome (`dab4f39`).** One shared `LumenTopBar` /
+  `LumenBarAction` language with 44dp targets and an overflow for secondary
+  verbs; clearer titles, primary actions and destructive wording; a properly
+  centered Files empty state; quieter borders and roomier layout. Applied across
+  Home, Files, Terminal, Canvas, Settings, Diagnostics, Storage and Key.
+- **Follow-up fix (`1422eb1`).** Restored the FilesScreen new-file/new-folder
+  actions (local `newKind` setter after `FilesHeader` removal) and simplified
+  `LumenBarAction` modifier composition.
+
+## Refinement pass 2 (`47fd30b`, lighter / calmer)
+
+- Title: *lighter, calmer transcript and controls* — **no behavior or signature
+  changes**.
+- Quiet surface fills instead of hard borders; slimmer status spine; trimmed
+  card/transcript rhythm and fainter pills/tags.
+- Low-key composer secondary controls with **send as the sole primary**; subtle
+  press feedback on New chat.
+
+## Verification sweep
+
+Items 3–6 above are fully landed. The Robolectric screenshot sweep renders every
+screen in light **and** dark, and the light+dark sweep is clean: **~85 PNGs
+(59 per-screen shots + 26 animation-smoothness frames), 0 render errors**
+(`build/ci-shots*`, uploaded as the `lumen-screenshots` CI artifact).
+
 ## Already addressed (for reference, do not regress)
 
 - Removed the left spine rail.

@@ -34,7 +34,7 @@ Legend: ✅ ported · 🟡 partial · ❌ not ported (by choice unless noted)
 | Anthropic `messages` SSE | `:provider-anthropic` | ✅ |
 | `reasoning_content` / thinking deltas | both adapters | ✅ |
 | DeepSeek, OpenRouter | OpenAI adapter | ✅ |
-| OpenCode Zen/Go | per-model router: OpenAI adapter (`/chat/completions`) + Anthropic adapter (`/messages`); Go threads `x-opencode-session` + custom UA | ✅ `/messages` wired + fixture-tested; live Claude/GPT blocked on a paid key |
+| OpenCode Zen/Go | per-model router: OpenAI adapter (`/chat/completions`) + Anthropic adapter (`/messages`); Go threads `x-opencode-session` + custom UA | ✅ `/messages` wired + fixture-tested; live Claude/GPT out of scope by owner decision (no paid API access) |
 | Zen/Go `/responses` (GPT/Grok) | `OpenCodeRoutingProvider` emits an explicit terminal `Failure` (deliberately not implemented) | ❌ by choice |
 | Zen/Go `/models/gemini-*`, `/systemone` | — | ❌ |
 | OAuth providers (Vertex, Bedrock, Copilot, GitLab, Poe…) | — | ❌ |
@@ -104,7 +104,8 @@ executor swaps.
 ## Gaps ranked by when they will bite
 
 1. **Zen/Go live Claude/GPT streams** — the routing is wired and fixture-tested
-   (`/messages` for Claude/Qwen), but the free-tier key 403s Claude/GPT on every
-   surface, so a **paid** key is required to record real streams. `/responses`
-   (GPT/Grok) is deliberately rejected, not planned.
+   (`/messages` for Claude/Qwen); the free-tier key 403s Claude/GPT on every
+   surface. This is **deliberately closed / deprioritized** by owner decision
+   (OpenCode Go subscription only; no paid API credits), **not blocked pending a
+   paid key**. `/responses` (GPT/Grok) is intentionally dropped, not planned.
 2. Everything else — optional ecosystem.

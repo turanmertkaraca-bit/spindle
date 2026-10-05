@@ -126,8 +126,8 @@ canonical-path clamp (port `FilesActivity` clamp rules), snapshots, save-from-UI
 |---|---|
 | OpenAI-compatible + Anthropic streaming | ✅ |
 | DeepSeek, OpenRouter, Zen, Go configs | ✅ |
-| Zen/Go per-model routing (`/messages` for Claude/Qwen, `/chat/completions` otherwise) | ✅ (wired + fixture-tested; `/responses` for GPT/Grok is **deliberately rejected** with an explicit terminal `Failure`) |
-| Zen/Go live Claude/GPT streams | ❌ (blocked on a paid OpenCode key; free tier 403s `/messages`, `/responses` and `/chat/completions` for Claude/GPT) |
+| Zen/Go per-model routing (`/messages` for Claude/Qwen, `/chat/completions` otherwise) | ✅ (`/messages` wired + **fixture-tested**; `/responses` for GPT/Grok is **intentionally dropped** — an explicit terminal `Failure`, not a mis-route) |
+| Zen/Go live Claude/GPT streams | ❌ **out of scope by owner decision** (OpenCode Go subscription only, no paid API credits; free tier 403s `/messages`, `/responses` and `/chat/completions` for Claude/GPT) — not blocked-pending-a-key |
 | models.dev catalogue (ported snapshot + live enrichment) | ✅ |
 | Key store (port `AuthStore`, `KeysActivity`) | ✅ (encrypted `KeyStore` + key screen) |
 | OAuth providers | ❌ |
@@ -244,4 +244,6 @@ Built on the domains above, before any UI.
 3. Every feature lands with its function test **before** its UI.
 4. No UI/functional regressions; the old app is the parity baseline.
 5. Never reuse a version number; every release updates in place (persistent
-   debug keystore).
+   debug keystore). **Release discipline:** bump `versionCode` (currently `2`)
+   in `app/build.gradle.kts` for every release — the in-place update path keys on
+   it, so a reuse would silently block an install. `versionName` is `0.1.1`.
