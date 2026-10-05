@@ -28,6 +28,7 @@ import dev.spindle.core.tool.ToolOutcome
 import dev.spindle.core.tool.ToolRegistry
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.collect
@@ -40,6 +41,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import java.util.concurrent.atomic.AtomicInteger
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class AgentLoopTest {
@@ -1107,5 +1109,57 @@ class AgentLoopTest {
             .toSet()
         assertTrue("call_stale" !in updatedToolCalls, "the failed attempt's call must not be finalized")
         assertTrue("call_fresh" in updatedToolCalls)
+    }
+
+    @Test
+    fun `same-session prompts serialize while different sessions run concurrently`() = runTest {
+        val active = AtomicInteger(0)
+        val maxActive = AtomicInteger(0)
+        val provider = object : Provider {
+            override val id = "fake"
+            override suspend fun models() = listOf(ModelInfo(providerId = id, id = "fake-1"))
+            override fun stream(request: ChatRequest): Flow<ProviderEvent> = flow {
+                val now = active.incrementAndGet()
+                maxActive.updateAndGet { maxOf(it, now) }
+                try {
+                    emit(ProviderEvent.TextDelta("ok"))
+                    delay(100)
+                    emit(ProviderEvent.Finished(FinishReason.STOP))
+                } finally {
+                    active.decrementAndGet()
+                }
+            }
+        }
+        val store = store()
+        newSession(store, "ses_serialize_a")
+        newSession(store, "ses_serialize_b")
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(emptyList()),
+            store = store,
+            bus = EventBus(),
+            clock = { 0 },
+        )
+
+        // Same session: the second prompt waits for the first to finish.
+        val a1 = launch(UnconfinedTestDispatcher(testScheduler)) {
+            loop.prompt(SessionId("ses_serialize_a"), "one", "fake/fake-1")
+        }
+        val a2 = launch(UnconfinedTestDispatcher(testScheduler)) {
+            loop.prompt(SessionId("ses_serialize_a"), "two", "fake/fake-1")
+        }
+        a1.join(); a2.join()
+        assertEquals(1, maxActive.get(), "same-session prompts must not overlap")
+
+        // Different sessions: they are allowed to run at the same time.
+        maxActive.set(0); active.set(0)
+        val b1 = launch(UnconfinedTestDispatcher(testScheduler)) {
+            loop.prompt(SessionId("ses_serialize_a"), "three", "fake/fake-1")
+        }
+        val b2 = launch(UnconfinedTestDispatcher(testScheduler)) {
+            loop.prompt(SessionId("ses_serialize_b"), "four", "fake/fake-1")
+        }
+        b1.join(); b2.join()
+        assertEquals(2, maxActive.get(), "different sessions must be able to overlap")
     }
 }

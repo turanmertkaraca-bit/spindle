@@ -38,6 +38,8 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -46,6 +48,7 @@ import kotlinx.serialization.json.contentOrNull
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -72,6 +75,15 @@ class AgentLoop(
     private val snapshots: SnapshotStore? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
+    /**
+     * One run lock per session, so two prompts for the same session serialize
+     * instead of interleaving (which would corrupt the shared history, finalize
+     * another run's in-flight tools, and split run-state). Distinct sessions
+     * still run concurrently. Entries are one small [Mutex] per session id ever
+     * prompted, i.e. bounded by the user's session count.
+     */
+    private val sessionRunLocks = ConcurrentHashMap<SessionId, Mutex>()
 
     suspend fun toolContext(sessionId: SessionId, gate: PermissionGate = permissions): ToolContext {
         val session = store.session(sessionId) ?: error("no session")
@@ -101,6 +113,12 @@ class AgentLoop(
         rules: String? = null,
     ): Message = prompt(sessionId, userText, modelRef, AgentConfig.byName(agentName), onPermission, budget, rules)
 
+    /**
+     * Run a prompt for [sessionId], serialized against any other prompt already
+     * running for the same session. A second same-session prompt waits for the
+     * first to finish rather than interleaving; a prompt for a different session
+     * proceeds concurrently.
+     */
     suspend fun prompt(
         sessionId: SessionId,
         userText: String,
@@ -110,6 +128,21 @@ class AgentLoop(
         budget: ContextBudget = ContextBudget(),
         /** Extra host-supplied rules appended after any AGENTS.md content. */
         rules: String? = null,
+    ): Message {
+        val runLock = sessionRunLocks.getOrPut(sessionId) { Mutex() }
+        return runLock.withLock {
+            promptLocked(sessionId, userText, modelRef, agent, onPermission, budget, rules)
+        }
+    }
+
+    private suspend fun promptLocked(
+        sessionId: SessionId,
+        userText: String,
+        modelRef: String,
+        agent: AgentConfig,
+        onPermission: PermissionGate,
+        budget: ContextBudget,
+        rules: String?,
     ): Message {
         val (provider, model) = providers.resolve(modelRef)
             ?: throw IllegalArgumentException("Unknown model: $modelRef")
