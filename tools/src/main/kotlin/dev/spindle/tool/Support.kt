@@ -37,6 +37,11 @@ internal object Limits {
     const val WEBSEARCH_MAX_CHARS = 12_000
     const val WEBSEARCH_MAX_HTML_BYTES = 1_000_000
     const val WEBSEARCH_MAX_HTML_CHARS = 1_000_000
+    const val SKILL_MAX_SKILLS = 200
+    const val SKILL_MAX_BYTES = 1 * 1024 * 1024
+    const val SKILL_MAX_OUTPUT_CHARS = 60_000
+    const val EXTERNAL_MAX_ENTRIES = 1000
+    const val EXTERNAL_MAX_OUTPUT_CHARS = 60_000
 }
 
 /**
