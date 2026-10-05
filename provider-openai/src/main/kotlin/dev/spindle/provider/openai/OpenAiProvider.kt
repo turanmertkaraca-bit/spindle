@@ -356,6 +356,28 @@ class OpenAiProvider(
         if (request.thinking == true) {
             put("thinking", buildJsonObject { put("type", "enabled") })
         }
+        // Opt-in structured output. When `schemaJson` is malformed JSON we omit
+        // the whole key rather than emit `schema: null` (which providers reject
+        // anyway); the request stays valid and no exception escapes the adapter.
+        request.responseFormat?.let { rf ->
+            val schema = runCatching { json.parseToJsonElement(rf.schemaJson) }.getOrNull()
+            if (schema != null) {
+                put(
+                    "response_format",
+                    buildJsonObject {
+                        put("type", "json_schema")
+                        put(
+                            "json_schema",
+                            buildJsonObject {
+                                put("name", rf.name)
+                                put("schema", schema)
+                                put("strict", rf.strict)
+                            },
+                        )
+                    },
+                )
+            }
+        }
     }
 
     private fun buildMessages(request: ChatRequest): JsonArray = buildJsonArray {

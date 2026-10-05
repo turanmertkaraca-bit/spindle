@@ -8,8 +8,12 @@ import dev.spindle.core.model.Role
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.model.ToolCall
 import dev.spindle.core.model.ToolState
+import dev.spindle.core.provider.ResponseFormat
+import dev.spindle.core.provider.ToolSpec
+import dev.spindle.core.provider.WireMessage
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WireTest {
@@ -105,5 +109,40 @@ class WireTest {
         )
 
         assertTrue(Wire.toWire(listOf(empty)).isEmpty())
+    }
+
+    @Test
+    fun `request carries the agent response format`() {
+        val format = ResponseFormat(
+            name = "answer",
+            schemaJson = """{"type":"object","properties":{"answer":{"type":"string"}}}""",
+            strict = false,
+        )
+
+        val req = Wire.request(
+            model = "gpt-4o",
+            system = "sys",
+            messages = listOf(WireMessage(role = "user", text = "hi")),
+            tools = listOf(ToolSpec("t", "d", "{}")),
+            agent = AgentConfig(responseFormat = format),
+            sessionHint = "ses_1",
+        )
+
+        assertEquals(format, req.responseFormat)
+        assertEquals("ses_1", req.sessionHint)
+    }
+
+    @Test
+    fun `request omits the response format when the agent does not set one`() {
+        val req = Wire.request(
+            model = "gpt-4o",
+            system = "sys",
+            messages = listOf(WireMessage(role = "user", text = "hi")),
+            tools = emptyList(),
+            agent = AgentConfig(),
+            sessionHint = null,
+        )
+
+        assertNull(req.responseFormat)
     }
 }

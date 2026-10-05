@@ -9,6 +9,7 @@ import dev.spindle.core.model.Usage
 import dev.spindle.core.provider.ChatRequest
 import dev.spindle.core.provider.ModelInfo
 import dev.spindle.core.provider.ProviderEvent
+import dev.spindle.core.provider.ResponseFormat
 import dev.spindle.core.provider.ToolSpec
 import dev.spindle.core.provider.WireImage
 import dev.spindle.core.provider.WireMessage
@@ -597,6 +598,48 @@ class OpenAiProviderTest {
         val body = server.takeRequest().body.readUtf8()
         assertTrue(body.contains("\"reasoning_effort\":\"high\""), body)
         assertTrue(!body.contains("\"thinking\""), "thinking should stay off: $body")
+    }
+
+    @Test
+    fun `response format is emitted as json_schema and the stream still parses`() = runTest {
+        server.enqueue(MockResponse().setChunkedBody(fixture("openai_stream.sse"), 7))
+
+        val schema = "{\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}}," +
+            "\"required\":[\"city\"],\"additionalProperties\":false}"
+        val req = request().copy(
+            responseFormat = ResponseFormat(name = "weather", schemaJson = schema, strict = true),
+        )
+
+        val events = provider().stream(req).toList()
+
+        // Body carries the exact OpenAI structured-output shape.
+        val body = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        val expected = Json.parseToJsonElement(
+            "{\"type\":\"json_schema\",\"json_schema\":{" +
+                "\"name\":\"weather\",\"schema\":$schema,\"strict\":true}}",
+        )
+        assertEquals(expected, body["response_format"])
+
+        // And the streamed response is unaffected by the requested format.
+        assertEquals(1, events.count { it is ProviderEvent.Finished || it is ProviderEvent.Failure })
+        assertEquals(
+            "Hello, world",
+            events.filterIsInstance<ProviderEvent.TextDelta>().joinToString("") { it.text },
+        )
+    }
+
+    @Test
+    fun `no response format key is emitted when unset`() = runTest {
+        server.enqueue(MockResponse().setBody("data: [DONE]\n\n"))
+
+        val events = provider().stream(request()).toList()
+
+        val body = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        assertTrue("response_format" !in body, "unset must not change the body: $body")
+        assertEquals(
+            listOf(ProviderEvent.Finished(FinishReason.UNKNOWN)),
+            events.filter { it is ProviderEvent.Finished || it is ProviderEvent.Failure },
+        )
     }
 
     // --- Real recorded OpenRouter streams ----------------------------------

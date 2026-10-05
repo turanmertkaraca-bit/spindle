@@ -93,5 +93,6 @@ object Wire {
         temperature = agent.temperature,
         reasoningEffort = agent.reasoningEffort,
         sessionHint = sessionHint,
+        responseFormat = agent.responseFormat,
     )
 }

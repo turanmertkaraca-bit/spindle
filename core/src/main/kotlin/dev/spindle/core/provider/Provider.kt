@@ -50,6 +50,26 @@ data class ToolSpec(
     val parametersJson: String,
 )
 
+/**
+ * Opt-in structured output request.
+ *
+ * Targets the **OpenAI-compatible `chat/completions` surface only** (see
+ * `docs/CAPABILITIES.md` §1.1, `docs/SPEC.md` §13). Adapters that lack a
+ * structured-output shape (e.g. `:provider-anthropic`) ignore this entirely; it
+ * is never translated into a provider-specific equivalent.
+ *
+ * [schemaJson] is raw JSON Schema text, parsed by the adapter at request time.
+ */
+@Serializable
+data class ResponseFormat(
+    /** Value sent as `response_format.json_schema.name`. */
+    val name: String,
+    /** JSON Schema as text, e.g. `{"type":"object","properties":{...}}`. */
+    val schemaJson: String,
+    /** `strict` mode flag; defaults on. */
+    val strict: Boolean = true,
+)
+
 data class ChatRequest(
     val model: String,
     val system: String,
@@ -63,6 +83,12 @@ data class ChatRequest(
     val thinking: Boolean? = null,
     /** Stable per-conversation id; some gateways (OpenCode Go) require it. */
     val sessionHint: String? = null,
+    /**
+     * Opt-in structured output. Null (the default) leaves the request body
+     * unchanged for every adapter; OpenAI-compatible adapters emit
+     * `response_format: {type: json_schema, ...}` only when this is set.
+     */
+    val responseFormat: ResponseFormat? = null,
 )
 
 /** Normalized stream events every adapter must produce. */

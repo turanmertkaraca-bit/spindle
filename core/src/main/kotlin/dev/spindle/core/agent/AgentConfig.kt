@@ -1,5 +1,7 @@
 package dev.spindle.core.agent
 
+import dev.spindle.core.provider.ResponseFormat
+
 /** Agent behaviour knobs. Mirrors opencode's agent concept, minus the plugins. */
 data class AgentConfig(
     val name: String = "build",
@@ -16,6 +18,12 @@ data class AgentConfig(
     val allowedSubagents: Set<String>? = null,
     /** Retry budget for transient provider failures. */
     val maxRetries: Int = 2,
+    /**
+     * Opt-in structured output. Null (default) keeps provider request bodies
+     * unchanged. Only the OpenAI-compatible surface honours it; Anthropic
+     * ignores it (see [dev.spindle.core.provider.ResponseFormat]).
+     */
+    val responseFormat: ResponseFormat? = null,
 ) {
     companion object {
         val DEFAULT_SYSTEM = """
