@@ -209,6 +209,14 @@ class AgentLoop(
                     Retry.withRetry(
                         maxRetries = agent.maxRetries,
                         onRetry = { attempt, err ->
+                            // The previous attempt already streamed deltas for the
+                            // text/reasoning parts into the UI. Retract them before
+                            // the next attempt emits anything, otherwise the UI
+                            // concatenates attempt-1 + attempt-2 text. Emitting here
+                            // (rather than in the block) guarantees the reset is on
+                            // the bus ahead of the retried attempt's first delta.
+                            bus.emit(AgentEvent.PartReset(sessionId, assistant.id.value, textPartId))
+                            bus.emit(AgentEvent.PartReset(sessionId, assistant.id.value, reasoningPartId))
                             bus.emit(
                                 AgentEvent.Error(
                                     sessionId,

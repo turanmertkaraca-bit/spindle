@@ -644,6 +644,221 @@ class AgentLoopTest {
     }
 
     @Test
+    fun `a retry resets streamed parts before the retried attempt's first delta`() = runTest {
+        // Attempt 1 streams text + reasoning then dies transiently; attempt 2
+        // succeeds. Deltas must keep streaming live (no buffering), but the loop
+        // must retract attempt-1's parts with PartReset before attempt 2 emits.
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.TextDelta("stale-one "),
+                ProviderEvent.ReasoningDelta("stale-thought"),
+                ProviderEvent.Failure("503 service unavailable"),
+            ),
+            listOf(
+                ProviderEvent.ReasoningDelta("fresh-thought"),
+                ProviderEvent.TextDelta("final "),
+                ProviderEvent.TextDelta("answer"),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+        )
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(emptyList()),
+            store = store,
+            bus = bus,
+            clock = { 0 },
+        )
+        newSession(store, "ses_part_reset")
+
+        val events = mutableListOf<AgentEvent>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            bus.events.collect { events += it }
+        }
+        val result = loop.prompt(
+            SessionId("ses_part_reset"),
+            "go",
+            "fake/fake-1",
+            agent = AgentConfig(maxRetries = 1),
+        )
+        job.cancel()
+
+        // (a) live streaming: attempt-1 deltas were emitted as they arrived.
+        val deltas = events.filterIsInstance<AgentEvent.PartDelta>()
+        assertTrue(deltas.any { it.delta == "stale-one " }, "attempt-1 text must stream live")
+        assertTrue(deltas.any { it.delta == "stale-thought" }, "attempt-1 reasoning must stream live")
+
+        // (b) a PartReset for both the text part and the reasoning part.
+        val textPartId = deltas.first { it.kind == DeltaKind.TEXT }.partId
+        val reasoningPartId = deltas.first { it.kind == DeltaKind.REASONING }.partId
+        val resets = events.filterIsInstance<AgentEvent.PartReset>()
+        assertTrue(resets.any { it.partId == textPartId }, "text part must be reset on retry")
+        assertTrue(resets.any { it.partId == reasoningPartId }, "reasoning part must be reset on retry")
+
+        // (d) ordering: every reset precedes the retried attempt's first delta.
+        val firstResetIndex = events.indexOfFirst { it is AgentEvent.PartReset }
+        val retryFirstDeltaIndex = events.indexOfFirst { (it as? AgentEvent.PartDelta)?.delta == "fresh-thought" }
+        assertTrue(firstResetIndex >= 0, "a reset must be emitted")
+        assertTrue(firstResetIndex < retryFirstDeltaIndex, "the reset must precede attempt-2's first delta")
+        assertTrue(
+            events.withIndex().filter { it.value is AgentEvent.PartReset }.all { it.index < retryFirstDeltaIndex },
+            "all resets must precede attempt-2's first delta",
+        )
+
+        // (c) persisted/final text is only the successful attempt.
+        assertEquals("final answer", result.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+        assertEquals(
+            "fresh-thought",
+            result.parts.filterIsInstance<Part.Reasoning>().joinToString("") { it.text },
+        )
+    }
+
+    @Test
+    fun `a retry discards the failed attempt's tool calls`() = runTest {
+        // Attempt 1 streams a tool call then dies transiently; attempt 2 answers
+        // with plain text. `calls.clear()` at the top of each attempt must drop
+        // attempt-1's half-built call, otherwise it would be persisted and run as
+        // a phantom tool call from the failed attempt.
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_1", "echo"),
+                ProviderEvent.ToolCallArgsDelta(0, """{"text":"stale"}"""),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Failure("503 service unavailable"),
+            ),
+            listOf(
+                ProviderEvent.TextDelta("clean"),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+            // A third turn exists only so a leaked call would complete a step
+            // instead of throwing, letting the assertions below fail cleanly.
+            listOf(
+                ProviderEvent.TextDelta("second step"),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+        )
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = bus,
+            clock = { 0 },
+        )
+        newSession(store, "ses_tool_retry")
+
+        val result = loop.prompt(
+            SessionId("ses_tool_retry"),
+            "go",
+            "fake/fake-1",
+            agent = AgentConfig(maxRetries = 1),
+        )
+
+        val messages = store.messages(SessionId("ses_tool_retry"))
+        val toolParts = messages.flatMap { it.parts }.filterIsInstance<Part.Tool>()
+        assertTrue(toolParts.isEmpty(), "a failed attempt's tool call must not be persisted")
+        assertEquals(0, result.parts.count { it is Part.Tool }, "no phantom call in the finalized turn")
+        assertEquals(
+            1,
+            messages.count { it.role == Role.ASSISTANT },
+            "a leaked call would have run an extra model step",
+        )
+        assertEquals("clean", result.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+    }
+
+    @Test
+    fun `each retry resets each streamed part exactly once`() = runTest {
+        // Two transient failures => two retries; each retry must retract the text
+        // and reasoning parts exactly once (not zero, not twice).
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.TextDelta("a1"),
+                ProviderEvent.ReasoningDelta("r1"),
+                ProviderEvent.Failure("503 service unavailable"),
+            ),
+            listOf(
+                ProviderEvent.TextDelta("a2"),
+                ProviderEvent.Failure("500 internal server error"),
+            ),
+            listOf(
+                ProviderEvent.ReasoningDelta("r3"),
+                ProviderEvent.TextDelta("ok"),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+        )
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(emptyList()),
+            store = store,
+            bus = bus,
+            clock = { 0 },
+        )
+        newSession(store, "ses_two_retries")
+
+        val events = mutableListOf<AgentEvent>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            bus.events.collect { events += it }
+        }
+        val result = loop.prompt(
+            SessionId("ses_two_retries"),
+            "go",
+            "fake/fake-1",
+            agent = AgentConfig(maxRetries = 2),
+        )
+        job.cancel()
+
+        val deltas = events.filterIsInstance<AgentEvent.PartDelta>()
+        val textPartId = deltas.first { it.kind == DeltaKind.TEXT }.partId
+        val reasoningPartId = deltas.first { it.kind == DeltaKind.REASONING }.partId
+        val resets = events.filterIsInstance<AgentEvent.PartReset>()
+        assertEquals(2, resets.count { it.partId == textPartId }, "one text reset per retry")
+        assertEquals(2, resets.count { it.partId == reasoningPartId }, "one reasoning reset per retry")
+        assertEquals("ok", result.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+        assertEquals("r3", result.parts.filterIsInstance<Part.Reasoning>().joinToString("") { it.text })
+    }
+
+    @Test
+    fun `no PartReset is emitted when an attempt is not retried`() = runTest {
+        // A terminal failure must not retract the attempt's live text: there is no
+        // retry to replace it, and the failure path persists exactly that text.
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.TextDelta("partial"),
+                ProviderEvent.Failure("401 unauthorized"),
+            ),
+        )
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(emptyList()),
+            store = store,
+            bus = bus,
+            clock = { 0 },
+        )
+        newSession(store, "ses_terminal")
+
+        val events = mutableListOf<AgentEvent>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            bus.events.collect { events += it }
+        }
+        val result = loop.prompt(
+            SessionId("ses_terminal"),
+            "go",
+            "fake/fake-1",
+            agent = AgentConfig(maxRetries = 3),
+        )
+        job.cancel()
+
+        assertTrue(events.none { it is AgentEvent.PartReset }, "no retry means no reset")
+        assertEquals("partial", result.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+    }
+
+    @Test
     fun `provider failure keeps reasoning and emits terminal part updates`() = runTest {
         val provider = ScriptedProvider(
             listOf(

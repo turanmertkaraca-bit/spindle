@@ -142,8 +142,11 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
      * snapshots cannot grow forever — including the snapshots of sessions that
      * have since been deleted (which [SqliteSessionStore.prune] does not touch).
      *
-     * A negative [keepPerSession] or [maxTotal] means "drop everything", matching
-     * the in-memory and Android implementations.
+     * The newest snapshot of every `(session, path)` is pinned — it survives the
+     * age, per-session and global caps — so a per-file revert always has a
+     * pre-image. A negative [keepPerSession] or [maxTotal] means "drop
+     * everything", pins included, matching the in-memory and Android
+     * implementations.
      */
     override suspend fun pruneBounded(
         keepPerSession: Int,
@@ -153,26 +156,44 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
         var removed = 0
         connection.autoCommit = false
         try {
-            if (maxAgeMillis > 0) {
-                val cutoff = System.currentTimeMillis() - maxAgeMillis
-                removed += connection.prepareStatement("DELETE FROM snapshots WHERE created_at < ?").use {
-                    it.setLong(1, cutoff); it.executeUpdate()
-                }
-            }
-            if (keepPerSession >= 0) {
-                removed += connection.prepareStatement(
-                    "DELETE FROM snapshots WHERE rowid IN (" +
-                        "SELECT s.rowid FROM snapshots s WHERE (" +
-                        "SELECT COUNT(*) FROM snapshots x WHERE x.session_id = s.session_id " +
-                        "AND (x.created_at > s.created_at OR (x.created_at = s.created_at AND x.rowid > s.rowid))" +
-                        ") >= ?)",
-                ).use {
-                    it.setInt(1, keepPerSession); it.executeUpdate()
-                }
-            } else {
+            if (keepPerSession < 0 || maxTotal < 0) {
                 removed += connection.prepareStatement("DELETE FROM snapshots").use { it.executeUpdate() }
-            }
-            if (maxTotal >= 0) {
+            } else {
+                if (maxAgeMillis > 0) {
+                    val cutoff = System.currentTimeMillis() - maxAgeMillis
+                    removed += connection.prepareStatement(
+                        "DELETE FROM snapshots WHERE created_at < ? AND id NOT IN $PINNED_IDS",
+                    ).use {
+                        it.setLong(1, cutoff); it.executeUpdate()
+                    }
+                }
+                // Remove the oldest non-pinned rows beyond the per-session cap,
+                // mirroring the in-memory and Android stores exactly (pins may
+                // leave a session over its budget).
+                val pinned = pinnedIdSet()
+                val sessions = connection.createStatement().use { st ->
+                    st.executeQuery("SELECT DISTINCT session_id FROM snapshots").use { rs ->
+                        buildList { while (rs.next()) add(rs.getString(1)) }
+                    }
+                }
+                for (sid in sessions) {
+                    val ids = connection.prepareStatement(
+                        "SELECT id FROM snapshots WHERE session_id = ? ORDER BY created_at DESC, rowid DESC",
+                    ).use { st ->
+                        st.setString(1, sid)
+                        st.executeQuery().use { rs -> buildList { while (rs.next()) add(rs.getString(1)) } }
+                    }
+                    var toRemove = (ids.size - keepPerSession).coerceAtLeast(0)
+                    for (i in ids.indices.reversed()) {
+                        if (toRemove == 0) break
+                        val id = ids[i]
+                        if (id in pinned) continue
+                        removed += connection.prepareStatement("DELETE FROM snapshots WHERE id = ?").use {
+                            it.setString(1, id); it.executeUpdate()
+                        }
+                        toRemove--
+                    }
+                }
                 val count = connection.createStatement().use { st ->
                     st.executeQuery("SELECT COUNT(*) FROM snapshots").use { rs -> if (rs.next()) rs.getInt(1) else 0 }
                 }
@@ -180,13 +201,12 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
                 if (excess > 0) {
                     removed += connection.prepareStatement(
                         "DELETE FROM snapshots WHERE rowid IN (" +
-                            "SELECT rowid FROM snapshots ORDER BY created_at ASC, rowid ASC LIMIT ?)",
+                            "SELECT rowid FROM snapshots WHERE id NOT IN $PINNED_IDS " +
+                            "ORDER BY created_at ASC, rowid ASC LIMIT ?)",
                     ).use {
                         it.setInt(1, excess); it.executeUpdate()
                     }
                 }
-            } else {
-                removed += connection.prepareStatement("DELETE FROM snapshots").use { it.executeUpdate() }
             }
             connection.commit()
             removed
@@ -197,6 +217,14 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
             connection.autoCommit = true
         }
     }
+
+    /** The newest snapshot id of every `(session, path)` pair. */
+    private fun pinnedIdSet(): Set<String> =
+        connection.createStatement().use { st ->
+            st.executeQuery("SELECT id FROM $PINNED_IDS").use { rs ->
+                buildSet { while (rs.next()) add(rs.getString(1)) }
+            }
+        }
 
     private fun readSnapshot(rs: ResultSet) = Snapshot(
         id = rs.getString("id"),
@@ -216,6 +244,16 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
         fun open(dbFile: Path): SqliteSnapshotStore = SqliteSnapshotStore(dbFile)
     }
 }
+
+/**
+ * Correlated subquery selecting the newest snapshot id for every
+ * `(session_id, path)`. Embedded in [SqliteSnapshotStore.pruneBounded]'s deletes
+ * so those rows can never be evicted, which keeps a per-file revert possible.
+ */
+private const val PINNED_IDS =
+    "(SELECT s.id AS id FROM snapshots s WHERE NOT EXISTS (" +
+        "SELECT 1 FROM snapshots x WHERE x.session_id = s.session_id AND x.path = s.path " +
+        "AND (x.created_at > s.created_at OR (x.created_at = s.created_at AND x.rowid > s.rowid))))"
 
 private class SnapshotMigration(val version: Int, val apply: (Connection) -> Unit)
 

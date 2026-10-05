@@ -8,10 +8,13 @@ import kotlin.test.assertEquals
 
 class SnapshotStoreTest {
 
-    private fun snap(session: String, id: String, createdAt: Long) = Snapshot(
+    private fun snap(session: String, id: String, createdAt: Long) =
+        snap(session, id, "a.kt", createdAt)
+
+    private fun snap(session: String, id: String, path: String, createdAt: Long) = Snapshot(
         id = id,
         sessionId = SessionId(session),
-        path = "a.kt",
+        path = path,
         content = "c",
         sha256 = "h",
         createdAt = createdAt,
@@ -52,10 +55,41 @@ class SnapshotStoreTest {
             maxAgeMillis = 24L * 60 * 60 * 1_000,
         )
 
-        assertEquals(2, removed, "the aged snapshot and s1's oldest should go")
-        assertEquals(listOf("a2", "a3"), store.forSession(SessionId("s1")).map { it.id })
+        assertEquals(2, removed, "s1's oldest two go; the aged snapshot is pinned")
+        assertEquals(listOf("a3"), store.forSession(SessionId("s1")).map { it.id })
         assertEquals(listOf("b1", "b2"), store.forSession(SessionId("s2")).map { it.id })
-        assertEquals(emptyList(), store.forSession(SessionId("s3")))
+        assertEquals(listOf("old"), store.forSession(SessionId("s3")).map { it.id })
+    }
+
+    @Test
+    fun `pruneBounded pins the newest snapshot per session and path`() = runTest {
+        val store = InMemorySnapshotStore()
+        val now = System.currentTimeMillis()
+        // Two paths in one session plus a second session, so each (session, path)
+        // pair has a newest pre-image the caps must not evict.
+        store.record(snap("s1", "a1", "src/a.kt", now - 50))
+        store.record(snap("s1", "a2", "src/a.kt", now - 40))
+        store.record(snap("s1", "b1", "src/b.kt", now - 30))
+        store.record(snap("s1", "b2", "src/b.kt", now - 20))
+        store.record(snap("s2", "c1", "src/c.kt", now - 10))
+        // Older than the age cap: pinned because it is s3's only pre-image.
+        store.record(snap("s3", "old1", "src/old.kt", now - 10L * 24 * 60 * 60 * 1_000))
+
+        // A zero global cap and a tiny age would previously wipe everything.
+        val removed = store.pruneBounded(
+            keepPerSession = 0,
+            maxTotal = 0,
+            maxAgeMillis = 24L * 60 * 60 * 1_000,
+        )
+
+        // The newest snapshot of every path survives, even s3's aged one.
+        assertEquals("a2", store.latest(SessionId("s1"), "src/a.kt")?.id)
+        assertEquals("b2", store.latest(SessionId("s1"), "src/b.kt")?.id)
+        assertEquals("c1", store.latest(SessionId("s2"), "src/c.kt")?.id)
+        assertEquals("old1", store.latest(SessionId("s3"), "src/old.kt")?.id)
+        // Older pre-images beyond the caps are gone.
+        assertEquals(2, removed)
+        assertEquals(listOf("a2", "b2"), store.forSession(SessionId("s1")).map { it.id })
     }
 
     @Test
@@ -92,6 +126,21 @@ class SnapshotStoreTest {
         val removed = store.pruneBounded(keepPerSession = 100, maxTotal = -1, maxAgeMillis = 0)
 
         assertEquals(2, removed)
+    }
+
+    @Test
+    fun `a negative keepPerSession drops every snapshot including pins`() = runTest {
+        val store = InMemorySnapshotStore()
+        // One pin per (session, path); the sentinel must ignore them.
+        store.record(snap("s1", "a", "a.kt", 1))
+        store.record(snap("s1", "b", "b.kt", 2))
+        store.record(snap("s2", "c", "c.kt", 3))
+
+        val removed = store.pruneBounded(keepPerSession = -1, maxTotal = 100, maxAgeMillis = 0)
+
+        assertEquals(3, removed)
+        assertEquals(emptyList(), store.forSession(SessionId("s1")))
+        assertEquals(emptyList(), store.forSession(SessionId("s2")))
     }
 
     /** Minimal store that omits the [SnapshotStore.pruneBounded] override. */

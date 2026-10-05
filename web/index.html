@@ -272,6 +272,7 @@ function handle(e) {
   else if (e.role) { /* MessageCreated: ignore, store rebuild covers it */ if (e.role === 'assistant') setBusy(true); }
   else if (e.kind) onDelta(e);
   else if (e.part) onPartUpdated(e);
+  else if (e.partId && e.messageId && !e.name && e.output === undefined) onPartReset(e);
   else if (e.output !== undefined && e.partId) onToolFinished(e);
   else if (e.name && e.index !== undefined) onToolStarted(e);
   else if (e.message && e.state === undefined && e.fraction === undefined && !e.tool) onError(e);
@@ -330,6 +331,15 @@ function getMessage(id, roleFallback) {
     state.order.push(id);
   }
   return m;
+}
+
+function onPartReset(e) {
+  // A retried provider attempt: drop the failed attempt's streamed part so the
+  // next attempt's deltas start clean (mirrors the app's DeltaBuffer.clearPart).
+  const m = state.messages.get(e.messageId);
+  if (!m) return;
+  m.parts = m.parts.filter(p => p.id !== e.partId);
+  render();
 }
 
 function addPart(msgId, role, type, text, partId) {

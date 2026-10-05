@@ -32,6 +32,13 @@ sealed interface WireEvent {
     data class PartUpdated(override val sessionId: String, val messageId: String, val part: PartView) : WireEvent
 
     @Serializable
+    data class PartReset(
+        override val sessionId: String,
+        val messageId: String,
+        val partId: String,
+    ) : WireEvent
+
+    @Serializable
     data class ToolFinished(
         override val sessionId: String,
         val messageId: String,
@@ -107,6 +114,7 @@ sealed interface WireEvent {
                 if (e.kind == DeltaKind.REASONING) "reasoning" else "text", e.delta,
             )
             is AgentEvent.PartUpdated -> PartUpdated(e.sessionId.value, e.messageId, PartView.of(e.part))
+            is AgentEvent.PartReset -> PartReset(e.sessionId.value, e.messageId, e.partId.value)
             is AgentEvent.ToolFinished -> ToolFinished(
                 e.sessionId.value, e.messageId, e.partId.value, e.result.output, e.result.isError,
             )

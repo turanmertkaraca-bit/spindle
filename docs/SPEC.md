@@ -610,6 +610,7 @@ sealed interface AgentEvent {
     data class MessageCreated(sessionId, messageId: String, role: String)
     data class PartDelta(sessionId, messageId, partId: PartId, kind: DeltaKind, delta: String)
     data class PartUpdated(sessionId, messageId, part: Part)
+    data class PartReset(sessionId, messageId, partId: PartId)
     data class ToolFinished(sessionId, messageId, partId: PartId, result: ToolResult)
     data class PermissionRequested(sessionId, requestId: String, tool: String, detail: String, pattern: String?)
     data class QuestionAsked(sessionId, requestId: String, question: String, options: List<String>, multiple: Boolean)
@@ -626,6 +627,11 @@ Event ordering guarantees per prompt:
 4. `ToolFinished` follows the `PartUpdated(RUNNING)` and the final
    `PartUpdated(DONE|ERROR)` for the same tool part.
 5. `Error` is always paired with a terminal `StateChanged(ERROR)`.
+6. On a transient-failure retry, `PartReset` is emitted for the text and
+   reasoning parts before the retried attempt's first `PartDelta`. The stream is
+   still live (no buffering); the reset retracts the failed attempt's already
+   streamed text so the UI never concatenates attempt-1 + attempt-2 output. The
+   store is authoritative throughout: only the successful attempt is persisted.
 
 `PermissionRequested` and `QuestionAsked` are emitted by `ToolContext`; how the UI
 answers them (a `PermissionGate` / `QuestionGate`) is an upper-layer concern.

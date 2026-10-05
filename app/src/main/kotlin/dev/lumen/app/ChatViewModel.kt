@@ -1784,6 +1784,14 @@ class ChatViewModel(
                     scheduleDeltaFlush()
                 }
                 is AgentEvent.PartUpdated -> requestRebuild(SessionId(current))
+                is AgentEvent.PartReset -> {
+                    // A failed attempt's streamed text is being retracted before
+                    // the retried attempt emits anything. Drop it from the live
+                    // buffer (requestRebuild flushes that cleared snapshot first)
+                    // so the UI never concatenates attempt-1 + attempt-2 text.
+                    stream.clearPart(e.partId.value)
+                    requestRebuild(SessionId(current))
+                }
                 is AgentEvent.ToolFinished -> requestRebuild(SessionId(current))
                 is AgentEvent.ToolCallStarted -> {
                     diag("tool: " + e.name)

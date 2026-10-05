@@ -14,6 +14,7 @@ import dev.spindle.core.model.ToolResult
 import dev.spindle.core.model.ToolState
 import dev.spindle.core.model.Usage
 import kotlinx.coroutines.test.runTest
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -169,6 +170,47 @@ class AndroidSessionStoreTest {
             store.maintain()
             assertEquals(1, store.search("needle").size, "an optimized index is still searchable")
         }
+    }
+
+    @Test
+    fun `search falls back after an FTS write fails mid-session`() = runTest {
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val store = AndroidSessionStore(database)
+        val sid = SessionId("ses_fts_stale")
+        store.createSession(Session(sid, "t", "/tmp", 0, 0))
+        // Prime the index so it exists and is trusted before we break it.
+        store.appendMessage(
+            Message(
+                MessageId("primer"), sid, Role.USER, createdAt = 0,
+                parts = listOf(Part.Text(PartId("pp"), "primer text")),
+            ),
+        )
+
+        // Yank the index out from under the live store. Only meaningful where
+        // FTS5 exists; without it the scan is always used.
+        val ftsAvailable = runCatching {
+            database.db().execSQL("ALTER TABLE message_fts RENAME TO message_fts_gone")
+        }.isSuccess
+        assumeTrue("FTS5 is required to exercise the stale-index path", ftsAvailable)
+
+        // This append's FTS write fails; the store must stop trusting the index.
+        store.appendMessage(
+            Message(
+                MessageId("needle"), sid, Role.ASSISTANT, createdAt = 1,
+                parts = listOf(Part.Text(PartId("np"), "the needle is here")),
+            ),
+        )
+        // Leave a stale, empty index named message_fts: if the store still
+        // trusted FTS it would answer "no hits" and silently miss the row.
+        database.db().execSQL(
+            "CREATE VIRTUAL TABLE message_fts USING fts5(" +
+                "message_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, body)",
+        )
+
+        val hits = store.search("needle")
+        assertEquals(1, hits.size, "a failed FTS write must force the linear scan")
+        assertEquals("needle", hits.single().messageId)
+        store.close()
     }
 
     @Test

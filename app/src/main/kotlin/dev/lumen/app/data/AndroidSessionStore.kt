@@ -157,7 +157,7 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
 
     private fun ftsRow(message: Message) {
         if (!ftsReady) return
-        runCatching {
+        try {
             db.delete("message_fts", "message_id=?", arrayOf(message.id.value))
             val body = messageSearchText(message)
             if (body.isNotBlank()) {
@@ -167,22 +167,30 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
                 )
             }
             ftsWrites++
+        } catch (_: Throwable) {
+            // The index is optional: a failed write makes it stale, so stop
+            // trusting it and let search() fall back to the linear scan.
+            ftsReady = false
         }
     }
 
     private fun ftsDeleteMessage(messageId: String) {
         if (!ftsReady) return
-        runCatching {
+        try {
             db.delete("message_fts", "message_id=?", arrayOf(messageId))
             ftsWrites++
+        } catch (_: Throwable) {
+            ftsReady = false
         }
     }
 
     private fun ftsDeleteSession(sessionId: String) {
         if (!ftsReady) return
-        runCatching {
+        try {
             db.delete("message_fts", "session_id=?", arrayOf(sessionId))
             ftsWrites++
+        } catch (_: Throwable) {
+            ftsReady = false
         }
     }
 

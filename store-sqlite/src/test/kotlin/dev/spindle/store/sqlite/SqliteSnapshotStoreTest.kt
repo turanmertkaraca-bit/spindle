@@ -99,6 +99,56 @@ class SqliteSnapshotStoreTest {
     }
 
     @Test
+    fun pruneBoundedPinsNewestPerSessionAndPath(@TempDir tmpDir: Path) = runTest {
+        val s = SqliteSnapshotStore.open(tmpDir.resolve("bounded.db"))
+        store = s
+        val now = System.currentTimeMillis()
+        s.record(snap("a1", "ses_a", "src/a.kt", "old", now - 50))
+        s.record(snap("a2", "ses_a", "src/a.kt", "new", now - 40))
+        s.record(snap("b1", "ses_a", "src/b.kt", "old", now - 30))
+        s.record(snap("b2", "ses_a", "src/b.kt", "new", now - 20))
+        s.record(snap("c1", "ses_b", "src/c.kt", "only", now - 10))
+        s.record(snap("old1", "ses_c", "src/old.kt", "aged", now - 10L * 24 * 60 * 60 * 1_000))
+
+        // A zero global cap and a tiny age would previously wipe everything.
+        val removed = s.pruneBounded(
+            keepPerSession = 0,
+            maxTotal = 0,
+            maxAgeMillis = 24L * 60 * 60 * 1_000,
+        )
+
+        // The newest snapshot of every path survives, even ses_c's aged one.
+        assertEquals("a2", s.latest(SessionId("ses_a"), "src/a.kt")?.id)
+        assertEquals("b2", s.latest(SessionId("ses_a"), "src/b.kt")?.id)
+        assertEquals("c1", s.latest(SessionId("ses_b"), "src/c.kt")?.id)
+        assertEquals("old1", s.latest(SessionId("ses_c"), "src/old.kt")?.id)
+        // Older pre-images beyond the caps are gone.
+        assertEquals(2, removed)
+        assertEquals(listOf("a2", "b2"), s.forSession(SessionId("ses_a")).map { it.id })
+    }
+
+    @Test
+    fun pruneBoundedNegativeCapsDropEverythingIncludingPins(@TempDir tmpDir: Path) = runTest {
+        val s = SqliteSnapshotStore.open(tmpDir.resolve("negative.db"))
+        store = s
+        // One pin per (session, path); a negative sentinel must ignore them.
+        s.record(snap("a1", "ses_a", "a.kt", "v1", 1L))
+        s.record(snap("a2", "ses_a", "a.kt", "v2", 2L))
+        s.record(snap("b1", "ses_b", "b.kt", "v1", 1L))
+
+        val negativeKeep = s.pruneBounded(keepPerSession = -1, maxTotal = 100, maxAgeMillis = 0)
+        assertEquals(3, negativeKeep, "negative keepPerSession drops everything, pins included")
+        assertTrue(s.forSession(SessionId("ses_a")).isEmpty())
+        assertTrue(s.forSession(SessionId("ses_b")).isEmpty())
+
+        s.record(snap("c1", "ses_c", "c.kt", "v1", 1L))
+        s.record(snap("c2", "ses_c", "c.kt", "v2", 2L))
+        val negativeTotal = s.pruneBounded(keepPerSession = 100, maxTotal = -1, maxAgeMillis = 0)
+        assertEquals(2, negativeTotal, "negative maxTotal drops everything, pins included")
+        assertTrue(s.forSession(SessionId("ses_c")).isEmpty())
+    }
+
+    @Test
     fun reopenRetainsSnapshots(@TempDir tmpDir: Path) = runTest {
         val db = tmpDir.resolve("nested").resolve("snapshots.db")
         val first = SqliteSnapshotStore.open(db)

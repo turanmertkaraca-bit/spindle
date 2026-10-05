@@ -19,10 +19,13 @@ import kotlin.test.assertEquals
 @Config(sdk = [34])
 class AndroidSnapshotStoreTest {
 
-    private fun snap(id: String, session: String, at: Long) = Snapshot(
+    private fun snap(id: String, session: String, at: Long) =
+        snap(id, session, "a.kt", at)
+
+    private fun snap(id: String, session: String, path: String, at: Long) = Snapshot(
         id = id,
         sessionId = SessionId(session),
-        path = "a.kt",
+        path = path,
         content = "c",
         sha256 = "h",
         createdAt = at,
@@ -46,10 +49,37 @@ class AndroidSnapshotStoreTest {
             maxAgeMillis = 24L * 60 * 60 * 1_000,
         )
 
-        assertEquals(2, removed, "the aged snapshot and s1's oldest should go")
-        assertEquals(listOf("a2", "a3"), store.forSession(SessionId("s1")).map { it.id })
+        assertEquals(2, removed, "s1's oldest two go; the aged snapshot is pinned")
+        assertEquals(listOf("a3"), store.forSession(SessionId("s1")).map { it.id })
         assertEquals(listOf("b1", "b2"), store.forSession(SessionId("s2")).map { it.id })
-        assertEquals(emptyList(), store.forSession(SessionId("s3")))
+        assertEquals(listOf("old"), store.forSession(SessionId("s3")).map { it.id })
+        store.close()
+    }
+
+    @Test
+    fun `pruneBounded pins the newest snapshot per session and path`() = runTest {
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val store = AndroidSnapshotStore(database)
+        val now = System.currentTimeMillis()
+        store.record(snap("a1", "s1", "src/a.kt", now - 50))
+        store.record(snap("a2", "s1", "src/a.kt", now - 40))
+        store.record(snap("b1", "s1", "src/b.kt", now - 30))
+        store.record(snap("b2", "s1", "src/b.kt", now - 20))
+        store.record(snap("c1", "s2", "src/c.kt", now - 10))
+        store.record(snap("old1", "s3", "src/old.kt", now - 10L * 24 * 60 * 60 * 1_000))
+
+        val removed = store.pruneBounded(
+            keepPerSession = 0,
+            maxTotal = 0,
+            maxAgeMillis = 24L * 60 * 60 * 1_000,
+        )
+
+        assertEquals("a2", store.latest(SessionId("s1"), "src/a.kt")?.id)
+        assertEquals("b2", store.latest(SessionId("s1"), "src/b.kt")?.id)
+        assertEquals("c1", store.latest(SessionId("s2"), "src/c.kt")?.id)
+        assertEquals("old1", store.latest(SessionId("s3"), "src/old.kt")?.id)
+        assertEquals(2, removed)
+        assertEquals(listOf("a2", "b2"), store.forSession(SessionId("s1")).map { it.id })
         store.close()
     }
 

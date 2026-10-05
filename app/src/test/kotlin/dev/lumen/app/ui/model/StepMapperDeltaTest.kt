@@ -1,5 +1,8 @@
 package dev.lumen.app.ui.model
 
+import dev.spindle.core.event.AgentEvent
+import dev.spindle.core.model.PartId
+import dev.spindle.core.model.SessionId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -124,6 +127,38 @@ class StepMapperDeltaTest {
         assertEquals(1, rows.size)
         assertEquals("fresh", rows[0].body)
         assertEquals(StepKind.THINKING, rows[0].kind)
+    }
+
+    @Test
+    fun `clearPart drops the accumulated text and allows re-accumulation`() {
+        val buffer = StepMapper.DeltaBuffer()
+        buffer.reset(listOf(step("p1", ""), step("p2", "keep"), step("p3", "")))
+        buffer.append("p1", "stale ", StepKind.ASSISTANT, "ASSISTANT")
+        buffer.append("p1", "attempt", StepKind.ASSISTANT, "ASSISTANT")
+        buffer.append("p2", " more", StepKind.ASSISTANT, "ASSISTANT")
+
+        buffer.clearPart("p1")
+        val cleared = buffer.snapshot()
+        assertTrue(cleared.none { it.id == "p1" }, "the failed attempt's row must disappear")
+        assertEquals("keep more", cleared.single { it.id == "p2" }.body, "other parts are untouched")
+
+        // A retried attempt recreates the row from its own deltas, not the old text.
+        buffer.append("p1", "fresh", StepKind.ASSISTANT, "ASSISTANT")
+        assertEquals("fresh", buffer.snapshot().single { it.id == "p1" }.body)
+
+        // Clearing a store-backed row with no buffered body also drops it.
+        buffer.clearPart("p3")
+        assertTrue(buffer.snapshot().none { it.id == "p3" })
+    }
+
+    @Test
+    fun `applyEvent PartReset drops the failed part row`() {
+        val current = listOf(step("p1", "stale"), step("p2", "keep"))
+        val out = StepMapper.applyEvent(
+            current,
+            AgentEvent.PartReset(SessionId("s"), "m", PartId("p1")),
+        )
+        assertEquals(listOf("p2"), out.map { it.id })
     }
 
     @Test

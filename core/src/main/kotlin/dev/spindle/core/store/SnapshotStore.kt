@@ -27,6 +27,13 @@ interface SnapshotStore {
      * snapshots per session, at most [maxTotal] newest overall, and drops
      * anything older than [maxAgeMillis]. Returns the number of rows removed.
      *
+     * The newest snapshot for every `(sessionId, path)` pair is *pinned*: it
+     * survives the age, per-session and global caps, so a per-file revert always
+     * has a pre-image as long as the path was ever snapshotted. Pins may leave
+     * more than [keepPerSession] snapshots behind (correctness of revert wins
+     * over a slightly larger bound). A negative [keepPerSession] or [maxTotal]
+     * still means "drop everything", pins included.
+     *
      * The default only enforces [keepPerSession] (via [prune]); durable stores
      * that can enumerate every session should override this to also bound the
      * global count and the age, so snapshots cannot grow forever.
@@ -90,22 +97,37 @@ class InMemorySnapshotStore : SnapshotStore {
 
     override suspend fun pruneBounded(keepPerSession: Int, maxTotal: Int, maxAgeMillis: Long): Int {
         synchronized(lock) {
+            // Negative caps are the legacy "drop everything" sentinel and
+            // deliberately ignore the pins below.
+            if (keepPerSession < 0 || maxTotal < 0) {
+                val before = items.size
+                items.clear()
+                return before
+            }
             val removeIds = HashSet<String>()
             val now = System.currentTimeMillis()
+            // Pin the newest snapshot of every (session, path) so a revert always
+            // has a pre-image, even when the age/per-session/global caps would
+            // otherwise evict it.
+            val pinned = items.groupBy { it.sessionId to it.path }
+                .values
+                .mapTo(HashSet()) { group -> group.sortedBy { it.createdAt }.last().id }
             if (maxAgeMillis > 0) {
-                items.filter { now - it.createdAt > maxAgeMillis }.forEach { removeIds += it.id }
+                items.filter { now - it.createdAt > maxAgeMillis && it.id !in pinned }
+                    .forEach { removeIds += it.id }
             }
-            val perSession = keepPerSession.coerceAtLeast(0)
+            val perSession = keepPerSession
             for ((_, snapshots) in items.filter { it.id !in removeIds }.groupBy { it.sessionId }) {
-                if (snapshots.size <= perSession) continue
-                snapshots.sortedBy { it.createdAt }
-                    .take(snapshots.size - perSession)
+                val oldestFirst = snapshots.sortedBy { it.createdAt }
+                oldestFirst.filter { it.id !in pinned }
+                    .take((oldestFirst.size - perSession).coerceAtLeast(0))
                     .forEach { removeIds += it.id }
             }
             val survivors = items.filter { it.id !in removeIds }.sortedBy { it.createdAt }
-            val globalCap = maxTotal.coerceAtLeast(0)
-            if (globalCap < survivors.size) {
-                survivors.take(survivors.size - globalCap).forEach { removeIds += it.id }
+            val globalCap = maxTotal
+            val excess = survivors.size - globalCap
+            if (excess > 0) {
+                survivors.filter { it.id !in pinned }.take(excess).forEach { removeIds += it.id }
             }
             if (removeIds.isEmpty()) return 0
             val before = items.size

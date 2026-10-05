@@ -30,6 +30,18 @@ sealed interface AgentEvent {
 
     data class PartUpdated(override val sessionId: SessionId, val messageId: String, val part: Part) : AgentEvent
 
+    /**
+     * A part's live text/reasoning was discarded because the attempt that
+     * streamed it failed and is being retried. The UI must drop anything it
+     * accumulated for [partId]; the next attempt recreates the row from its own
+     * deltas. Emitted only on a retry, before that attempt's first delta.
+     */
+    data class PartReset(
+        override val sessionId: SessionId,
+        val messageId: String,
+        val partId: PartId,
+    ) : AgentEvent
+
     data class ToolFinished(
         override val sessionId: SessionId,
         val messageId: String,

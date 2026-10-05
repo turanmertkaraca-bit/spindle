@@ -269,6 +269,11 @@ object StepMapper {
         is AgentEvent.Progress -> current.map {
             if (it.running) it.copy(summary = oneLine(event.message)) else it
         }
+        // Drop the failed attempt's live rows (text/reasoning part and any tool
+        // call rows it emitted) so the next attempt starts clean.
+        is AgentEvent.PartReset -> current.filterNot {
+            it.id == event.partId.value || it.id.startsWith("call:${event.messageId}:")
+        }
         else -> current
     }
 
@@ -350,6 +355,28 @@ object StepMapper {
                 kinds.putIfAbsent(partId, working[i].kind)
                 labels.putIfAbsent(partId, working[i].label)
                 sb.append(delta)
+            }
+            pending = true
+        }
+
+        /**
+         * Drop [partId]'s accumulated text and its row, so a retried attempt
+         * rebuilds the row from scratch instead of concatenating onto the failed
+         * attempt's text. The next [append] recreates it. No-op when unknown.
+         */
+        @Synchronized
+        fun clearPart(partId: String) {
+            bodies.remove(partId)
+            kinds.remove(partId)
+            labels.remove(partId)
+            val at = index[partId]?.takeIf { it in working.indices && working[it].id == partId }
+                ?: working.indexOfFirst { it.id == partId }.takeIf { it >= 0 }
+            if (at != null) {
+                working.removeAt(at)
+                index.clear()
+                for (i in working.indices) index[working[i].id] = i
+            } else {
+                index.remove(partId)
             }
             pending = true
         }

@@ -93,16 +93,31 @@ class AndroidSnapshotStore internal constructor(private val shared: AndroidDatab
      * Bounded retention across every session. Age is applied first, then the
      * per-session cap, then the global cap, all in one transaction so a long
      * session cannot exhaust storage with whole-file snapshots.
+     *
+     * The newest snapshot of every `(session, path)` is pinned — it survives the
+     * age, per-session and global caps — so a per-file revert always has a
+     * pre-image. A negative [keepPerSession] or [maxTotal] means "drop
+     * everything", pins included.
      */
     override suspend fun pruneBounded(keepPerSession: Int, maxTotal: Int, maxAgeMillis: Long): Int = locked {
         var removed = 0
         db.beginTransaction()
         try {
-            if (maxAgeMillis > 0) {
-                val cutoff = System.currentTimeMillis() - maxAgeMillis
-                removed += db.delete("snapshots", "created_at < ?", arrayOf(cutoff.toString()))
-            }
-            if (keepPerSession >= 0) {
+            if (keepPerSession < 0 || maxTotal < 0) {
+                removed += db.delete("snapshots", null, null)
+            } else {
+                val pinned = pinnedIds()
+                if (maxAgeMillis > 0) {
+                    val cutoff = System.currentTimeMillis() - maxAgeMillis
+                    val stale = db.rawQuery(
+                        "SELECT id FROM snapshots WHERE created_at < ?",
+                        arrayOf(cutoff.toString()),
+                    ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+                    for (id in stale) {
+                        if (id in pinned) continue
+                        removed += db.delete("snapshots", "id=?", arrayOf(id))
+                    }
+                }
                 val sessions = db.rawQuery("SELECT DISTINCT session_id FROM snapshots", null).use { c ->
                     buildList { while (c.moveToNext()) add(c.getString(0)) }
                 }
@@ -111,25 +126,33 @@ class AndroidSnapshotStore internal constructor(private val shared: AndroidDatab
                         "SELECT id FROM snapshots WHERE session_id=? ORDER BY created_at DESC, rowid DESC",
                         arrayOf(sid),
                     ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
-                    ids.drop(keepPerSession).forEach { db.delete("snapshots", "id=?", arrayOf(it)); removed++ }
+                    // Remove the oldest non-pinned rows beyond the cap; pins may
+                    // leave the session over its budget.
+                    var toRemove = (ids.size - keepPerSession).coerceAtLeast(0)
+                    for (id in ids.asReversed()) {
+                        if (toRemove == 0) break
+                        if (id in pinned) continue
+                        removed += db.delete("snapshots", "id=?", arrayOf(id))
+                        toRemove--
+                    }
                 }
-            } else {
-                removed += db.delete("snapshots", null, null)
-            }
-            if (maxTotal >= 0) {
                 val count = db.rawQuery("SELECT COUNT(*) FROM snapshots", null).use { c ->
                     if (c.moveToFirst()) c.getInt(0) else 0
                 }
                 val excess = count - maxTotal
                 if (excess > 0) {
                     val ids = db.rawQuery(
-                        "SELECT id FROM snapshots ORDER BY created_at ASC, rowid ASC LIMIT ?",
-                        arrayOf(excess.toString()),
+                        "SELECT id FROM snapshots ORDER BY created_at ASC, rowid ASC",
+                        null,
                     ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
-                    ids.forEach { db.delete("snapshots", "id=?", arrayOf(it)); removed++ }
+                    var toRemove = excess
+                    for (id in ids) {
+                        if (toRemove == 0) break
+                        if (id in pinned) continue
+                        removed += db.delete("snapshots", "id=?", arrayOf(id))
+                        toRemove--
+                    }
                 }
-            } else if (maxTotal < 0) {
-                removed += db.delete("snapshots", null, null)
             }
             db.setTransactionSuccessful()
         } finally {
@@ -137,6 +160,14 @@ class AndroidSnapshotStore internal constructor(private val shared: AndroidDatab
         }
         removed
     }
+
+    /** Ids of the newest snapshot of every `(session, path)` pair. */
+    private fun pinnedIds(): Set<String> = db.rawQuery(
+        "SELECT s.id FROM snapshots s WHERE NOT EXISTS (" +
+            "SELECT 1 FROM snapshots x WHERE x.session_id = s.session_id AND x.path = s.path " +
+            "AND (x.created_at > s.created_at OR (x.created_at = s.created_at AND x.rowid > s.rowid)))",
+        null,
+    ).use { c -> buildSet { while (c.moveToNext()) add(c.getString(0)) } }
 
     override fun close() {
         // Guard with the mutex so a close cannot race an in-flight worker query.
