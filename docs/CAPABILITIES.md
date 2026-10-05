@@ -47,8 +47,8 @@ JVM-testable; 7–9 are platform adapters.
 | Subagents (child sessions, `parentId`) | ✅ |
 | Primary-agent selection at runtime (build/plan/explore/general) | ➕ |
 | Rules / reminders injection (AGENTS.md, house style) | ➕ |
-| Session token + cost totals surfaced as events | ➕ |
-| Max-cost budget + warnings | ➕ |
+| Session token + cost totals surfaced as events | ✅ |
+| Max-cost budget + warnings | ✅ (pricing populated; ceiling fires) |
 | Structured output (`json_schema`) | ➕ (defer) |
 
 New events required: `UsageUpdated`, `TitleUpdated`, `RunStateChanged`
@@ -64,7 +64,7 @@ New events required: `UsageUpdated`, `TitleUpdated`, `RunStateChanged`
 | Fork / branch a session at a message | ➕ |
 | Rewind / revert to a message | ➕ |
 | Persisted session run state (a reopened running child reads as running) | ➕ |
-| Pin / archive / tags / rename | ➕ |
+| Pin / archive / tags / rename | ✅ (tags UI: add/remove/clear + filter) |
 | Retention / prune | ✅ |
 
 ### 1.3 Tools & approval — `:core` + `:tools`
@@ -123,7 +123,7 @@ canonical-path clamp (port `FilesActivity` clamp rules), snapshots, save-from-UI
 | OpenAI-compatible + Anthropic streaming | ✅ |
 | DeepSeek, OpenRouter, Zen, Go configs | ✅ |
 | Zen/Go `/responses` + `/messages` routing | ➕ |
-| models.dev catalogue (ported snapshot + refresh) | 📦 |
+| models.dev catalogue (ported snapshot + live enrichment) | ✅ |
 | Key store (port `AuthStore`, `KeysActivity`) | 📦 |
 | OAuth providers | ❌ |
 | Free tier without a key | ❌ (native client is rejected by the free tier — user does not need it) |
@@ -142,8 +142,8 @@ canonical-path clamp (port `FilesActivity` clamp rules), snapshots, save-from-UI
 
 | capability | status |
 |---|---|
-| Foreground `RunService` for long runs + notification | 📦 |
-| Resumable runs; store is truth across process death | ➕ |
+| Foreground `RunService` for long runs + notification | ✅ |
+| Resumable runs; store is truth across process death | ✅ (Application-scoped run) |
 | Wake lock only while working | 📦 |
 | Watchdog / boot behavior | 📦 |
 | Multi-session concurrency (run N chats at once) | ➕ |

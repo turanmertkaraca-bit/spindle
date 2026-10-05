@@ -42,6 +42,19 @@ opencode and what we deliberately did not).
 ./gradlew :cli:run   # headless harness (see --help)
 ```
 
+## Live smoke
+
+Live provider calls need a paid key: there is no keyless path, because the
+OpenCode free tier rejects third-party clients. With `OPENROUTER_API_KEY` set:
+
+```
+./gradlew :cli:run --args="--provider openrouter --model openrouter/auto --prompt \"...\" --yes"
+```
+
+`.github/workflows/live.yml` gates this exact command behind `workflow_dispatch`
+and the matching repository secret, so it never runs on push/PR and no PR can
+spend tokens.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

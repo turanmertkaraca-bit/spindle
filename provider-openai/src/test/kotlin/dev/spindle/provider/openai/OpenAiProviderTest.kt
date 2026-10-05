@@ -590,4 +590,143 @@ class OpenAiProviderTest {
         assertTrue(body.contains("\"reasoning_effort\":\"high\""), body)
         assertTrue(!body.contains("\"thinking\""), "thinking should stay off: $body")
     }
+
+    // --- Real recorded OpenRouter streams ----------------------------------
+
+    private val textFixture = "openrouter_recorded_text.sse"
+    private val toolFixture = "openrouter_recorded_tool.sse"
+
+    /** `delta.reasoning` arrives as incremental fragments plus a parallel `reasoning_details`. */
+    private val recordedReasoning = listOf(
+        "We",
+        " need to reply",
+        " exactly \"",
+        "hello world\". The",
+        " instruction",
+        " says \"Reply with",
+        " exactly: hello world\". So",
+        " output exactly that phrase,",
+        " no extra characters",
+        ". Ensure",
+        " no capitalization",
+        ", just",
+        " lowercase",
+        ". Final",
+        " answer:",
+        " hello world.",
+    )
+
+    @Test
+    fun `recorded openrouter text stream maps reasoning content usage and stop`() = runTest {
+        server.enqueue(MockResponse().setChunkedBody(fixture(textFixture), 7))
+
+        val events = provider().stream(request()).toList()
+
+        val expected = recordedReasoning.map { ProviderEvent.ReasoningDelta(it) } +
+            listOf(
+                ProviderEvent.TextDelta("hello world"),
+                ProviderEvent.Finished(FinishReason.STOP),
+                ProviderEvent.UsageEvent(
+                    Usage(
+                        inputTokens = 90,
+                        outputTokens = 47,
+                        reasoningTokens = 43,
+                        cacheReadTokens = 0,
+                        cacheWriteTokens = 0,
+                        costUsd = 0.00002392,
+                    ),
+                ),
+            )
+        assertEquals(expected, events)
+
+        // Reasoning deltas are incremental: concatenation yields the full block
+        // exactly once (a cumulative stream would duplicate here).
+        val reasoning = events.filterIsInstance<ProviderEvent.ReasoningDelta>()
+            .joinToString("") { it.text }
+        assertEquals(recordedReasoning.joinToString(""), reasoning)
+
+        val text = events.filterIsInstance<ProviderEvent.TextDelta>().joinToString("") { it.text }
+        assertEquals("hello world", text, "streamed text must not be cumulative")
+
+        val usage = events.filterIsInstance<ProviderEvent.UsageEvent>().single().usage
+        assertEquals(137, usage.totalTokens)
+        assertTrue(usage.costUsd > 0.0, "recorded OpenRouter usage carries a real cost")
+    }
+
+    @Test
+    fun `recorded openrouter tool stream emits one start and a parsed argument object`() = runTest {
+        server.enqueue(MockResponse().setChunkedBody(fixture(toolFixture), 5))
+
+        val events = provider().stream(request()).toList()
+
+        // id/name appear only in the first fragment; later fragments carry args.
+        assertEquals(
+            listOf(ProviderEvent.ToolCallStart(0, "call_7nzrzS2Wx6yfe4jQzI41CfI2", "get_weather")),
+            events.filterIsInstance<ProviderEvent.ToolCallStart>(),
+        )
+
+        val args = events.filterIsInstance<ProviderEvent.ToolCallArgsDelta>()
+            .joinToString("") { it.argsDelta }
+        assertEquals(
+            Json.parseToJsonElement("""{"city":"Paris"}"""),
+            Json.parseToJsonElement(args),
+        )
+
+        val endIndex = events.indexOfFirst { it is ProviderEvent.ToolCallEnd && it.index == 0 }
+        val terminalIndex = events.indexOfFirst {
+            it is ProviderEvent.Finished || it is ProviderEvent.Failure
+        }
+        assertTrue(endIndex >= 0, "missing ToolCallEnd(0)")
+        assertTrue(endIndex < terminalIndex, "ToolCallEnd(0) must precede the terminal event")
+
+        assertEquals(
+            listOf(ProviderEvent.Finished(FinishReason.TOOL_CALLS)),
+            events.filter { it is ProviderEvent.Finished || it is ProviderEvent.Failure },
+        )
+        assertTrue(
+            events.none { it is ProviderEvent.TextDelta },
+            "delta.content is null throughout the recorded tool stream",
+        )
+    }
+
+    @Test
+    fun `recorded openrouter tool stream reassembles across 1 and 5 byte splits`() = runTest {
+        for (chunk in listOf(1, 5)) {
+            server.enqueue(MockResponse().setChunkedBody(fixture(toolFixture), chunk))
+            val events = provider().stream(request()).toList()
+
+            assertEquals(
+                listOf(ProviderEvent.ToolCallStart(0, "call_7nzrzS2Wx6yfe4jQzI41CfI2", "get_weather")),
+                events.filterIsInstance<ProviderEvent.ToolCallStart>(),
+                "chunk=$chunk",
+            )
+            val args = events.filterIsInstance<ProviderEvent.ToolCallArgsDelta>()
+                .joinToString("") { it.argsDelta }
+            assertEquals(
+                Json.parseToJsonElement("""{"city":"Paris"}"""),
+                Json.parseToJsonElement(args),
+                "chunk=$chunk",
+            )
+            assertEquals(
+                listOf(ProviderEvent.Finished(FinishReason.TOOL_CALLS)),
+                events.filter { it is ProviderEvent.Finished || it is ProviderEvent.Failure },
+                "chunk=$chunk",
+            )
+        }
+    }
+
+    @Test
+    fun `every recorded fixture yields exactly one terminal and non cumulative text`() = runTest {
+        for (name in listOf(textFixture, toolFixture)) {
+            server.enqueue(MockResponse().setChunkedBody(fixture(name), 3))
+            val events = provider().stream(request()).toList()
+
+            val terminals = events.filter { it is ProviderEvent.Finished || it is ProviderEvent.Failure }
+            assertEquals(1, terminals.size, "$name must emit exactly one terminal event")
+
+            val text = events.filterIsInstance<ProviderEvent.TextDelta>().joinToString("") { it.text }
+            val expected = if (name == textFixture) "hello world" else ""
+            assertEquals(expected, text, "$name text must not accumulate cumulatively")
+        }
+    }
 }

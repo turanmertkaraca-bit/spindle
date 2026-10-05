@@ -3,6 +3,10 @@ name: live
 # MANUAL ONLY. This workflow is intentionally triggered by workflow_dispatch
 # alone: it is NEVER run on push or pull_request, so no PR can spend tokens.
 # Run it from the Actions tab (or `gh workflow run live.yml`).
+#
+# Live runs need a PAID provider key. The OpenCode free tier rejects
+# third-party clients, so there is no keyless path; the guard step below fails
+# clearly when the secret for the selected provider is missing.
 
 on:
   workflow_dispatch:
@@ -10,22 +14,28 @@ on:
       provider:
         description: Provider adapter to exercise
         required: true
-        default: deepseek
+        default: openrouter
         type: choice
         options:
-          - deepseek
           - openrouter
+          - deepseek
           - opencode
           - opencode-go
+          - anthropic
       model:
         description: Model id passed to --model
         required: true
-        default: deepseek-flash
+        default: openrouter/auto
         type: string
       prompt:
         description: Prompt sent to the model
         required: true
-        default: Reply with the single word pong.
+        default: Reply with the single word pong and call no tools.
+        type: string
+      max_steps:
+        description: Cap on agent iterations (keeps the smoke cheap)
+        required: true
+        default: '4'
         type: string
 
 permissions:
@@ -34,6 +44,7 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,21 +63,23 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
           provider="${{ inputs.provider }}"
           case "$provider" in
-            deepseek)        var=DEEPSEEK_API_KEY ;;
-            openrouter)      var=OPENROUTER_API_KEY ;;
-            opencode)        var=OPENCODE_API_KEY ;;
-            opencode-go)     var=OPENCODE_API_KEY ;;
+            deepseek)    var=DEEPSEEK_API_KEY ;;
+            openrouter)  var=OPENROUTER_API_KEY ;;
+            opencode)    var=OPENCODE_API_KEY ;;
+            opencode-go) var=OPENCODE_API_KEY ;;
+            anthropic)   var=ANTHROPIC_API_KEY ;;
             *)
               echo "::error::Unknown provider '$provider'"
               exit 1
               ;;
           esac
           if [ -z "${!var:-}" ]; then
-            echo "::error::Missing repository secret $var for provider '$provider'. Add it under Settings -> Secrets and variables -> Actions."
+            echo "::error::Missing repository secret $var for provider '$provider'. Add it under Settings -> Secrets and variables -> Actions. Live runs use a paid key: the OpenCode free tier rejects third-party clients, so there is no keyless fallback."
             exit 1
           fi
           echo "Found $var for provider '$provider'. Proceeding with live smoke."
@@ -76,4 +89,5 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-        run: ./gradlew :cli:run --no-daemon --args="--provider ${{ inputs.provider }} --model ${{ inputs.model }} --prompt \"${{ inputs.prompt }}\""
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: ./gradlew :cli:run --no-daemon --args="--provider ${{ inputs.provider }} --model ${{ inputs.model }} --prompt \"${{ inputs.prompt }}\" --yes --max-steps ${{ inputs.max_steps }}"

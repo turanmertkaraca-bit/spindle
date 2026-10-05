@@ -10,6 +10,34 @@ UI polish is the final pass.
 ██  Never paste the PAT into chat (auto-revokes).                        ██
 ```
 
+## 0. Live verified (2026-10)
+
+First successful live end-to-end runs against OpenRouter with a paid
+`OPENROUTER_API_KEY`, driven by the CLI (exact working command):
+
+```
+./gradlew :cli:run --args="--provider openrouter --model openrouter/auto --prompt \"...\" --yes"
+```
+
+- Text run: streamed a real answer.
+- Tool-loop run: multi-step write → read → bash → read → answer executed and
+  streamed correctly.
+
+This is the only live path. The OpenCode free tier rejects third-party clients
+(`FreeTierError: can only be used from within OpenCode`), so keyless live runs
+are impossible. `live.yml` is therefore **manual-only** (`workflow_dispatch`),
+**secrets-gated**, and never on push/PR, so no PR can spend tokens. Real
+OpenRouter SSE bodies from these runs are recorded in
+`provider-openai/src/test/resources/openrouter_recorded_text.sse` and
+`..._tool.sse` (currently untracked).
+
+**Resolver fix** (`SimpleProviderRegistry.resolve`, working tree): it used to
+split `provider/model` on the first slash and look up the remainder as the model
+id, which failed for providers whose model IDs contain slashes (OpenRouter slugs
+like `openrouter/auto`). It now tries the full ref as a model id first, then the
+split, consults the catalogue cache, and skips an unregistered `providerId`
+instead of NPE-ing in `models()`.
+
 ## 1. Repo + build
 
 - Repo: `/data/user/0/ai.opencode.app/files/projects/playground`
@@ -42,7 +70,7 @@ for i in $(seq 1 30); do out=$(bash /root/ci.sh); echo "$out" | head -1
 ```
 `ci.sh` can print a stale run first — always match `sha=$SHA`.
 
-## 3. Architecture (all green up to `973a63b`)
+## 3. Architecture
 
 Modules: `:core` (pure JVM: model, agent loop, events, SPIs, markdown parser,
 references resolver, revert engine, UI math), `:sandbox` (TarGz + InAppProxy),
@@ -81,14 +109,19 @@ Key capabilities already working on device:
   index (kept in sync on insert/update/rewind/delete) and falls back to the old
   linear scan when the platform SQLite lacks FTS5.
 
-## !!! TOP PRIORITY — app kills the run when backgrounded
+## ~~!!! TOP PRIORITY~~ RESOLVED — run survives backgrounding (`87ebe96`)
+
+**Fixed** by moving the loop off `viewModelScope` into the Application-scoped
+`LumenApp.applicationScope`; `closeChat`/`onCleared` no longer cancel it and only
+an explicit stop does, with a shared event bus + live-run tracking so a reopened
+ViewModel reflects an in-flight run. (Kept below for the on-device retest
+checklist and the original diagnosis.)
 
 User report: "give it a job, go back into the app, it looks like the app
-immediately killed itself as soon as I got out." A run does **not** survive the
-user leaving the app, which makes the app useless for real jobs. This is the
-foreground-service/lifecycle gap, and it is the first thing to fix.
+immediately killed itself as soon as I got out." A run did **not** survive the
+user leaving the app, which made the app useless for real jobs.
 
-What exists already (verify it actually works on device):
+What existed at the time (verify it actually works on device):
 - `RunService` (foreground, `dataSync`, ongoing notification + `PARTIAL_WAKE_LOCK`)
   is started in `ChatViewModel.send()` and stopped in `stop()`/finally.
 - `ChatViewModel.onCleared()` was changed to `runJob?.cancel()` +
@@ -131,10 +164,12 @@ A stop-mid-run then immediate re-send used to crash with a duplicate
 on `StateChanged` idle; `StepMapper.dedupeById` last-wins; refuse to start a run
 while the previous coroutine is alive). Not yet retested on device.
 
-## 4. CI status — all green
+## 4. CI status
 
-Head `973a63b`: `jvm backend` + `android app (robolectric)` both success. The
-old peek-backlinks KNOWN RED was fixed (`useUnmergedTree = true`).
+Last confirmed green: `973a63b` (`jvm backend` + `android app (robolectric)`).
+The old peek-backlinks KNOWN RED was fixed (`useUnmergedTree = true`). The JVM
+job now also compiles `:cli:classes` (see §2); head has since advanced to
+`6b1f056` — check the Actions tab (or `ci.sh`) for the current head.
 
 ## Docs index (read with this file)
 

@@ -82,16 +82,16 @@ Legend: `[x]` done · `[~]` partial · `[ ]` todo · `[—]` deliberately deferr
 - [x] `todowrite` persists through `ToolContext.setTodos`.
 - [x] `task` subagents: `SubagentSpawner`, child sessions, `explore`/`general` configs.
 
-## M9 — CLI + live smoke — `[~]` PARTIAL
+## M9 — CLI + live smoke — `[x]` DONE
 
 - [x] `dev.spindle.cli.MainKt` with `--provider/--model/--prompt` (+ interactive mode,
       `--yes`, `--list-models`, `--max-steps`, `--cwd`, `--db`).
 - [x] Streams `AgentEvent`s to stdout.
-- [x] `.github/workflows/live.yml` (manual-only, secrets-gated).
-- [ ] **Blocked on credentials**: live execution needs a provider key. The OpenCode
-      free tier rejects third-party clients
-      (`FreeTierError: can only be used from within OpenCode`), so keyless live runs
-      are not possible — see Risks.
+- [x] `.github/workflows/live.yml` (manual-only, secrets-gated; never on push/PR).
+- [x] **Live smoke verified** (2026-10) against OpenRouter with a paid
+      `OPENROUTER_API_KEY`: text and a multi-step write→read→bash→read→answer
+      tool-loop both succeeded. The OpenCode free tier still rejects third-party
+      clients, so live tests stay manual and secrets-gated — see Risks.
 
 ## M10 — Android UI — `[—]` LATER / OUT OF SCOPE NOW
 
@@ -126,7 +126,8 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
 - [x] Store: full-text search, fork/branch, rewind, persisted run state.
 - [x] Pin / archive / rename session surfaces (Home row actions; archived
       hidden behind a toggle).
-- [ ] Session tags (model + store fields exist; no UI yet).
+- [x] Session tags (add/remove/clear + any-of filter bar and row chips; persisted
+      through `Session.tags`).
 - [x] `SnapshotStore` + snapshot-before-write.
 - [x] Structured `FileEdit` emission from `write`/`edit`/`apply_patch`.
 
@@ -137,13 +138,12 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
 - [x] External-change watcher (port `DirWatcher`); files cockpit covers
       list/stat/read/write/save.
 - [x] `EnvironmentManager`: rootfs install/curate/prune, apt, storage report.
-- [~] Foreground `RunService` + notifications + wake lock **wired, but a run
-      still dies when the user leaves the app** — top priority, see HANDOFF.
-      The loop runs in `viewModelScope`; the service is only a keep-alive shell.
-      Must move the loop to a process-scoped owner so backgrounding cannot kill
-      it.
+- [x] Foreground `RunService` + notifications + wake lock; the loop now runs in
+      the Application-scoped `LumenApp.applicationScope`, so a run survives
+      backgrounding and only an explicit stop cancels it (`87ebe96`; see HANDOFF).
 - [x] SQLite FTS index on the app store (`message_fts`, FTS5 with scan
-      fallback); key store ported; models.dev catalogue still to port.
+      fallback); key store ported; models.dev live catalogue enrichment merged
+      over the embedded snapshot.
 
 ### m14 — Feature verticals — `[x]` DONE
 
@@ -179,8 +179,10 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
   real SSE bodies as fixtures and assert the exact `ProviderEvent` stream per
   provider; re-record on failures instead of guessing. Live checks are manual.
 - **Free-tier lockout** — OpenCode's free routing only serves the official client,
-  so `spindle` cannot use it. Live smoke needs `DEEPSEEK_API_KEY` /
-  `OPENROUTER_API_KEY` / `OPENCODE_API_KEY` as GitHub secrets.
+  so `spindle` cannot use it. Live smoke needs a paid `DEEPSEEK_API_KEY` /
+  `OPENROUTER_API_KEY` / `OPENCODE_API_KEY` / `ANTHROPIC_API_KEY` GitHub secret
+  and is manual-only (`workflow_dispatch`), so no PR can spend tokens. Verified
+  2026-10 with `OPENROUTER_API_KEY`.
 - **Tool path safety** — a bad resolve lets a tool read or write outside `cwd`
   (`..`, absolute paths, symlinks). Mitigation: normalize + containment checks on
   every path argument and adversarial tests per escape vector.

@@ -490,6 +490,11 @@ private fun parseUsage(u: JsonObject): Usage = Usage(
     outputTokens = u.int("completion_tokens") ?: 0,
     reasoningTokens = (u["completion_tokens_details"] as? JsonObject)?.int("reasoning_tokens") ?: 0,
     cacheReadTokens = (u["prompt_tokens_details"] as? JsonObject)?.int("cached_tokens") ?: 0,
+    cacheWriteTokens = (u["prompt_tokens_details"] as? JsonObject)?.int("cache_write_tokens") ?: 0,
+    // OpenRouter reports the actual charge for the completion under `cost`
+    // (USD). Preserve it so the normalized usage carries the real amount even
+    // when the caller has no local pricing for the model.
+    costUsd = u["cost"].num() ?: 0.0,
 )
 
 private fun mapFinish(reason: String): FinishReason = when (reason) {

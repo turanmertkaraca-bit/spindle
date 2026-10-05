@@ -19,7 +19,7 @@ Legend: ✅ ported · 🟡 partial · ❌ not ported (by choice unless noted)
 | Compaction (trim + summarize) | `agent/Compaction.kt` | ✅ |
 | Session title/summary auto-gen | — | ❌ (UI can title from first message) |
 | Structured output (`json_schema`) | — | ❌ |
-| Snapshots / revert / undo / fork | — | ❌ |
+| Snapshots / revert / undo / fork | `SnapshotStore` + per-file revert + fork/rewind | ✅ |
 | Share links | — | ❌ |
 
 ## Providers
@@ -34,7 +34,7 @@ Legend: ✅ ported · 🟡 partial · ❌ not ported (by choice unless noted)
 | Zen/Go `/messages`, `/responses`, `/models/gemini-*`, `/systemone` | — | ❌ |
 | OAuth providers (Vertex, Bedrock, Copilot, GitLab, Poe…) | — | ❌ |
 | Local providers (Ollama/LM Studio style) | — | ❌ |
-| Vision / image input | — | ❌ |
+| Vision / image input | `Part.File` + `supportsVision` (composer attach) | ✅ |
 | Chat-prefix / FIM completion | — | ❌ |
 
 ## Tools
@@ -48,7 +48,7 @@ Legend: ✅ ported · 🟡 partial · ❌ not ported (by choice unless noted)
 | `todowrite` | `TodoWriteTool` (persisted via `ctx.setTodos`) | ✅ |
 | `question` | `QuestionTool` + `QuestionGate` | ✅ |
 | `task` (subagents) | `TaskTool` + `SubagentSpawner` | ✅ general + explore |
-| `websearch` | — | ❌ |
+| `websearch` | `WebSearchTool` (keyless DuckDuckGo HTML) | ✅ |
 | `skill` | — | ❌ |
 | `lsp` | — | ❌ |
 | `code-mode` | — | ❌ |
@@ -60,9 +60,9 @@ Legend: ✅ ported · 🟡 partial · ❌ not ported (by choice unless noted)
 | opencode | spindle | |
 |---|---|---|
 | Subagents (child sessions, `parentId`) | `SubagentSpawner`, `Session.parentId` | ✅ |
-| Multiple primary agents (build/plan/custom) | `AgentConfig` (`DEFAULT_SYSTEM`, `PLAN_SYSTEM`, `EXPLORE_SYSTEM`, `GENERAL_SYSTEM`) | 🟡 configs exist, no runtime switch from UI yet |
-| `@init` → `AGENTS.md` | — | ❌ |
-| Rules / reminders injection | — | ❌ |
+| Multiple primary agents (build/plan/custom) | `AgentConfig.PRIMARY` + `byName` (runtime selection) | ✅ |
+| `@init` → `AGENTS.md` | — | ❌ (no generator) |
+| Rules / reminders injection | `AgentLoop.systemPrompt` reads `<cwd>/AGENTS.md` + host rules | ✅ |
 | Agent Skills | — | ❌ |
 | `@`-mention subagents | — | ❌ (UI concern) |
 
@@ -71,7 +71,7 @@ Legend: ✅ ported · 🟡 partial · ❌ not ported (by choice unless noted)
 | opencode | spindle | |
 |---|---|---|
 | Allow / ask / deny, per-tool | `PermissionGate` + `AgentConfig.denyTools` | ✅ |
-| Glob/sub-pattern scoping, "always" memory | — | ❌ (interactive allow only) |
+| Glob/sub-pattern scoping, "always" memory | `ApprovalPolicy` (per-tool + path/command pattern, remembered) | ✅ |
 | Unattended auto-allow | `--yes` in the CLI | 🟡 |
 
 ## Storage
@@ -92,15 +92,12 @@ keybinds · themes engine.
 
 ## Android-specific (reuse later, not opencode)
 
-🟡 `bash` currently uses the host `/bin/sh`. On Android it should run through the
-existing Debian sandbox from the old app rather than a JVM process. The tool
-boundary is already correct — only the executor needs swapping.
+✅ `bash` runs through a `ShellExecutor`: host `/bin/sh` on dev/CI, the ported
+Debian proot sandbox + PTY on Android. The tool boundary is unchanged — only the
+executor swaps.
 
 ## Gaps ranked by when they will bite
 
-1. **`bash` sandbox swap** — on-device only; the tool API is ready.
-2. **Zen/Go `/responses` + `/messages` routing** — needed for GPT/Grok and Claude/Qwen
+1. **Zen/Go `/responses` + `/messages` routing** — needed for GPT/Grok and Claude/Qwen
    via the gateways.
-3. **AGENTS.md / rules** — house-style adherence in real repos.
-4. **Snapshot/undo** — safety net once the agent edits your code.
-5. Everything else — optional ecosystem.
+2. Everything else — optional ecosystem.
