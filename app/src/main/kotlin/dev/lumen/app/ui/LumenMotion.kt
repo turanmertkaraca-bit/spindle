@@ -12,20 +12,25 @@ import androidx.compose.ui.unit.IntSize
 
 /**
  * One place for every transition so expansion, fades and the running pulse move
- * with the same feel across the whole app. Expansion is a medium-low spring and
- * the fades are a short ease. Deliberately no `animateContentSize`: growing,
+ * with the same feel across the whole app. Expansion is a quick no-bounce spring
+ * and the fades are a short ease. Deliberately no `animateContentSize`: growing,
  * unbounded text must never be re-measured every frame.
  */
 object LumenMotion {
-    /** Width/height spring shared by every expanding card and section. */
-    val expand: FiniteAnimationSpec<IntSize> = spring(stiffness = Spring.StiffnessMediumLow)
+    /**
+     * Width/height spring shared by every expanding card and section. Medium
+     * stiffness with no overshoot: it reaches the target in a few frames and
+     * settles without the little bounce that read as jitter on expansion.
+     */
+    val expand: FiniteAnimationSpec<IntSize> =
+        spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
 
     /** Opacity companion for [expand]; short, so cards never ghost in slowly. */
-    val fade: FiniteAnimationSpec<Float> = tween(durationMillis = 150, easing = FastOutSlowInEasing)
+    val fade: FiniteAnimationSpec<Float> = tween(durationMillis = 120, easing = FastOutSlowInEasing)
 
-    /** The press-in scale on the primary send button. */
+    /** The press-in scale on the primary send button — quick, no bounce. */
     val press: FiniteAnimationSpec<Float> =
-        spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh)
+        spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessHigh)
 
     /** The slow prism breathe while a run is live. */
     val pulse: InfiniteRepeatableSpec<Float> =

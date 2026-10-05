@@ -51,14 +51,32 @@ object LumenShapes {
 
 /**
  * The single source of truth for elevation. True-black surfaces read best flat,
- * so cards lift only a hair while genuinely floating affordances sit above them.
+ * so pinned cards carry no shadow at all — their hairline border is enough — and
+ * only genuinely floating affordances lift off the page.
  */
 object LumenElevation {
     val none: Dp = 0.dp
 
-    /** Pinned cards lift just off the transcript without reading as a slab. */
-    val card: Dp = 1.dp
+    /** Pinned cards are flat; the rule border separates them, not a shadow. */
+    val card: Dp = 0.dp
 
     /** Floating affordances (cue, suggestions, peek sheet) sit above the page. */
-    val floating: Dp = 6.dp
+    val floating: Dp = 4.dp
+}
+
+/**
+ * The shared spacing scale. Named so the transcript can breathe with one voice
+ * instead of scattering dp literals; additive only, so existing call sites keep
+ * their geometry.
+ */
+object LumenSpacing {
+    val xxs: Dp = 2.dp
+    val xs: Dp = 4.dp
+    val sm: Dp = 6.dp
+    val md: Dp = 10.dp
+    val lg: Dp = 14.dp
+    val xl: Dp = 20.dp
+
+    /** The horizontal gutter between the transcript and the screen edges. */
+    val gutter: Dp = 12.dp
 }

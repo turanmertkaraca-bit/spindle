@@ -481,8 +481,8 @@ fun LumenChatScreen(
                             LazyColumn(
                                 state = listState,
                                 flingBehavior = flingBehavior,
-                                contentPadding = PaddingValues(start = 8.dp, end = 12.dp, top = 12.dp, bottom = 14.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                                contentPadding = PaddingValues(start = 8.dp, end = 12.dp, top = 14.dp, bottom = 16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
                                 modifier = Modifier.fillMaxSize().testTag("timeline"),
                             ) {
                                 itemsIndexed(display, key = { _, s -> s.id }) { index, step ->
@@ -491,6 +491,7 @@ fun LumenChatScreen(
                                         colors = colors,
                                         pulse = pulse,
                                         open = forceOpenId != null && step.id == forceOpenId,
+                                        agentMode = agentMode,
                                         onExpandSubagent = onExpandSubagent,
                                         cwd = cwd,
                                         exists = exists,
@@ -658,6 +659,7 @@ private fun MessageRow(
     colors: LumenColors,
     pulse: () -> Float,
     open: Boolean,
+    agentMode: String = "build",
     onExpandSubagent: (UiStep) -> Unit = {},
     cwd: String = "",
     exists: (String) -> Boolean = { false },
@@ -720,7 +722,7 @@ private fun MessageRow(
                                 .border(1.dp, colors.spectrum.getOrElse(2) { colors.water }.copy(alpha = 0.20f), bubbleShape)
                         },
                     )
-                    .padding(start = if (isYou) 12.dp else 14.dp, end = 12.dp, top = 11.dp, bottom = 11.dp),
+                    .padding(start = if (isYou) 13.dp else 15.dp, end = 13.dp, top = 12.dp, bottom = 12.dp),
             ) {
                 // role stamp for agent turns (double-tap it to copy the body)
                 if (!isYou) {
@@ -738,17 +740,15 @@ private fun MessageRow(
                         },
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        // A friendly role label, never the internal row tag (the
+                        // opaque `174c78` hash). Agent turns speak as the active
+                        // agent ("build"/"plan") so a first-time reader knows who
+                        // is talking.
                         Text(
-                            if (copied) "copied" else step.label.lowercase(),
+                            if (copied) "copied" else agentLabel(step, agentMode),
                             color = if (copied) colors.water else colors.dim,
                             fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 1.2.sp,
                         )
-                        if (step.tag.isNotEmpty() && !copied) {
-                            Text(
-                                "  ${step.tag}",
-                                color = colors.faint, fontFamily = Mono, fontSize = 10.sp,
-                            )
-                        }
                     }
                     Spacer(Modifier.height(6.dp))
                 }
@@ -822,6 +822,16 @@ private fun MessageRow(
             }
         }
     }
+}
+
+/**
+ * The human role label for a bubble: the active agent name for an answer (so the
+ * reader sees "build"/"plan" rather than an id), the step's own word otherwise.
+ * The internal [UiStep.tag] hash is deliberately never shown.
+ */
+private fun agentLabel(step: UiStep, agentMode: String): String = when (step.kind) {
+    StepKind.ASSISTANT -> agentMode.lowercase().ifBlank { "agent" }
+    else -> step.label.lowercase().ifBlank { "agent" }
 }
 
 /**
@@ -1111,13 +1121,19 @@ private fun ToolCardFrame(
         }
     }
     val title = (if (isSub) step.label.ifBlank { "subagent" } else step.label.ifBlank { "tool" }).lowercase()
+    // One plain-language failure line, never the raw transport (`× [timeout]
+    // Command timed out after 30ms`). The metadata/body it reads is bounded and
+    // parsed once per change.
+    val errorLine = remember(step.failed, step.toolMetadata, step.body) {
+        if (step.failed) StepMapper.failureLine(step) else null
+    }
 
     Column(
         modifier
             .shadow(LumenElevation.card, shape)
             .clip(shape)
             .background(colors.surface)
-            .border(1.dp, accentForStatic.copy(alpha = 0.30f), shape)
+            .border(1.dp, accentForStatic.copy(alpha = 0.22f), shape)
             .drawBehind {
                 val accent = accentForDraw()
                 val x = 1.5.dp.toPx()
@@ -1139,7 +1155,7 @@ private fun ToolCardFrame(
             Modifier
                 .fillMaxWidth()
                 .clickable { onToggle() }
-                .padding(start = 11.dp, end = 10.dp, top = 8.dp, bottom = 8.dp)
+                .padding(start = 11.dp, end = 10.dp, top = 9.dp, bottom = if (errorLine != null) 4.dp else 9.dp)
                 .testTag("tools-toggle"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1153,13 +1169,24 @@ private fun ToolCardFrame(
             Spacer(Modifier.width(8.dp))
             Text(
                 summary,
-                color = if (step.failed) colors.danger() else colors.dim,
+                color = colors.dim,
                 fontFamily = Mono, fontSize = 10.5.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f).testTag("tools-summary"),
             )
             Spacer(Modifier.width(8.dp))
             ToolStatusPill(step.failed, step.running, step.childLoading, colors)
+        }
+        if (errorLine != null) {
+            Text(
+                errorLine,
+                color = colors.danger(),
+                fontFamily = Mono, fontSize = 10.5.sp, lineHeight = 14.sp,
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .padding(start = 11.dp, end = 10.dp, bottom = 9.dp)
+                    .testTag("tool-error"),
+            )
         }
         AnimatedVisibility(
             visible = expanded,
@@ -1284,40 +1311,33 @@ private fun ToolCardBody(step: UiStep, colors: LumenColors, isSub: Boolean, puls
     }
 }
 
-/** Keys the loop uses for bookkeeping, or that the inspector draws elsewhere. */
-private val INTERNAL_METADATA_KEYS = setOf("callId", "toolCallId", "sessionId", "timeout", "timedOut")
-
-/** Friendly labels for the metadata keys we know how to read. */
+/** Friendly labels for the metadata keys worth surfacing in a card. */
 private val METADATA_LABELS = mapOf(
     "exitCode" to "exit",
     "durationMs" to "duration",
-    "timeoutMs" to "timeout",
     "path" to "path",
     "replacements" to "replacements",
     "files" to "files",
     "count" to "count",
+    "lines" to "lines",
 )
 
 /**
- * Turn raw tool metadata into the ordered (label, value) inspector rows. Keys we
- * know float to the front; duplicates and empty values are dropped; a timeout is
- * only shown when the call actually timed out.
+ * The short, plain-language facts worth showing above a tool's output. Only known
+ * keys with a real value survive: transport flags (`timeoutMs`), counters that
+ * merely restate the body (`bytes`, `totalLines`) and `truncated=false` are noise
+ * and are dropped. A genuine truncation becomes a single "output truncated" note.
  */
 private fun toolInspector(metadata: Map<String, String>): List<Pair<String, String>> {
     if (metadata.isEmpty()) return emptyList()
-    val timedOut = metadata["timeout"] == "true" || metadata["timedOut"] == "true"
-    val order = listOf("exitCode", "durationMs", "path", "replacements", "files", "count")
-    val out = LinkedHashMap<String, Pair<String, String>>()
-    for (key in order.filter { it in metadata } + metadata.keys.filter { it !in order }) {
+    val out = ArrayList<Pair<String, String>>(METADATA_LABELS.size)
+    for ((key, label) in METADATA_LABELS) {
         val raw = metadata[key] ?: continue
-        if (key in INTERNAL_METADATA_KEYS) continue
-        if (key == "timeoutMs" && !timedOut) continue
-        out[key] = (METADATA_LABELS[key] ?: key) to when (key) {
-            "durationMs" -> formatDuration(raw)
-            else -> raw
-        }
+        if (raw.isBlank()) continue
+        out += label to if (key == "durationMs") formatDuration(raw) else raw
     }
-    return out.values.toList()
+    if (metadata["truncated"] == "true") out += "output" to "truncated"
+    return out
 }
 
 private fun formatDuration(raw: String): String {
@@ -1539,7 +1559,7 @@ private fun TodoBoard(todos: List<TodoItem>, colors: LumenColors, pulse: () -> F
                                 TodoStatus.CANCELLED -> colors.faint
                                 else -> colors.fg
                             },
-                            fontFamily = Mono, fontSize = 11.5.sp, lineHeight = 16.sp,
+                            fontFamily = FontFamily.Default, fontSize = 12.sp, lineHeight = 16.sp,
                             maxLines = 2, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
                         )
@@ -1604,30 +1624,35 @@ private fun ToolStatusPill(failed: Boolean, running: Boolean, loading: Boolean, 
 private fun ThinkSection(think: String, colors: LumenColors) {
     var open by remember(think) { mutableStateOf(false) }
     var showAll by remember(think) { mutableStateOf(false) }
+    // A single low-contrast line: `thinking` faint, the character count fainter
+    // still, so the row reads as ambient context rather than a headline. No filled
+    // panel — the reasoning recedes until the reader taps it open.
+    val header = remember(think.length, colors) {
+        buildAnnotatedString {
+            withStyle(SpanStyle(color = colors.faint)) { append("thinking") }
+            withStyle(SpanStyle(color = colors.faint.copy(alpha = 0.5f))) {
+                append(" \u00b7 ${think.length} chars")
+            }
+        }
+    }
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(LumenShapes.panel)
-            .background(colors.water.copy(alpha = 0.10f))
             .clickable { open = !open }
-            .padding(horizontal = 10.dp, vertical = 7.dp)
+            .padding(vertical = 3.dp)
             .testTag("think-toggle"),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (open) "▾" else "▸", color = colors.dim, fontFamily = Mono, fontSize = 11.sp)
-            Spacer(Modifier.width(7.dp))
-            Text(
-                "thinking · ${think.length} chars",
-                color = colors.dim, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 0.5.sp,
-            )
+            Text(if (open) "\u25be" else "\u25b8", color = colors.faint, fontFamily = Mono, fontSize = 10.sp)
+            Spacer(Modifier.width(6.dp))
+            Text(header, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 0.4.sp)
         }
         AnimatedVisibility(
             visible = open,
             enter = expandVertically(animationSpec = LumenMotion.expand) + fadeIn(animationSpec = LumenMotion.fade),
             exit = shrinkVertically(animationSpec = LumenMotion.expand) + fadeOut(animationSpec = LumenMotion.fade),
         ) {
-            Column(Modifier.testTag("think-body")) {
-                Spacer(Modifier.height(6.dp))
+            Column(Modifier.padding(start = 16.dp, top = 6.dp).testTag("think-body")) {
                 if (showAll) {
                     // Explicit opt-in: the whole reasoning, chunked so each
                     // StaticLayout stays small, inside a bounded scroll box.
@@ -1641,17 +1666,18 @@ private fun ThinkSection(think: String, colors: LumenColors) {
                             for (chunk in textChunks(think, TEXT_CHUNK_CHARS)) {
                                 Text(
                                     chunk,
-                                    color = colors.dim, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp,
+                                    color = colors.dim, fontSize = 13.5.sp, lineHeight = 20.sp,
                                 )
                             }
                         }
                     }
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         "show less",
                         color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                         modifier = Modifier
                             .clip(LumenShapes.small)
-                            .border(1.dp, colors.water.copy(alpha = 0.35f), LumenShapes.small)
+                            .border(1.dp, colors.water.copy(alpha = 0.30f), LumenShapes.small)
                             .clickable { showAll = false }
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                             .testTag("think-show-less"),
@@ -1659,7 +1685,7 @@ private fun ThinkSection(think: String, colors: LumenColors) {
                 } else {
                     Text(
                         think.take(THINK_WINDOW_CHARS),
-                        color = colors.dim, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp,
+                        color = colors.dim, fontSize = 13.5.sp, lineHeight = 20.sp,
                     )
                     if (think.length > THINK_WINDOW_CHARS) {
                         Spacer(Modifier.height(6.dp))
@@ -1668,7 +1694,7 @@ private fun ThinkSection(think: String, colors: LumenColors) {
                             color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                             modifier = Modifier
                                 .clip(LumenShapes.small)
-                                .border(1.dp, colors.water.copy(alpha = 0.35f), LumenShapes.small)
+                                .border(1.dp, colors.water.copy(alpha = 0.30f), LumenShapes.small)
                                 .clickable { showAll = true }
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                                 .testTag("think-show-all"),
@@ -1699,7 +1725,7 @@ private fun WindowedText(
     if (text.length <= LITERAL_MAX_CHARS) {
         Text(
             text,
-            color = color, fontFamily = Mono, fontSize = fontSize, lineHeight = lineHeight,
+            color = color, fontFamily = FontFamily.Default, fontSize = fontSize, lineHeight = lineHeight,
             modifier = modifier,
         )
         return
@@ -1714,7 +1740,7 @@ private fun WindowedText(
             ) {
                 Column {
                     for (chunk in textChunks(text, TEXT_CHUNK_CHARS)) {
-                        Text(chunk, color = color, fontFamily = Mono, fontSize = fontSize, lineHeight = lineHeight)
+                        Text(chunk, color = color, fontFamily = FontFamily.Default, fontSize = fontSize, lineHeight = lineHeight)
                     }
                 }
             }
@@ -1731,7 +1757,7 @@ private fun WindowedText(
         } else {
             Text(
                 text.take(LITERAL_MAX_CHARS),
-                color = color, fontFamily = Mono, fontSize = fontSize, lineHeight = lineHeight,
+                color = color, fontFamily = FontFamily.Default, fontSize = fontSize, lineHeight = lineHeight,
             )
             Text(
                 "\u2026[${text.length - LITERAL_MAX_CHARS} chars hidden] \u00b7 show all",
@@ -1806,7 +1832,7 @@ private fun ErrorNotice(message: String, colors: LumenColors, onEditKey: (() -> 
         Spacer(Modifier.width(10.dp))
         Text(
             text = if (auth) "Authentication failed — check your API key." else oneLine(message),
-            color = colors.fg, fontFamily = Mono, fontSize = 12.sp, lineHeight = 16.sp,
+            color = colors.fg, fontFamily = FontFamily.Default, fontSize = 12.5.sp, lineHeight = 17.sp,
             maxLines = 2, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
@@ -2035,7 +2061,7 @@ private fun PermissionAsk(
     if (ask.detail.isNotBlank()) {
         Spacer(Modifier.height(4.dp))
         Text(
-            ask.detail, color = colors.dim, fontFamily = Mono, fontSize = 11.5.sp, lineHeight = 16.sp,
+            ask.detail, color = colors.dim, fontFamily = FontFamily.Default, fontSize = 12.sp, lineHeight = 17.sp,
             maxLines = 4, overflow = TextOverflow.Ellipsis,
         )
     }
@@ -2057,7 +2083,7 @@ private fun QuestionAsk(
     var selected by remember(ask.id) { mutableStateOf(emptySet<String>()) }
     Text("question", color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 2.sp)
     Spacer(Modifier.height(6.dp))
-    Text(ask.question, color = colors.fg, fontFamily = Mono, fontSize = 13.sp, lineHeight = 18.sp)
+    Text(ask.question, color = colors.fg, fontFamily = FontFamily.Default, fontSize = 13.sp, lineHeight = 18.sp)
     Spacer(Modifier.height(10.dp))
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         ask.options.forEachIndexed { index, option ->
@@ -2065,7 +2091,7 @@ private fun QuestionAsk(
             Text(
                 option,
                 color = if (isSelected) colors.fg else colors.dim,
-                fontFamily = Mono, fontSize = 12.5.sp,
+                fontFamily = FontFamily.Default, fontSize = 12.5.sp,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(LumenShapes.inset)
@@ -2203,17 +2229,18 @@ private fun Composer(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (onAttach != null) {
+                // Secondary affordance: quiet by design so the send control is
+                // unmistakably primary.
                 Text(
                     "image",
-                    color = colors.water, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                    color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
                     modifier = Modifier
-                        .clip(LumenShapes.pill)
-                        .border(1.dp, colors.water.copy(alpha = 0.35f), LumenShapes.pill)
+                        .clip(LumenShapes.small)
                         .clickable { onAttach() }
-                        .padding(horizontal = 9.dp, vertical = 6.dp)
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
                         .testTag("attach-image"),
                 )
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(6.dp))
             }
             val fieldShape = LumenShapes.pill
             Box(
@@ -2392,7 +2419,7 @@ private fun HintNotice(message: String, colors: LumenColors) {
         Box(Modifier.size(7.dp).clip(WaterShapes.droplet(tail = 0.55f)).background(colors.faint))
         Spacer(Modifier.width(8.dp))
         Text(
-            message, color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
+            message, color = colors.faint, fontFamily = FontFamily.Default, fontSize = 11.5.sp,
             maxLines = 2, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f).testTag("composer-notice"),
         )
@@ -2433,14 +2460,14 @@ private fun AgentModeChip(
 ) {
     Text(
         label,
-        color = if (selected) colors.bg else colors.dim,
-        fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+        color = if (selected) colors.bg else colors.faint,
+        fontFamily = Mono, fontSize = 10.5.sp, fontWeight = FontWeight.Medium,
         modifier = Modifier
             .clip(LumenShapes.pill)
-            .background(if (selected) tint else colors.surface)
+            .background(if (selected) tint else Color.Transparent)
             .border(1.dp, if (selected) tint else colors.rule, LumenShapes.pill)
             .clickable { onSelect(label) }
-            .padding(horizontal = 12.dp, vertical = 5.dp)
+            .padding(horizontal = 11.dp, vertical = 4.dp)
             .testTag(tag),
     )
 }

@@ -56,16 +56,26 @@ object StepMapper {
                             }
                             is Part.Tool -> {
                                 val call = p.call
-                                val rows = parseToolRows(p)
                                 val isSub = call.name == "task"
                                 out += UiStep(
                                     id = p.id.value,
                                     kind = if (isSub) StepKind.SUBAGENT else StepKind.TOOL,
                                     label = call.name.uppercase(),
                                     tag = tag(p.id.value),
-                                    summary = oneLine(p.result?.output ?: call.argumentsJson),
+                                    // The collapsed header names the call, never its
+                                    // raw result: "bash · npm test" reads at a glance,
+                                    // where a dump of stderr did not. Failures get a
+                                    // plain-language line drawn beside it (see
+                                    // [failureLine]).
+                                    summary = toolArg(call.argumentsJson)
+                                        ?: oneLine(p.result?.output ?: call.argumentsJson),
                                     body = toolBody(p),
-                                    rows = rows,
+                                    // Structured sub-rows were parsed from the raw
+                                    // output and duplicated the inspector and the body
+                                    // (`✓ [exit 0]`); the expanded card now shows the
+                                    // cleaned output once. Hand-authored rows still
+                                    // render (the field is retained).
+                                    rows = emptyList(),
                                     toolNames = listOf(call.name.lowercase()),
                                     running = p.state == ToolState.RUNNING || p.state == ToolState.PENDING,
                                     failed = p.state == ToolState.ERROR,
@@ -167,11 +177,149 @@ object StepMapper {
 
     private fun toolBody(p: Part.Tool): String {
         val result = p.result
-        return when {
-            result == null -> p.call.argumentsJson
-            result.isError -> "failed: ${result.output}"
-            else -> result.output
+        return cleanToolOutput(
+            when {
+                result == null -> p.call.argumentsJson
+                else -> result.output
+            },
+        )
+    }
+
+    /**
+     * Argument keys that read as a friendly one-line label, in priority order.
+     * A search `pattern` outranks its `path` because the pattern is what the call
+     * was actually about.
+     */
+    private val FRIENDLY_ARG_KEYS = listOf(
+        "command", "pattern", "path", "url", "description", "prompt", "query", "glob",
+    )
+
+    /** Matches a JSON string field (`"key": "value"`), tolerant of escapes. */
+    private val JSON_STRING_FIELD =
+        Regex("\"([A-Za-z_][A-Za-z0-9_]*)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
+
+    /**
+     * The most human argument of a tool call — the shell command, file path, grep
+     * pattern, URL or task description — or null when none is present. A tiny
+     * regex rather than a JSON parser keeps this dependency-free and cheap enough
+     * to run on a streaming frame; unknown/non-string args fall through to null.
+     */
+    internal fun toolArg(argumentsJson: String): String? {
+        if (argumentsJson.isBlank()) return null
+        val found = HashMap<String, String>()
+        for (m in JSON_STRING_FIELD.findAll(argumentsJson)) {
+            val key = m.groupValues[1]
+            if (key !in FRIENDLY_ARG_KEYS || key in found) continue
+            found[key] = unescapeJson(m.groupValues[2])
         }
+        for (key in FRIENDLY_ARG_KEYS) {
+            val value = found[key]?.let { oneLine(it) }
+            if (!value.isNullOrBlank()) return value
+        }
+        return null
+    }
+
+    private fun unescapeJson(s: String): String {
+        if ('\\' !in s) return s
+        val out = StringBuilder(s.length)
+        var i = 0
+        while (i < s.length) {
+            val c = s[i]
+            if (c == '\\' && i + 1 < s.length) {
+                when (val n = s[i + 1]) {
+                    'n', 't', 'r' -> out.append(' ')
+                    '"', '\\', '/' -> out.append(n)
+                    'u' -> {
+                        if (i + 5 < s.length) {
+                            val code = s.substring(i + 2, i + 6).toIntOrNull(16)
+                            if (code != null) {
+                                out.append(code.toChar())
+                                i += 6
+                                continue
+                            }
+                        }
+                        out.append(c)
+                    }
+                    else -> out.append(n)
+                }
+                i += 2
+            } else {
+                out.append(c)
+                i++
+            }
+        }
+        return out.toString()
+    }
+
+    /**
+     * Strip the machine framing around a tool result so the expanded card shows
+     * real output, not the transport: the leading `[exit 0]` / `[timeout]` status,
+     * a `failed: ` prefix and a trailing truncation banner all go. Pure/testable.
+     */
+    internal fun cleanToolOutput(output: String): String {
+        var s = output.trim()
+        if (s.startsWith("failed: ")) s = s.removePrefix("failed: ").trim()
+        val lines = s.lines().toMutableList()
+        if (lines.isNotEmpty()) {
+            val first = lines.first().trim()
+            val exit = EXIT_LINE.matchEntire(first)
+            when {
+                exit != null -> {
+                    val rest = exit.groupValues[1].trim()
+                    if (rest.isEmpty()) lines.removeAt(0) else lines[0] = rest
+                }
+                first == "[timeout]" -> lines.removeAt(0)
+            }
+        }
+        while (lines.isNotEmpty()) {
+            val last = lines.last().trim()
+            if (last.startsWith("\u2026[") || last.startsWith("[truncated")) {
+                lines.removeAt(lines.size - 1)
+            } else {
+                break
+            }
+        }
+        return lines.joinToString("\n").trim()
+    }
+
+    private val EXIT_LINE = Regex("^\\[exit\\s+-?\\d+\\]\\s*(.*)$")
+
+    private val EXIT_IN_TEXT = Regex("\\[exit\\s+(-?\\d+)\\]")
+
+    private fun exitCodeIn(output: String): Int? =
+        EXIT_IN_TEXT.find(output)?.groupValues?.get(1)?.toIntOrNull()
+
+    /** A short, plain-language failure line for a tool/subagent row, or null. */
+    fun failureLine(step: UiStep): String? =
+        if (!step.failed) null else failureLine(step.toolMetadata, step.body)
+
+    /**
+     * The one-line failure explanation shown beside a collapsed tool card. It
+     * always speaks in plain language and never repeats both a millisecond count
+     * and a raw timeout flag: a timeout reports one human duration, a non-zero
+     * exit reports the code, and anything else quotes the first real output line.
+     */
+    internal fun failureLine(metadata: Map<String, String>, output: String): String? {
+        val timedOut = metadata["timeout"] == "true" || metadata["timedOut"] == "true" ||
+            output.contains("[timeout]")
+        if (timedOut) {
+            val ms = metadata["timeoutMs"]?.toLongOrNull()
+            return if (ms != null && ms > 0) "timed out after ${humanMillis(ms)}" else "timed out"
+        }
+        val exit = metadata["exitCode"]?.toIntOrNull() ?: exitCodeIn(output)
+        if (exit != null && exit != 0) return "failed (exit $exit)"
+        val first = cleanToolOutput(output)
+            .lineSequence()
+            .firstOrNull { it.isNotBlank() }
+            ?.let { oneLine(it) }
+        return first?.takeIf { it.isNotBlank() }
+    }
+
+    /** A millisecond count as a short human duration: `30s`, `1.2s`, `450ms`. */
+    internal fun humanMillis(ms: Long): String {
+        if (ms < 1000) return "${ms}ms"
+        val tenths = (ms + 50) / 100
+        return if (tenths % 10 == 0L) "${tenths / 10}s" else "${tenths / 10}.${tenths % 10}s"
     }
 
     /** Pull a short (label, value) list out of a tool result for the sub-rows. */

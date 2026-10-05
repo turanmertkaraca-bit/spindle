@@ -220,10 +220,12 @@ private fun MarkdownHeading(block: MdBlock.Heading, colors: LumenColors) {
         3 -> 15.5.sp
         else -> 14.5.sp
     }
+    // Prose reads in the default typeface; monospace is reserved for code,
+    // paths and commands (see [MarkdownCode] and the inline-code span style).
     Text(
         block.text,
         color = colors.fg,
-        fontFamily = MdMono,
+        fontFamily = FontFamily.Default,
         fontSize = size,
         lineHeight = size * 1.35f,
         fontWeight = FontWeight.Bold,
@@ -369,7 +371,7 @@ private fun LinkedText(
     Text(
         text = text,
         color = colors.fg,
-        fontFamily = MdMono,
+        fontFamily = FontFamily.Default,
         fontSize = fontSize,
         lineHeight = lineHeight,
         onTextLayout = { layout = it },
