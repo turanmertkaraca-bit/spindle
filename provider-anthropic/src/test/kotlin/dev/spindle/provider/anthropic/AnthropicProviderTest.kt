@@ -322,6 +322,76 @@ class AnthropicProviderTest {
         assertEquals("spindle", recorded.getHeader("X-Title"))
     }
 
+    @Test
+    fun `native anthropic keeps the v1 messages path`() = runTest {
+        server.enqueue(MockResponse().setChunkedBody("data: {\"type\":\"message_stop\"}\n\n", 5))
+
+        provider().stream(request()).toList()
+
+        assertEquals("/v1/messages", server.takeRequest().path)
+    }
+
+    // --- OpenCode Zen/Go `/messages` route (fixture-verified, not live: the free
+    //     tier returns 403 "Model access is disabled" for Claude/GPT) -----------
+
+    @Test
+    fun `opencode go messages route sends x-api-key session and custom user agent at messages`() = runTest {
+        server.enqueue(MockResponse().setChunkedBody(fixture("opencode_go_claude.sse"), 9))
+
+        // The real gateway base is https://opencode.ai/zen/go/v1 and the surface
+        // path is /messages. The mock server substitutes for the authority; the
+        // path/headers under test are exactly those the host configures.
+        val subject = AnthropicProvider(
+            baseUrl = server.url("/").toString().trimEnd('/'),
+            apiKey = "oc-key",
+            id = "opencode-go",
+            userAgent = "spindle/0.1",
+            messagesPath = "/messages",
+        )
+
+        val events = subject.stream(request().copy(sessionHint = "ses_go_123")).toList()
+
+        assertEquals(
+            listOf(
+                ProviderEvent.UsageEvent(Usage(inputTokens = 21, cacheReadTokens = 3)),
+                ProviderEvent.ReasoningDelta("pondering"),
+                ProviderEvent.TextDelta("Hello "),
+                ProviderEvent.TextDelta("from Go"),
+                ProviderEvent.UsageEvent(Usage(outputTokens = 9)),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+            events,
+        )
+
+        val recorded = server.takeRequest()
+        assertEquals("/messages", recorded.path)
+        assertEquals("oc-key", recorded.getHeader("x-api-key"))
+        assertNull(recorded.getHeader("Authorization"), "the /messages surface must not use Bearer auth")
+        assertEquals("2023-06-01", recorded.getHeader("anthropic-version"))
+        assertEquals("ses_go_123", recorded.getHeader("x-opencode-session"))
+        assertEquals("spindle/0.1", recorded.getHeader("User-Agent"))
+    }
+
+    @Test
+    fun `opencode zen messages route omits the session header when no hint is present`() = runTest {
+        server.enqueue(MockResponse().setChunkedBody("data: {\"type\":\"message_stop\"}\n\n", 5))
+
+        val subject = AnthropicProvider(
+            baseUrl = server.url("/").toString().trimEnd('/'),
+            apiKey = "oc-key",
+            id = "opencode",
+            userAgent = "spindle/0.1",
+            messagesPath = "/messages",
+        )
+
+        subject.stream(request()).toList()
+
+        val recorded = server.takeRequest()
+        assertEquals("/messages", recorded.path)
+        assertNull(recorded.getHeader("x-opencode-session"))
+        assertNull(recorded.getHeader("Authorization"))
+    }
+
     // --- robustness: long turns, resource lifetime, concurrency --------------
 
     private fun recordedEvents(): List<ProviderEvent> = listOf(

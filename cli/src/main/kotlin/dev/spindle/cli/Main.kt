@@ -14,6 +14,7 @@ import dev.spindle.core.provider.Provider
 import dev.spindle.core.provider.SimpleProviderRegistry
 import dev.spindle.provider.anthropic.AnthropicProvider
 import dev.spindle.provider.openai.OpenAiProvider
+import dev.spindle.provider.openai.OpenCodeRouter
 import dev.spindle.store.sqlite.SqliteSessionStore
 import dev.spindle.tool.DefaultTools
 import kotlinx.coroutines.delay
@@ -153,10 +154,14 @@ private fun buildProviders(): List<Provider> {
         out += OpenAiProvider(baseUrl = "https://openrouter.ai/api/v1", apiKey = it, id = "openrouter")
     }
     // OpenCode Zen + Go. Free routing works without a key; paid routes need OPENCODE_API_KEY.
+    // These are mixed-surface gateways: the composite routes each model to
+    // /chat/completions, /messages (Claude/Qwen) or an explicit /responses error.
     val ocKey = env("OPENCODE_API_KEY") ?: ""
     val ocUa = env("SPINDLE_USER_AGENT") ?: "spindle/0.1"
-    out += OpenAiProvider(
-        baseUrl = "https://opencode.ai/zen/v1", apiKey = ocKey, id = "opencode",
+    out += OpenCodeRoutingProvider(
+        id = "opencode",
+        baseUrl = OpenCodeRouter.ZEN_BASE_URL,
+        apiKey = ocKey,
         userAgent = ocUa,
         defaultModels = listOf(
             model("opencode", "deepseek-v4.1-flash", 1_000_000, reasoning = true),
@@ -164,14 +169,27 @@ private fun buildProviders(): List<Provider> {
             model("opencode", "kimi-k2.7-code", 200_000),
             model("opencode", "big-pickle", 128_000),
             model("opencode", "space-bunny-free", 128_000),
+            // Routing representatives from the public /models catalogue. Claude/Qwen
+            // take /messages, GPT/Grok take /responses. Availability beyond the free
+            // tier is governed by the account; live /models enriches this list.
+            model("opencode", "claude-sonnet-4", 200_000, reasoning = true),
+            model("opencode", "qwen3.8-flash", 262_144),
+            model("opencode", "gpt-5", 400_000, reasoning = true),
+            model("opencode", "grok-4.7", 256_000, reasoning = true),
         ),
     )
-    out += OpenAiProvider(
-        baseUrl = "https://opencode.ai/zen/go/v1", apiKey = ocKey, id = "opencode-go",
+    out += OpenCodeRoutingProvider(
+        id = "opencode-go",
+        baseUrl = OpenCodeRouter.GO_BASE_URL,
+        apiKey = ocKey,
         userAgent = ocUa,
         defaultModels = listOf(
             model("opencode-go", "deepseek-v4.1-flash", 1_000_000, reasoning = true),
             model("opencode-go", "glm-5.3-flash", 200_000),
+            model("opencode-go", "claude-sonnet-4", 200_000, reasoning = true),
+            model("opencode-go", "qwen3.8-flash", 262_144),
+            model("opencode-go", "gpt-5", 400_000, reasoning = true),
+            model("opencode-go", "grok-4.7", 256_000, reasoning = true),
         ),
     )
     env("ANTHROPIC_API_KEY")?.let {

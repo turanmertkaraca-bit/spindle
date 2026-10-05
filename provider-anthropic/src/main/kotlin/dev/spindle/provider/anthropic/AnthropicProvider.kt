@@ -132,6 +132,12 @@ class AnthropicProvider(
     private val extraHeaders: Map<String, String> = emptyMap(),
     /** Upper bound on a single SSE line; guards long/hostile streams. */
     private val maxSseLineBytes: Long = MAX_SSE_LINE_BYTES,
+    /**
+     * Path appended to [baseUrl] for the streaming call. Defaults to Anthropic's
+     * native `/v1/messages`; the OpenCode Zen/Go gateways expose the same wire
+     * shape at `/messages` under their `.../v1` base, so they pass `/messages`.
+     */
+    private val messagesPath: String = "/v1/messages",
 ) : Provider {
 
     private val root: String = baseUrl.trimEnd('/')
@@ -149,7 +155,7 @@ class AnthropicProvider(
     override fun stream(request: ChatRequest): Flow<ProviderEvent> = channelFlow {
         val payload = buildPayload(request)
         val httpReq = Request.Builder()
-            .url("$root/v1/messages")
+            .url("$root${if (messagesPath.startsWith("/")) messagesPath else "/$messagesPath"}")
             .header("x-api-key", apiKey)
             .header("anthropic-version", version)
             .header("content-type", "application/json")
