@@ -93,7 +93,7 @@ class AgentCapabilitiesTest {
                     path = "a.txt",
                     content = "before",
                     sha256 = "hash",
-                    createdAt = 0,
+                    createdAt = System.currentTimeMillis(),
                 ),
             )
             return ToolOutcome(

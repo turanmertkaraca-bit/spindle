@@ -10,8 +10,7 @@ class OverflowTest {
         tokens: Int,
         window: Int = 1_000,
         hasOpenToolCall: Boolean = false,
-        alreadyCompacted: Boolean = false,
-    ) = Overflow.decide(tokens, window, hasOpenToolCall, alreadyCompacted)
+    ) = Overflow.decide(tokens, window, hasOpenToolCall)
 
     @Test
     fun `below the trim threshold is a no-op`() {
@@ -43,10 +42,14 @@ class OverflowTest {
     }
 
     @Test
-    fun `an already compacted session is left alone in the trim band`() {
-        assertEquals(OverflowAction.NONE, decide(800, alreadyCompacted = true).action)
-        assertEquals(OverflowAction.NONE, decide(850, alreadyCompacted = true).action)
-        assertEquals(OverflowAction.NONE, decide(919, alreadyCompacted = true).action)
+    fun `compaction stays available after a first compaction`() {
+        // Regression: the old gate disabled trim/compact forever once a session
+        // held one summary, so a long run could never shrink again and would
+        // eventually exceed the window. Overflow is now purely ratio-driven.
+        assertEquals(OverflowAction.TRIM, decide(800).action)
+        assertEquals(OverflowAction.TRIM, decide(919).action)
+        assertEquals(OverflowAction.COMPACT, decide(920).action)
+        assertEquals(OverflowAction.COMPACT, decide(5_000).action)
     }
 
     @Test

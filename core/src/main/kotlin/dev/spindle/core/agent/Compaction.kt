@@ -3,6 +3,7 @@ package dev.spindle.core.agent
 import dev.spindle.core.model.Ids
 import dev.spindle.core.model.Part
 import dev.spindle.core.model.PartId
+import dev.spindle.core.model.Role
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.provider.ProviderRegistry
 import dev.spindle.core.store.SessionStore
@@ -25,6 +26,10 @@ object Compaction {
     const val KEEP_RECENT = 6
     private const val TRIM_TOOL_OUTPUT = 2_000
     private const val TRIM_TEXT = 4_000
+    private const val TRIM_TOOL_DIFF = 4_000
+
+    /** Inline base64 larger than this is dropped from an old message's File part. */
+    private const val TRIM_FILE_BASE64 = 4_000
 
     suspend fun trim(store: SessionStore, sessionId: SessionId): Int {
         val messages = store.messages(sessionId)
@@ -47,10 +52,24 @@ object Compaction {
         } else part
         is Part.Reasoning -> Part.Reasoning(part.id, part.text.take(500))
         is Part.Tool -> {
-            val r = part.result
-            if (r != null && r.output.length > TRIM_TOOL_OUTPUT) {
-                part.copy(result = r.copy(output = r.output.take(TRIM_TOOL_OUTPUT) + "\n…[trimmed]"))
+            val r = part.result ?: return part
+            val output = if (r.output.length > TRIM_TOOL_OUTPUT) {
+                r.output.take(TRIM_TOOL_OUTPUT) + "\n…[trimmed]"
+            } else {
+                r.output
+            }
+            val diff = r.diff?.let {
+                if (it.length > TRIM_TOOL_DIFF) it.take(TRIM_TOOL_DIFF) + "\n…[trimmed]" else it
+            }
+            if (output != r.output || diff != r.diff) {
+                part.copy(result = r.copy(output = output, diff = diff))
             } else part
+        }
+        // Old inline images are dropped from history so a long session cannot
+        // re-send every attachment ever queued on every subsequent turn.
+        is Part.File -> {
+            val base64 = part.dataBase64
+            if (base64 != null && base64.length > TRIM_FILE_BASE64) part.copy(dataBase64 = null) else part
         }
         else -> part
     }
@@ -72,8 +91,29 @@ object Compaction {
         val messages = store.messages(sessionId)
         if (messages.size <= KEEP_RECENT + 2) return false
 
-        val head = messages.dropLast(KEEP_RECENT)
+        // Compaction may only consume messages strictly before the current
+        // turn's first user message; the current user prompt (and any user
+        // message that belongs to it, e.g. a separate attachments message) and
+        // everything after it are never folded. Without this boundary a long
+        // single-prompt run folds its own instruction once more than
+        // [KEEP_RECENT] model turns accumulate after it — which is reachable
+        // now that overflow is ratio-driven and re-compacts on later turns.
+        val lastUser = messages.indexOfLast { it.role == Role.USER }
+        var turnStart = lastUser
+        while (turnStart > 0 && messages[turnStart - 1].role == Role.USER) turnStart--
+        val keepFrom = messages.size - KEEP_RECENT
+        val headEnd = if (turnStart in 0 until keepFrom) turnStart else keepFrom
+        if (headEnd <= 0) return false
+
+        val head = messages.take(headEnd)
         if (head.isEmpty()) return false
+        // Nothing new since the last compaction: the only head content is the
+        // existing summary. Skip the provider call so a long session cannot
+        // re-summarize its own summary every step.
+        val alreadySummarized = head.first().parts.any {
+            it is Part.Text && it.text.startsWith(AgentLoop.COMPACT_MARKER)
+        }
+        if (alreadySummarized && head.drop(1).all { it.parts.isEmpty() }) return false
         val headText = head.joinToString("\n\n") { m ->
             m.role.name.lowercase() + ": " + m.parts.joinToString(" ") { p ->
                 when (p) {

@@ -42,10 +42,11 @@ class SimpleProviderRegistry(private val providers: List<Provider>) : ProviderRe
             val pid = modelRef.substring(0, slash)
             val mid = modelRef.substring(slash + 1)
             val p = byId[pid] ?: return null
-            val cached = all.firstOrNull { it.providerId == pid && it.id == mid }
-            if (cached != null) return p to cached
-            val m = runCatching { p.models() }.getOrDefault(emptyList()).firstOrNull { it.id == mid }
-            return if (m != null) p to m else null
+            // models() already fetched every provider's full list and cached it,
+            // so a split ref absent from that snapshot is genuinely unknown. Do
+            // not refetch the provider here (network I/O that bypasses the cache).
+            val cached = all.firstOrNull { it.providerId == pid && it.id == mid } ?: return null
+            return p to cached
         }
         return all.firstOrNull { it.id == modelRef }?.let { m ->
             provider(m.providerId)?.let { it to m }

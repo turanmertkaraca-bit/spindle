@@ -18,6 +18,22 @@ class SimpleProviderRegistryTest {
         override fun stream(request: ChatRequest): Flow<ProviderEvent> = flowOf()
     }
 
+    /** Counts how often [models] is hit so a refetch would be observable. */
+    private class CountingProvider(
+        override val id: String,
+        private val listed: List<ModelInfo>,
+    ) : Provider {
+        var modelsCalls = 0
+            private set
+
+        override suspend fun models(): List<ModelInfo> {
+            modelsCalls++
+            return listed
+        }
+
+        override fun stream(request: ChatRequest): Flow<ProviderEvent> = flowOf()
+    }
+
     @Test
     fun `resolve matches a model id that itself contains slashes`() = runTest {
         val openrouter = FakeProvider(
@@ -80,5 +96,24 @@ class SimpleProviderRegistryTest {
         val models = registry.models()
         assertEquals(listOf("ghost/model"), models.map { it.id })
         assertNull(registry.resolve("ghost/model"))
+    }
+
+    @Test
+    fun `resolve does not refetch a provider after models are cached`() = runTest {
+        val provider = CountingProvider(
+            id = "counted",
+            listed = listOf(ModelInfo(providerId = "counted", id = "m1")),
+        )
+        val registry = SimpleProviderRegistry(listOf(provider))
+
+        registry.models()
+        assertEquals(1, provider.modelsCalls)
+
+        // A split ref absent from the cached snapshot is genuinely unknown: it
+        // must not trigger another provider fetch (the fallback used to call
+        // p.models() directly, bypassing the registry cache).
+        assertNull(registry.resolve("counted/missing"))
+        assertNull(registry.resolve("counted/also-missing"))
+        assertEquals(1, provider.modelsCalls)
     }
 }

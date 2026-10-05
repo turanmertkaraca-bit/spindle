@@ -44,16 +44,18 @@ object Overflow {
         estimatedTokens: Int,
         contextWindow: Int,
         hasOpenToolCall: Boolean,
-        alreadyCompacted: Boolean,
     ): OverflowDecision {
         if (hasOpenToolCall) {
             return OverflowDecision(OverflowAction.NONE, estimatedTokens, "open tool call — not touching history")
         }
         val ratio = estimatedTokens.toDouble() / contextWindow.coerceAtLeast(1)
         return when {
-            ratio >= COMPACT_AT && !alreadyCompacted ->
+            // Re-evaluated every step: a session that has already compacted once
+            // must keep compacting/trimming as new turns arrive, or a long run
+            // grows past the window again and can never recover.
+            ratio >= COMPACT_AT ->
                 OverflowDecision(OverflowAction.COMPACT, estimatedTokens, "%.0f%% of window".format(ratio * 100))
-            ratio >= TRIM_AT && !alreadyCompacted ->
+            ratio >= TRIM_AT ->
                 OverflowDecision(OverflowAction.TRIM, estimatedTokens, "%.0f%% of window".format(ratio * 100))
             else -> OverflowDecision(OverflowAction.NONE, estimatedTokens, "ok")
         }

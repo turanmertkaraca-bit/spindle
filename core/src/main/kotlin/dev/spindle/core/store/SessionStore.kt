@@ -50,4 +50,11 @@ interface SessionStore {
 
     /** Drop old sessions/parts to stay bounded. Returns rows removed. */
     suspend fun prune(keepSessions: Int = 100): Int
+
+    /**
+     * Best-effort storage maintenance at a safe boundary (end of a run): FTS
+     * optimization, WAL checkpointing, and the like. The default is a no-op so
+     * in-memory and headless stores stay simple.
+     */
+    suspend fun maintain() {}
 }

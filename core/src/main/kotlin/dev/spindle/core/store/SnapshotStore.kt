@@ -20,6 +20,33 @@ interface SnapshotStore {
 
     /** Keep at most the newest [keep] snapshots per session. Returns removed count. */
     suspend fun prune(keep: Int = 500): Int
+
+    /**
+     * Bounded retention across every session, meant to run at a safe boundary
+     * such as the end of an agent run. Keeps at most [keepPerSession] newest
+     * snapshots per session, at most [maxTotal] newest overall, and drops
+     * anything older than [maxAgeMillis]. Returns the number of rows removed.
+     *
+     * The default only enforces [keepPerSession] (via [prune]); durable stores
+     * that can enumerate every session should override this to also bound the
+     * global count and the age, so snapshots cannot grow forever.
+     */
+    suspend fun pruneBounded(
+        keepPerSession: Int = DEFAULT_KEEP_PER_SESSION,
+        maxTotal: Int = DEFAULT_MAX_TOTAL,
+        maxAgeMillis: Long = DEFAULT_MAX_AGE_MILLIS,
+    ): Int = prune(keepPerSession)
+
+    companion object {
+        /** Newest snapshots retained per session by [pruneBounded]. */
+        const val DEFAULT_KEEP_PER_SESSION = 200
+
+        /** Newest snapshots retained across all sessions by [pruneBounded]. */
+        const val DEFAULT_MAX_TOTAL = 2_000
+
+        /** Snapshots older than this (7 days) are dropped by [pruneBounded]. */
+        const val DEFAULT_MAX_AGE_MILLIS = 7L * 24 * 60 * 60 * 1_000
+    }
 }
 
 /** Default in-memory implementation for tests and headless hosts. */
@@ -53,6 +80,32 @@ class InMemorySnapshotStore : SnapshotStore {
                 snapshots.sortedBy { it.createdAt }
                     .take(snapshots.size - cap)
                     .forEach { removeIds += it.id }
+            }
+            if (removeIds.isEmpty()) return 0
+            val before = items.size
+            items.removeAll { it.id in removeIds }
+            return before - items.size
+        }
+    }
+
+    override suspend fun pruneBounded(keepPerSession: Int, maxTotal: Int, maxAgeMillis: Long): Int {
+        synchronized(lock) {
+            val removeIds = HashSet<String>()
+            val now = System.currentTimeMillis()
+            if (maxAgeMillis > 0) {
+                items.filter { now - it.createdAt > maxAgeMillis }.forEach { removeIds += it.id }
+            }
+            val perSession = keepPerSession.coerceAtLeast(0)
+            for ((_, snapshots) in items.filter { it.id !in removeIds }.groupBy { it.sessionId }) {
+                if (snapshots.size <= perSession) continue
+                snapshots.sortedBy { it.createdAt }
+                    .take(snapshots.size - perSession)
+                    .forEach { removeIds += it.id }
+            }
+            val survivors = items.filter { it.id !in removeIds }.sortedBy { it.createdAt }
+            val globalCap = maxTotal.coerceAtLeast(0)
+            if (globalCap < survivors.size) {
+                survivors.take(survivors.size - globalCap).forEach { removeIds += it.id }
             }
             if (removeIds.isEmpty()) return 0
             val before = items.size

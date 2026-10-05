@@ -1,15 +1,18 @@
 package dev.spindle.core.agent
 
 import dev.spindle.core.event.AgentEvent
+import dev.spindle.core.event.DeltaKind
 import dev.spindle.core.event.EventBus
 import dev.spindle.core.model.FinishReason
 import dev.spindle.core.model.Message
 import dev.spindle.core.model.MessageId
 import dev.spindle.core.model.Part
+import dev.spindle.core.model.PartId
 import dev.spindle.core.model.Role
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.model.SessionState
+import dev.spindle.core.model.ToolCall
 import dev.spindle.core.model.ToolState
 import dev.spindle.core.model.Usage
 import dev.spindle.core.provider.ChatRequest
@@ -23,6 +26,7 @@ import dev.spindle.core.tool.Tool
 import dev.spindle.core.tool.ToolContext
 import dev.spindle.core.tool.ToolOutcome
 import dev.spindle.core.tool.ToolRegistry
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
@@ -95,6 +99,41 @@ class AgentLoopTest {
         )
         override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome =
             ToolOutcome("done", metadata = mapOf("durationMs" to "42"))
+    }
+
+    /** A tool that returns an enormous diff, which the loop must clip. */
+    private class HugeDiffTool : Tool {
+        override val spec = ToolSpec(
+            name = "huge",
+            description = "returns a huge diff",
+            parametersJson = """{"type":"object","properties":{}}""",
+        )
+        override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome =
+            ToolOutcome("ok", diff = "d".repeat(100_000))
+    }
+
+    /** A tool that returns enormous metadata, which the loop must clip. */
+    private class HugeMetaTool : Tool {
+        override val spec = ToolSpec(
+            name = "meta",
+            description = "returns huge metadata",
+            parametersJson = """{"type":"object","properties":{}}""",
+        )
+        override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome =
+            ToolOutcome("ok", metadata = mapOf("blob" to "m".repeat(100_000)))
+    }
+
+    /** Signals when it starts, then blocks until the run is cancelled. */
+    private class BlockingTool(private val started: CompletableDeferred<Unit>) : Tool {
+        override val spec = ToolSpec(
+            name = "block",
+            description = "blocks until cancelled",
+            parametersJson = """{"type":"object","properties":{}}""",
+        )
+        override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
+            started.complete(Unit)
+            awaitCancellation()
+        }
     }
 
     /** Captures the session state the loop has persisted when the tool runs. */
@@ -539,6 +578,72 @@ class AgentLoopTest {
     }
 
     @Test
+    fun `a retried attempt persists only the successful attempt and reconciles the view`() = runTest {
+        // Attempt 1 streams some text then dies transiently; attempt 2 succeeds.
+        // Deltas stream live (so a retry may briefly show attempt-1 text), but the
+        // store is authoritative: the finalized message and the terminal
+        // PartUpdated must carry ONLY the successful attempt's text/reasoning, so
+        // the UI's rebuild-on-finalize replaces any stale live text.
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.TextDelta("stale-one "),
+                ProviderEvent.ReasoningDelta("stale-thought"),
+                ProviderEvent.Failure("503 service unavailable"),
+            ),
+            listOf(
+                ProviderEvent.ReasoningDelta("fresh-thought"),
+                ProviderEvent.TextDelta("final "),
+                ProviderEvent.TextDelta("answer"),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+        )
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(emptyList()),
+            store = store,
+            bus = bus,
+            clock = { 0 },
+        )
+        newSession(store, "ses_retry_render")
+
+        val events = mutableListOf<AgentEvent>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            bus.events.collect { events += it }
+        }
+        val result = loop.prompt(
+            SessionId("ses_retry_render"),
+            "go",
+            "fake/fake-1",
+            agent = AgentConfig(maxRetries = 1),
+        )
+        job.cancel()
+
+        val storedText = result.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
+        assertEquals("final answer", storedText)
+        assertEquals(
+            "fresh-thought",
+            result.parts.filterIsInstance<Part.Reasoning>().joinToString("") { it.text },
+        )
+
+        // The terminal PartUpdated for the text part carries the successful text,
+        // which is what the UI rebuilds from at finalize.
+        val finalText = events
+            .filterIsInstance<AgentEvent.PartUpdated>()
+            .map { it.part }
+            .filterIsInstance<Part.Text>()
+            .lastOrNull()
+        assertEquals("final answer", finalText?.text)
+        val finalReasoning = events
+            .filterIsInstance<AgentEvent.PartUpdated>()
+            .map { it.part }
+            .filterIsInstance<Part.Reasoning>()
+            .lastOrNull()
+        assertEquals("fresh-thought", finalReasoning?.text)
+    }
+
+    @Test
     fun `provider failure keeps reasoning and emits terminal part updates`() = runTest {
         val provider = ScriptedProvider(
             listOf(
@@ -610,5 +715,182 @@ class AgentLoopTest {
 
         val idle = events.filterIsInstance<AgentEvent.StateChanged>().filter { it.state == SessionState.IDLE }
         assertEquals(1, idle.size)
+    }
+
+    @Test
+    fun `a stale open tool from a previous run is finalized before the next prompt`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(ProviderEvent.TextDelta("ok"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(emptyList()),
+            store = store,
+            bus = EventBus(),
+        )
+        newSession(store, "ses_stale")
+        store.appendMessage(
+            Message(
+                id = MessageId("old"),
+                sessionId = SessionId("ses_stale"),
+                role = Role.ASSISTANT,
+                createdAt = 0,
+                finish = FinishReason.TOOL_CALLS,
+                parts = listOf(
+                    Part.Tool(PartId("t"), ToolCall("c1", "echo", "{}"), ToolState.PENDING),
+                ),
+            ),
+        )
+
+        loop.prompt(SessionId("ses_stale"), "go", "fake/fake-1")
+
+        val stale = store.messages(SessionId("ses_stale")).first { it.id == MessageId("old") }
+        val tool = stale.parts.filterIsInstance<Part.Tool>().single()
+        assertEquals(ToolState.ERROR, tool.state, "an unfinishable open tool must be reconciled")
+        assertEquals("aborted", tool.result?.output)
+    }
+
+    @Test
+    fun `a giant tool diff is clipped before it is persisted`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_1", "huge"),
+                ProviderEvent.ToolCallArgsDelta(0, "{}"),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            listOf(ProviderEvent.TextDelta("done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(HugeDiffTool())),
+            store = store,
+            bus = EventBus(),
+            maxToolOutputChars = 1_000,
+        )
+        newSession(store, "ses_huge_diff")
+
+        loop.prompt(SessionId("ses_huge_diff"), "go", "fake/fake-1")
+
+        val diff = store.messages(SessionId("ses_huge_diff"))
+            .flatMap { it.parts }.filterIsInstance<Part.Tool>().single().result?.diff
+        assertTrue(diff != null && diff.length < 100_000, "the persisted diff must be clipped")
+        assertTrue(diff!!.contains("truncated"), diff)
+    }
+
+    @Test
+    fun `oversized tool metadata is clipped before it is persisted`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_1", "meta"),
+                ProviderEvent.ToolCallArgsDelta(0, "{}"),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            listOf(ProviderEvent.TextDelta("done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(HugeMetaTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        newSession(store, "ses_huge_meta")
+
+        loop.prompt(SessionId("ses_huge_meta"), "go", "fake/fake-1")
+
+        val blob = store.messages(SessionId("ses_huge_meta"))
+            .flatMap { it.parts }.filterIsInstance<Part.Tool>().single().result?.metadata?.get("blob")
+        assertTrue(blob != null && blob.length < 100_000, "the metadata value must be clipped")
+        assertTrue(blob!!.contains("truncated"), blob)
+    }
+
+    @Test
+    fun `cancellation during a running tool aborts the tool and emits one idle`() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_1", "block"),
+                ProviderEvent.ToolCallArgsDelta(0, "{}"),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+        )
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(BlockingTool(started))),
+            store = store,
+            bus = bus,
+        )
+        newSession(store, "ses_cancel_tool")
+
+        val events = mutableListOf<AgentEvent>()
+        val collector = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            bus.events.collect { events += it }
+        }
+        val job = launch(UnconfinedTestDispatcher(testScheduler)) {
+            runCatching { loop.prompt(SessionId("ses_cancel_tool"), "hello", "fake/fake-1") }
+        }
+        started.await()
+        job.cancel()
+        job.join()
+        collector.cancel()
+
+        val tool = store.messages(SessionId("ses_cancel_tool"))
+            .flatMap { it.parts }.filterIsInstance<Part.Tool>().single()
+        assertEquals(ToolState.ERROR, tool.state, "an in-flight tool must be aborted on cancellation")
+        assertEquals("aborted", tool.result?.output)
+
+        val idle = events.filterIsInstance<AgentEvent.StateChanged>().filter { it.state == SessionState.IDLE }
+        assertEquals(1, idle.size, "cancellation must emit exactly one terminal idle")
+    }
+
+    @Test
+    fun `a retried attempt does not leak the failed attempt's tool calls`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_stale", "echo"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"stale\"}"),
+                ProviderEvent.Failure("503 service unavailable"),
+            ),
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_fresh", "echo"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"fresh\"}"),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            listOf(ProviderEvent.TextDelta("done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = bus,
+            clock = { 0 },
+        )
+        newSession(store, "ses_retry_tools")
+
+        val events = mutableListOf<AgentEvent>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            bus.events.collect { events += it }
+        }
+        loop.prompt(SessionId("ses_retry_tools"), "go", "fake/fake-1", agent = AgentConfig(maxRetries = 1))
+        job.cancel()
+
+        val persistedCalls = store.messages(SessionId("ses_retry_tools"))
+            .flatMap { it.parts }.filterIsInstance<Part.Tool>().map { it.call.id }
+        assertEquals(listOf("call_fresh"), persistedCalls, "only the successful attempt may be persisted")
+
+        val updatedToolCalls = events
+            .filterIsInstance<AgentEvent.PartUpdated>()
+            .map { it.part }
+            .filterIsInstance<Part.Tool>()
+            .map { it.call.id }
+            .toSet()
+        assertTrue("call_stale" !in updatedToolCalls, "the failed attempt's call must not be finalized")
+        assertTrue("call_fresh" in updatedToolCalls)
     }
 }

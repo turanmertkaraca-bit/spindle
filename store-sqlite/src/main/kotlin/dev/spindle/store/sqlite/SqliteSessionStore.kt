@@ -45,6 +45,9 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
      */
     private var ftsReady = false
 
+    /** Rewrites since the last FTS `optimize`; see [maintain]. */
+    private var ftsWrites = 0
+
     private val json = Json {
         encodeDefaults = true
         classDiscriminator = "kind"
@@ -573,6 +576,7 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
                 st.setString(3, message.role.name)
                 st.setString(4, body)
                 st.executeUpdate()
+                ftsWrites++
             }
         } catch (_: Throwable) {
             // The index is optional: disable it so search falls back to a scan.
@@ -585,6 +589,7 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
         try {
             connection.prepareStatement("DELETE FROM message_fts WHERE message_id = ?").use {
                 it.setString(1, messageId); it.executeUpdate()
+                ftsWrites++
             }
         } catch (_: Throwable) {
             ftsReady = false
@@ -596,6 +601,7 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
         try {
             connection.prepareStatement("DELETE FROM message_fts WHERE session_id = ?").use {
                 it.setString(1, sessionId); it.executeUpdate()
+                ftsWrites++
             }
         } catch (_: Throwable) {
             ftsReady = false
@@ -741,12 +747,40 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
         error = rs.getString("error"),
     )
 
+    /**
+     * Fold FTS tombstones left behind by the constant `updateMessage` rewrites
+     * (streaming and tool-state transitions delete and re-insert rows) and
+     * truncate the WAL. Called at the end of every run, so a very long session
+     * cannot grow the index or the `-wal` file without bound.
+     *
+     * The FTS merge is deferred until enough rewrites have accumulated: doing it
+     * every turn would make every run pay O(index).
+     */
+    override suspend fun maintain() {
+        mutex.withLock {
+            if (ftsReady && ftsWrites >= FTS_OPTIMIZE_AFTER) {
+                runCatching {
+                    connection.createStatement().use {
+                        it.execute("INSERT INTO message_fts(message_fts) VALUES('optimize')")
+                    }
+                    ftsWrites = 0
+                }
+            }
+            runCatching {
+                connection.createStatement().use { it.execute("PRAGMA wal_checkpoint(TRUNCATE)") }
+            }
+        }
+    }
+
     override fun close() {
         connection.createStatement().use { it.execute("PRAGMA wal_checkpoint(TRUNCATE)") }
         connection.close()
     }
 
     companion object {
+        /** Rewrites accumulated before [maintain] folds the FTS index. */
+        const val FTS_OPTIMIZE_AFTER = 128
+
         fun open(dbFile: Path): SqliteSessionStore = SqliteSessionStore(dbFile)
     }
 }

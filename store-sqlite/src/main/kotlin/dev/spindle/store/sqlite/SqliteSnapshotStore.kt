@@ -136,6 +136,68 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
         }
     }
 
+    /**
+     * Bounded retention across every session. Age is applied first, then the
+     * per-session cap, then the global cap, all in one transaction so whole-file
+     * snapshots cannot grow forever — including the snapshots of sessions that
+     * have since been deleted (which [SqliteSessionStore.prune] does not touch).
+     *
+     * A negative [keepPerSession] or [maxTotal] means "drop everything", matching
+     * the in-memory and Android implementations.
+     */
+    override suspend fun pruneBounded(
+        keepPerSession: Int,
+        maxTotal: Int,
+        maxAgeMillis: Long,
+    ): Int = mutex.withLock {
+        var removed = 0
+        connection.autoCommit = false
+        try {
+            if (maxAgeMillis > 0) {
+                val cutoff = System.currentTimeMillis() - maxAgeMillis
+                removed += connection.prepareStatement("DELETE FROM snapshots WHERE created_at < ?").use {
+                    it.setLong(1, cutoff); it.executeUpdate()
+                }
+            }
+            if (keepPerSession >= 0) {
+                removed += connection.prepareStatement(
+                    "DELETE FROM snapshots WHERE rowid IN (" +
+                        "SELECT s.rowid FROM snapshots s WHERE (" +
+                        "SELECT COUNT(*) FROM snapshots x WHERE x.session_id = s.session_id " +
+                        "AND (x.created_at > s.created_at OR (x.created_at = s.created_at AND x.rowid > s.rowid))" +
+                        ") >= ?)",
+                ).use {
+                    it.setInt(1, keepPerSession); it.executeUpdate()
+                }
+            } else {
+                removed += connection.prepareStatement("DELETE FROM snapshots").use { it.executeUpdate() }
+            }
+            if (maxTotal >= 0) {
+                val count = connection.createStatement().use { st ->
+                    st.executeQuery("SELECT COUNT(*) FROM snapshots").use { rs -> if (rs.next()) rs.getInt(1) else 0 }
+                }
+                val excess = count - maxTotal
+                if (excess > 0) {
+                    removed += connection.prepareStatement(
+                        "DELETE FROM snapshots WHERE rowid IN (" +
+                            "SELECT rowid FROM snapshots ORDER BY created_at ASC, rowid ASC LIMIT ?)",
+                    ).use {
+                        it.setInt(1, excess); it.executeUpdate()
+                    }
+                }
+            } else {
+                removed += connection.prepareStatement("DELETE FROM snapshots").use { it.executeUpdate() }
+            }
+            connection.commit()
+            removed
+        } catch (t: Throwable) {
+            connection.rollback()
+            throw t
+        } finally {
+            connection.autoCommit = true
+        }
+    }
+
     private fun readSnapshot(rs: ResultSet) = Snapshot(
         id = rs.getString("id"),
         sessionId = SessionId(rs.getString("session_id")),

@@ -116,6 +116,11 @@ class AgentLoop(
         val session = store.session(sessionId)
             ?: throw IllegalArgumentException("Unknown session: $sessionId")
 
+        // Any tool part still open from a previous turn can never finish now, but
+        // it would block overflow handling forever (an open call disables
+        // trim/compact) and be re-sent every turn. Finalize it before starting.
+        runCatching { finalizeOpenTools(sessionId) }
+
         bus.emit(AgentEvent.StateChanged(sessionId, SessionState.RUNNING))
         persistState(store, sessionId, SessionState.RUNNING)
         val budgetWarning = BudgetWarningState()
@@ -151,7 +156,14 @@ class AgentLoop(
                 }
                 when (decision.action) {
                     OverflowAction.TRIM -> Compaction.trim(store, sessionId)
-                    OverflowAction.COMPACT -> Compaction.compact(store, sessionId, modelRef, providers, bus)
+                    OverflowAction.COMPACT -> {
+                        // A compaction that has nothing new to fold (the head is
+                        // already just a summary) still needs the fallback trim
+                        // so an over-window session keeps shrinking.
+                        if (!Compaction.compact(store, sessionId, modelRef, providers, bus)) {
+                            Compaction.trim(store, sessionId)
+                        }
+                    }
                     OverflowAction.NONE -> Unit
                 }
                 budgetCheck(budget, store, sessionId, budgetWarning)
@@ -332,11 +344,50 @@ class AgentLoop(
             }
             throw e
         } catch (e: Throwable) {
+            // A crash after the assistant advertised tool calls would otherwise
+            // leave PENDING/RUNNING parts persisted forever, blocking overflow
+            // handling (an open call disables trim/compact) on every future turn.
+            runCatching { finalizeOpenTools(sessionId) }
             bus.emit(AgentEvent.Error(sessionId, e.message ?: e.toString()))
             terminalState = SessionState.ERROR
             bus.emit(AgentEvent.StateChanged(sessionId, SessionState.ERROR))
             persistState(store, sessionId, SessionState.ERROR)
             throw e
+        } finally {
+            // Bounded retention at a safe boundary: optimize FTS/checkpoint WAL
+            // and cap snapshot history. NonCancellable so a stop still cleans up.
+            withContext(NonCancellable) {
+                runCatching { store.maintain() }
+                runCatching { snapshots?.pruneBounded() }
+            }
+        }
+    }
+
+    /**
+     * Rewrite every persisted PENDING/RUNNING tool part to an aborted ERROR.
+     * Used to recover from a killed or crashed run: without it an open call can
+     * never complete and permanently disables trim/compact for the session.
+     */
+    private suspend fun finalizeOpenTools(sessionId: SessionId) {
+        val messages = runCatching { store.messages(sessionId) }.getOrDefault(emptyList())
+        for (message in messages) {
+            if (message.parts.none {
+                    it is Part.Tool && (it.state == ToolState.PENDING || it.state == ToolState.RUNNING)
+                }
+            ) {
+                continue
+            }
+            val parts = message.parts.map { p ->
+                if (p is Part.Tool && (p.state == ToolState.PENDING || p.state == ToolState.RUNNING)) {
+                    p.copy(
+                        state = ToolState.ERROR,
+                        result = ToolResult(p.call.id, "aborted", isError = true),
+                    )
+                } else {
+                    p
+                }
+            }
+            store.updateMessage(message.copy(parts = parts))
         }
     }
 
@@ -365,8 +416,7 @@ class AgentLoop(
         }
         val schemaChars = active.specs.sumOf { it.parametersJson.length + it.description.length }
         val est = TokenEstimator.estimate("x".repeat(sysChars), msgChars.map { "x".repeat(it) }, schemaChars)
-        val alreadyCompacted = history.any { it.parts.filterIsInstance<Part.Text>().any { p -> p.text.startsWith(COMPACT_MARKER) } }
-        return Overflow.decide(est, contextWindow, open, alreadyCompacted)
+        return Overflow.decide(est, contextWindow, open)
     }
 
     private suspend fun budgetCheck(
@@ -490,11 +540,10 @@ class AgentLoop(
             ToolOutcome("Tool ${part.call.name} failed: ${e.message}", isError = true)
         }
 
-        val clipped = if (outcome.output.length > maxToolOutputChars) {
-            outcome.output.take(maxToolOutputChars) + "\n…[truncated ${outcome.output.length - maxToolOutputChars} chars]"
-        } else {
-            outcome.output
-        }
+        val clipped = clip(outcome.output, maxToolOutputChars)
+        // The diff is persisted forever and re-sent each turn; an unbounded
+        // patch would otherwise make a single stored Part enormous.
+        val clippedDiff = outcome.diff?.let { clip(it, maxToolOutputChars) }
         finishTool(
             sessionId, messageId,
             part.copy(
@@ -503,8 +552,8 @@ class AgentLoop(
                     part.call.id,
                     clipped,
                     outcome.isError,
-                    outcome.diff,
-                    durationMetadata(outcome.metadata, runStartedAt),
+                    clippedDiff,
+                    clipMetadata(durationMetadata(outcome.metadata, runStartedAt)),
                 ),
             ),
         )
@@ -536,6 +585,16 @@ class AgentLoop(
     private fun durationMetadata(metadata: Map<String, String>, startedAt: Long): Map<String, String> =
         if (metadata.containsKey(DURATION_KEY)) metadata
         else metadata + (DURATION_KEY to (clock() - startedAt).toString())
+
+    /** Clip [text] to [max] characters, adding a marker when anything was cut. */
+    private fun clip(text: String, max: Int): String =
+        if (max in 0 until text.length) text.take(max) + "\n…[truncated ${text.length - max} chars]" else text
+
+    /** Keep metadata values small so one tool cannot bloat a persisted result. */
+    private fun clipMetadata(metadata: Map<String, String>): Map<String, String> {
+        if (metadata.isEmpty()) return metadata
+        return metadata.mapValues { (_, value) -> clip(value, MAX_METADATA_VALUE_CHARS) }
+    }
 
     private fun approvalDetail(input: JsonObject): String {
         for (key in listOf("command", "path", "url", "patchText")) {
@@ -665,6 +724,7 @@ class AgentLoop(
         const val COMPACT_MARKER = "[compacted]"
         const val AGENTS_FILE = "AGENTS.md"
         const val MAX_RULES_CHARS = 8_192
+        const val MAX_METADATA_VALUE_CHARS = 8_192
         const val DURATION_KEY = "durationMs"
     }
 }
