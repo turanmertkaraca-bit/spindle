@@ -10,10 +10,22 @@ comes first; this file is the running list so nothing is lost.
   state, a send button that reads as primary, the keyboard/IME transition, and
   hint text that does not collide with the `image` chip. Make it feel native
   and calm, matching the AMOLED/prism chat.
+  **DONE** — function-only pass at `aaac126` (see "Landed" below).
 - **Top-bar buttons look bad.** `fork`, `files`, `shell` (and `back`) render as
   bare monospace text. Give the app bar real affordances: consistent touch
-  targets, subtle icons or a grouped segmented control, and alignment that
-  does not crowd the title.
+  targets, subtle icons or a grouped segmented control, and alignment that does
+  not crowd the title.
+  **DONE** — function-only pass at `aaac126` (see "Landed" below).
+
+## Landed (`aaac126`, function-only)
+
+- Composer + app-bar treatment: padding/focus/send-stop/attachment layout, IME
+  insets, primary send affordance; app-bar buttons grouped with real touch
+  targets and title truncation.
+- Session tags UI (add/remove/clear + any-of filter bar and row chips) and
+  models.dev catalogue enrichment shipped alongside.
+- This was a function-first pass; a final visual/motion sweep is still parked
+  (items 3–6 below).
 
 ## Already addressed (for reference, do not regress)
 
@@ -26,14 +38,15 @@ comes first; this file is the running list so nothing is lost.
 - Merged think→answer, subagent call tree, live todo board, changes card with
   per-file revert, usage meter, build/plan mode chips.
 
-## Polish pass scope (when reached)
+## Polish pass scope
 
 1. Composer: spacing, focus ring, send/stop button, attachment chip layout,
-   IME insets, disabled states.
+   IME insets, disabled states. — **landed `aaac126`**.
 2. App bar: button treatment (icons/labels), tap targets, title truncation,
-   back affordance.
+   back affordance. — **landed `aaac126`**.
 3. Consistent corner radii + elevation across cards (tool, changes, todo,
-   permission, question, canvas, files).
-4. Empty/loading/error states across every screen.
+   permission, question, canvas, files). — open.
+4. Empty/loading/error states across every screen. — open.
 5. Motion: unify spring specs; verify no jitter via `AnimationSmoothnessTest`.
-6. Screenshot sweep: every screen, light + dark, read them all.
+   — open.
+6. Screenshot sweep: every screen, light + dark, read them all. — open.

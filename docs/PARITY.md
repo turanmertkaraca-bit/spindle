@@ -2,7 +2,8 @@
 
 What `spindle` reproduces from opencode, and what it deliberately does not.
 Baseline: opencode `dev` (~136k LOC source, ~133k LOC tests, 435 test files).
-`spindle` is ~4.2k LOC — a deliberate ~3% slice. This file is kept current.
+`spindle` is ~22k LOC of Kotlin source (~15k LOC tests) across the JVM backend
+plus the native Android app — a deliberate slice. This file is kept current.
 
 Legend: ✅ ported · 🟡 partial · ❌ not ported (by choice unless noted)
 
@@ -19,7 +20,10 @@ Legend: ✅ ported · 🟡 partial · ❌ not ported (by choice unless noted)
 | Compaction (trim + summarize) | `agent/Compaction.kt` | ✅ |
 | Session title/summary auto-gen | — | ❌ (UI can title from first message) |
 | Structured output (`json_schema`) | — | ❌ |
-| Snapshots / revert / undo / fork | `SnapshotStore` + per-file revert + fork/rewind | ✅ |
+| Snapshots / revert / undo / fork | `SnapshotStore` (pinned pre-images) + per-file revert + fork/rewind | ✅ |
+| Session tags / pin / archive / retention | `Session.tags/pinned/archived` + tags UI + `pruneBounded` | ✅ |
+| Per-session prompt serialization | `AgentLoop` per-session `Mutex` | ✅ |
+| Retry without double-render (live streaming kept) | `AgentEvent.PartReset` + app drops the failed attempt | ✅ |
 | Share links | — | ❌ |
 
 ## Providers

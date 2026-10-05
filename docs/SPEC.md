@@ -115,7 +115,7 @@ has a stable `PartId`.
     data class Reasoning(id, text: String) : Part
     data class Tool(id, call: ToolCall, state: ToolState,
                     result: ToolResult? = null, title: String? = null) : Part
-    data class File(id, path: String, mime: String? = null) : Part
+    data class File(id, path: String, mime: String? = null, dataBase64: String? = null) : Part
     data class Step(id, index: Int) : Part
 }
 ```
@@ -161,7 +161,11 @@ separate messages.
     val model: String? = null,
     val providerId: String? = null,
     val agent: String = "build",
-    val parentId: SessionId? = null, // reserved for subagents (out of scope v1)
+    val parentId: SessionId? = null, // set for subagent child sessions
+    val state: SessionState = SessionState.IDLE,
+    val pinned: Boolean = false,
+    val archived: Boolean = false,
+    val tags: List<String> = emptyList(),
 )
 ```
 
@@ -281,17 +285,21 @@ interface ProviderRegistry {
 }
 ```
 
-`resolve` accepts `"provider/model"` (split on the **first** `/`, so nested ids
-like `openrouter/anthropic/claude-3.5` resolve provider `openrouter`) or a bare
-model id, which is looked up across all registered providers. Model lists are
-cached once behind a mutex.
+`resolve` first tries the **full ref as a model id** (so slash-namespaced slugs
+like `openrouter/auto` resolve directly), then falls back to splitting
+`"provider/model"` on the **first** `/` (so nested ids like
+`openrouter/anthropic/claude-3.5` resolve provider `openrouter`), consulting the
+cached catalogue rather than refetching. An unregistered provider id returns
+`null`. Model lists are cached once behind a mutex.
 
 ---
 
 ## 4. Provider configuration
 
-Four providers ship in v1: DeepSeek, OpenRouter, OpenCode Zen, OpenCode Go. All
-authenticate with `Authorization: Bearer <api key>`. Each adapter is an
+Four providers ship in v1: DeepSeek, OpenRouter, OpenCode Zen, OpenCode Go.
+DeepSeek, OpenRouter and the Zen/Go OpenAI surfaces use
+`Authorization: Bearer <api key>`; the Zen/Go Anthropic surface (`/messages`)
+uses `x-api-key` + `anthropic-version`. Each adapter is an
 OpenAI-compatible adapter (`:provider-openai`) or an Anthropic adapter
 (`:provider-anthropic`); "mixed" providers pick the adapter per model.
 
@@ -299,8 +307,8 @@ OpenAI-compatible adapter (`:provider-openai`) or an Anthropic adapter
 |---|---|---|---|---|---|
 | DeepSeek | `https://api.deepseek.com` | `chat/completions` | `deepseek/` | `Authorization: Bearer $DEEPSEEK_API_KEY` | model ids `deepseek-flash`, `deepseek-v4-pro`; `thinking` maps to explicit reasoning mode |
 | OpenRouter | `https://openrouter.ai/api/v1` | `chat/completions` | `openrouter/` | `Authorization: Bearer $OPENROUTER_API_KEY` | vendor ids can contain `/`; optional `HTTP-Referer` / `X-Title` attribution headers |
-| OpenCode Zen | `https://opencode.ai/zen/v1` | `chat/completions` + `messages` + `responses` | `opencode/` | `Authorization: Bearer $OPENCODE_API_KEY` | adapter chosen per model capability |
-| OpenCode Go | `https://opencode.ai/zen/go/v1` | `chat/completions` + `messages` + `responses` | `opencode-go/` | `Authorization: Bearer $OPENCODE_API_KEY` | **requires `x-opencode-session: <sessionId>` on every request** and a stable custom `User-Agent`; the response is routed by session |
+| OpenCode Zen | `https://opencode.ai/zen/v1` | `chat/completions` + `messages` + `responses` | `opencode/` | Bearer on `/chat/completions` + `/responses`; `x-api-key` + `anthropic-version` on `/messages` | adapter chosen per model capability |
+| OpenCode Go | `https://opencode.ai/zen/go/v1` | `chat/completions` + `messages` + `responses` | `opencode-go/` | Bearer on `/chat/completions` + `/responses`; `x-api-key` + `anthropic-version` on `/messages` | **requires `x-opencode-session: <sessionId>` on every request** and a stable custom `User-Agent`; the response is routed by session |
 
 ### 4.1 OpenCode Go session header (mandatory)
 
@@ -341,8 +349,15 @@ interface SessionStore {
     suspend fun createSession(session: Session)
     suspend fun updateSession(session: Session)
     suspend fun session(id: SessionId): Session?
-    suspend fun sessions(limit: Int = 50, includeChildren: Boolean = false): List<Session>
+    suspend fun sessions(
+        limit: Int = 50,
+        includeChildren: Boolean = false,
+        includeArchived: Boolean = false,
+    ): List<Session>
     suspend fun deleteSession(id: SessionId)
+
+    suspend fun forkSession(sourceId: SessionId, atMessageId: MessageId?, newId: SessionId): Session?
+    suspend fun rewind(sessionId: SessionId, toMessageId: MessageId): Int
 
     suspend fun appendMessage(message: Message)
     suspend fun updateMessage(message: Message)
@@ -354,70 +369,103 @@ interface SessionStore {
     suspend fun setTodos(sessionId: SessionId, todos: List<TodoItem>)
 
     suspend fun prune(keepSessions: Int = 100): Int
+    suspend fun maintain() {}   // FTS optimize + WAL checkpoint at end of run
 }
 ```
 
 Contract:
 
 - `sessions` is ordered by `updatedAt` descending and filters out child sessions
-  unless `includeChildren` is set.
+  unless `includeChildren` is set (archived unless `includeArchived`).
 - `appendMessage` preserves insertion order; `messages` returns that order.
 - `updateMessage` replaces by id, or inserts if missing (idempotent upsert).
+- `forkSession` copies messages up to and including the fork point into a new
+  child (`parentId = sourceId`); `rewind` drops messages strictly after the
+  rewind point (the point is kept).
 - Implementations must be safe under single-writer, many-reader use; the
   in-memory store serializes with a `Mutex`.
 - `prune` drops whole sessions beyond `keepSessions` (oldest `updatedAt`) and their
   messages/todos, returning the count of sessions removed.
+- `maintain` runs at a safe boundary (end of a run) to reclaim FTS/WAL space; the
+  default is a no-op.
+
+### SnapshotStore
+
+Pre-edit file snapshots live in a separate `SnapshotStore` (large, different
+lifecycle). `pruneBounded(keepPerSession, maxTotal, maxAgeMillis)` bounds growth
+across sessions while **pinning the newest snapshot for every `(sessionId, path)`**
+so a per-file revert always has a pre-image. Session deletion cascades its
+snapshots.
 
 ### 5.1 SQLite schema overview (`:store-sqlite`)
 
-Four tables; messages and parts are stored together for simple, ordered reads.
+Four content tables (`sessions`, `messages`, `parts`, `todos`); parts are stored
+as their own ordered rows.
 
 ```
-session(
+sessions(
   id TEXT PRIMARY KEY,
-  title TEXT NOT NULL DEFAULT '',
-  cwd TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  model TEXT,
-  provider_id TEXT,
-  agent TEXT NOT NULL DEFAULT 'build',
-  parent_id TEXT REFERENCES session(id)
-)
-
-message(
-  id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL REFERENCES session(id) ON DELETE CASCADE,
-  role TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
+  title TEXT,
+  cwd TEXT,
+  created_at INTEGER,
+  updated_at INTEGER,
   model TEXT,
   provider_id TEXT,
   agent TEXT,
+  parent_id TEXT,
+  state TEXT NOT NULL DEFAULT 'IDLE',   -- added in migration 2
+  pinned INTEGER NOT NULL DEFAULT 0,
+  archived INTEGER NOT NULL DEFAULT 0,
+  tags TEXT NOT NULL DEFAULT '[]'       -- JSON array
+)
+
+messages(
+  id TEXT PRIMARY KEY,
+  session_id TEXT,
+  role TEXT,
+  created_at INTEGER,
+  model TEXT,
+  provider_id TEXT,
+  agent TEXT,
+  usage TEXT,                            -- JSON Usage
   finish TEXT,
   error TEXT,
-  usage_json TEXT NOT NULL DEFAULT '{}',
-  parts_json TEXT NOT NULL DEFAULT '[]',   -- serialized List<Part>
-  seq INTEGER NOT NULL                      -- insertion order within session
+  seq INTEGER                            -- insertion order within session
 )
-CREATE INDEX message_session_seq ON message(session_id, seq);
+CREATE INDEX idx_messages_session_seq ON messages(session_id, seq);
 
-todo(
-  session_id TEXT NOT NULL REFERENCES session(id) ON DELETE CASCADE,
-  id TEXT NOT NULL,
-  content TEXT NOT NULL,
-  status TEXT NOT NULL,
-  position INTEGER NOT NULL,
-  PRIMARY KEY (session_id, id)
+parts(
+  id TEXT PRIMARY KEY,
+  message_id TEXT,
+  session_id TEXT,
+  ord INTEGER,                           -- order within the message
+  data TEXT                              -- JSON Part
 )
+CREATE INDEX idx_parts_message_ord ON parts(message_id, ord);
 
-meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)   -- schema_version, etc.
+todos(
+  id TEXT PRIMARY KEY,
+  session_id TEXT,
+  ord INTEGER,
+  content TEXT,
+  status TEXT
+)
+CREATE INDEX idx_todos_session_ord ON todos(session_id, ord);
+
+message_fts(message_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, body)  -- FTS5 (optional)
+schema_version(version INTEGER)                   -- legacy compat; PRAGMA user_version is truth
 ```
 
-- Whole-message parts (`parts_json`) keep the write atomic and the read ordered.
+- Parts are separate rows ordered by `ord`; a whole message is read as its parts.
 - `appendMessage` assigns `seq = MAX(seq)+1` per session; `messages` orders by `seq`.
 - WAL mode and `foreign_keys=ON`; one connection per store instance guarded by a
   mutex.
-- `PRAGMA user_version` records the schema version for forward migrations.
+- `PRAGMA user_version` is the durable schema version; a `schema_version` table is
+  kept for compatibility with older databases. Migration 2 adds
+  `state`/`pinned`/`archived`/`tags` idempotently.
+- The FTS5 `message_fts` index is created separately (`setupFts`) so a platform
+  SQLite without FTS5 still opens; search falls back to a scan. `maintain()`
+  runs FTS `optimize` + `PRAGMA wal_checkpoint(TRUNCATE)` at the end of a run.
 
 ---
 
@@ -710,12 +758,13 @@ These are explicit non-goals. They are not bugs; do not build them now.
   and closed.
 - **Plugins** — no dynamic loading, no hook system, no third-party extension
   points.
-- **Subagents** — `Session.parentId` is reserved but the loop never spawns a child
-  session in v1.
+- **Structured output / `skill` / `external-directory`** — deferred; the tool set
+  is closed and `json_schema` output is not targeted.
 - **Compaction beyond trim + summarize** — no hierarchical/embeddings-based
   memory. When context pressure arrives, the only allowed strategy is trimming old
   parts plus a single summarization pass.
 - **`/responses` wire surface** — Zen/Go advertise it; v1 targets
-  `chat/completions` and `messages` only.
+  `chat/completions` and `messages` only. Per-model routing parity is **blocked**
+  on a paid OpenCode key (free tier 403s Claude/GPT).
 - **Parallel tool execution** — tools run sequentially in call order.
 - **ULID ids / cross-process uniqueness** — `Ids.new` is process-monotonic only.

@@ -30,10 +30,12 @@ JVM (including GitHub Actions).
 
 ## Status
 
-Backend is feature-complete for a first UI: streaming providers, durable sessions,
-11 tools, subagent delegation, retries, cancellation and context compaction.
-See `docs/PLAN.md`, `docs/SPEC.md` and `docs/PARITY.md` (what we ported from
-opencode and what we deliberately did not).
+Backend is feature-complete, and the native Android/Compose app (`:app`,
+`dev.lumen.app`) is built on it: streaming providers, durable sessions, 12 tools,
+subagent delegation, retries, cancellation, per-session prompt serialization,
+and context compaction. See `docs/HANDOFF.md` (read first), `docs/PLAN.md`,
+`docs/SPEC.md` and `docs/PARITY.md` (what we ported from opencode and what we
+deliberately did not).
 
 ## Build
 
@@ -44,16 +46,21 @@ opencode and what we deliberately did not).
 
 ## Live smoke
 
-Live provider calls need a paid key: there is no keyless path, because the
-OpenCode free tier rejects third-party clients. With `OPENROUTER_API_KEY` set:
+There is no keyless path — live calls always need a key. A paid
+`OPENROUTER_API_KEY` (and the committed recorded SSE fixtures) is the primary
+verified path; an OpenCode free-tier key also works for **free models on
+`/chat/completions`** (e.g. `--provider opencode-go --model space-bunny-free`),
+but the free tier 403s Claude/GPT, so Zen/Go `/responses` + `/messages` routing
+stays blocked on a paid key.
 
 ```
 ./gradlew :cli:run --args="--provider openrouter --model openrouter/auto --prompt \"...\" --yes"
 ```
 
-`.github/workflows/live.yml` gates this exact command behind `workflow_dispatch`
-and the matching repository secret, so it never runs on push/PR and no PR can
-spend tokens.
+`.github/workflows/live.yml` gates this behind `workflow_dispatch` and the
+matching repository secret, so it never runs on push/PR and no PR can spend
+tokens. `/models` on opencode.ai is public, so a 200 there is not proof a key is
+valid — verify with an inference call. Never commit or paste a key.
 
 ## License
 

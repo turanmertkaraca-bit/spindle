@@ -35,6 +35,8 @@ Legend: `[x]` done · `[~]` partial · `[ ]` todo · `[—]` deliberately deferr
 - [x] OpenCode Go: stable `x-opencode-session` header + custom `User-Agent`.
 - [ ] Per-model wire routing inside Zen/Go (Claude/Qwen/MiniMax live on `/messages`,
       GPT/Grok on `/responses`). v1 only routes the OpenAI-compatible subset.
+      **Blocked**: needs a PAID OpenCode key to record real streams; the free tier
+      returns 403 "Model access is disabled" for Claude/GPT.
 
 ## M3 — SQLite store — `[x]` DONE
 
@@ -89,9 +91,12 @@ Legend: `[x]` done · `[~]` partial · `[ ]` todo · `[—]` deliberately deferr
 - [x] Streams `AgentEvent`s to stdout.
 - [x] `.github/workflows/live.yml` (manual-only, secrets-gated; never on push/PR).
 - [x] **Live smoke verified** (2026-10) against OpenRouter with a paid
-      `OPENROUTER_API_KEY`: text and a multi-step write→read→bash→read→answer
-      tool-loop both succeeded. The OpenCode free tier still rejects third-party
-      clients, so live tests stay manual and secrets-gated — see Risks.
+      `OPENROUTER_API_KEY`: text + reasoning + usage and a multi-step
+      write→read→bash→read→answer tool-loop both succeeded. Real recorded SSE
+      fixtures are committed. Also verified live on **OpenCode Go** (the app's
+      default provider) with a free-tier key and free model `space-bunny-free`
+      (real write→read tool loop). Both remain manual and secrets-gated — see
+      Risks / `HANDOFF.md` for the key traps.
 
 ## M10 — Android UI — `[—]` LATER / OUT OF SCOPE NOW
 
@@ -120,8 +125,12 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
 - [x] Rules / AGENTS.md injection.
 - [x] Session token + cost totals + budget warnings as events.
 - [x] New events: `UsageUpdated`, `TitleUpdated`, `RunStateChanged`,
-      `SubagentStateChanged`, `FileEdited`, `SnapshotCreated`.
+      `SubagentStateChanged`, `FileEdited`, `SnapshotCreated`, and `PartReset`
+      (retry reset that keeps live token streaming — see SPEC §8).
+- [x] Per-session run serialization (`AgentLoop.prompt` holds a per-session
+      `Mutex`; different sessions still run concurrently).
 - [ ] Provider routing parity: Zen/Go `/responses` + `/messages` per model.
+      **Blocked** on a paid OpenCode key (free tier 403s Claude/GPT).
 - [x] `ApprovalPolicy` (allow/ask/deny per tool + path/command glob, persisted).
 - [x] Store: full-text search, fork/branch, rewind, persisted run state.
 - [x] Pin / archive / rename session surfaces (Home row actions; archived
@@ -168,9 +177,12 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
       `ShellExecutor`; targetSdk 28 exec exemption.
 - [x] Adaptive two-pane (tablet/foldable) — files cockpit list + editor.
 - [~] On-device perf/ANR sweep: first pass clean (48–57 fps, 1–6% janky,
-      p95 ≤33 ms, worst ≤200 ms only at cancel, peak heap ≤37 MB). Battery/
-      thermal and long-session heap retention still to check (`PerfSampler`
-      logs a `perf:` line to diagnostics per run).
+      p95 ≤33 ms, worst ≤200 ms only at cancel, peak heap ≤37 MB). Streaming
+      perf fix has since landed (bounded tail-window rendering, no
+      `animateContentSize` on growing content, 40 ms coalesced deltas, async
+      rebuilds), plus the long-session stability work. A fresh on-device re-sweep
+      (battery/thermal, long-session heap/fd/DB/WAL retention) is **pending**;
+      `PerfSampler` logs a `perf:` line to diagnostics per run.
 - [x] CI green gate + screenshot evidence; APK update-in-place.
 
 ## Risks
@@ -178,11 +190,15 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
 - **Provider drift** — remote APIs change shape without notice. Mitigation: record
   real SSE bodies as fixtures and assert the exact `ProviderEvent` stream per
   provider; re-record on failures instead of guessing. Live checks are manual.
-- **Free-tier lockout** — OpenCode's free routing only serves the official client,
-  so `spindle` cannot use it. Live smoke needs a paid `DEEPSEEK_API_KEY` /
-  `OPENROUTER_API_KEY` / `OPENCODE_API_KEY` / `ANTHROPIC_API_KEY` GitHub secret
-  and is manual-only (`workflow_dispatch`), so no PR can spend tokens. Verified
-  2026-10 with `OPENROUTER_API_KEY`.
+- **Free-tier limits** — OpenCode has no keyless path, but a free-tier key DOES
+  work for **free models on `/chat/completions`** (e.g. `space-bunny-free`);
+  free tier returns 403 "Model access is disabled" for Claude/GPT, so Zen/Go
+  `/responses` + `/messages` routing stays blocked until a paid key. `:models`
+  on opencode.ai is public, so a 200 is not proof a key is valid. Live smoke
+  needs a `DEEPSEEK_API_KEY` / `OPENROUTER_API_KEY` / `OPENCODE_API_KEY` /
+  `ANTHROPIC_API_KEY` GitHub secret and is manual-only (`workflow_dispatch`), so
+  no PR can spend tokens. Verified 2026-10 with `OPENROUTER_API_KEY` (paid) and a
+  free OpenCode key (`opencode-go` + `space-bunny-free`).
 - **Tool path safety** — a bad resolve lets a tool read or write outside `cwd`
   (`..`, absolute paths, symlinks). Mitigation: normalize + containment checks on
   every path argument and adversarial tests per escape vector.

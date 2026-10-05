@@ -1,199 +1,162 @@
 # Lumen — session handoff (read me first)
 
-Native Android agent app. `spindle` repo, package `dev.lumen.app`. Merged from
-the old `opencode-android` (Java/Views + bundled server + Debian proot) into a
-fully native Kotlin/Compose app on spindle's in-process engine. Function-first;
-UI polish is the final pass.
+Native Android agent app. `spindle` repo, branch `main`, package `dev.lumen.app`.
+`HEAD = 06b113c8b7c085890d834dfd7b1ffe63c9734614`. CI (`.github/workflows/ci.yml`,
+both `jvm backend` + `android app (robolectric)`) is **green at 06b113c**. `:cli`
+is now gated in the jvm job (`:cli:classes`), so its run path compiles in CI even
+though it never spends tokens. Working tree: documentation edits only, no code
+changes pending.
 
 ```
 ██  NEVER COMMIT tokens/secrets. The git remote already embeds the PAT.  ██
-██  Never paste the PAT into chat (auto-revokes).                        ██
+██  Never paste the PAT or an API key into chat or into a doc. Rotate keys  ██
+██  when dev is finished. Live tests are manual only (`live.yml`).          ██
 ```
 
-## 0. Live verified (2026-10)
+## 1. What's done (this session)
 
-First successful live end-to-end runs against OpenRouter with a paid
-`OPENROUTER_API_KEY`, driven by the CLI (exact working command):
+1. **Background-run bug FIXED (`87ebe96`).** The agent loop runs in the
+   Application-scoped owner `LumenApp.applicationScope`, not `viewModelScope`;
+   `closeChat`/`onCleared` no longer cancel it, only an explicit stop does. Shared
+   event bus + live-run tracking let a reopened ViewModel reflect an in-flight
+   run; `RunService` hardened. Top-priority issue is closed.
+2. **Core engine correctness.** Compaction no longer wipes the tail/current
+   prompt and can always shrink (ratio-only overflow + no-op guard); `Wire` emits
+   a matching tool reply per call; `maxSteps` finalizes PENDING tools; retry no
+   longer double-counts usage; cancellation is correct; symlink sandbox escape
+   closed.
+3. **Provider streaming hardening.** Mid-stream `IOException` → `Failure`;
+   cancellation aborts the OkHttp call; exactly one terminal; a single
+   `ToolCallStart` with accumulated id/name; `ToolCallEnd` before `Finished`;
+   Anthropic threads `sessionHint`/`userAgent`/`x-opencode-session`; SSE line
+   reads bounded (16 MiB); clean EOF → retryable `Failure`; bounded reasoning
+   tracking.
+4. **Long-session stability.** FTS `optimize` + WAL checkpoint at end of run
+   (`maintain()`); bounded snapshots (`pruneBounded` per-session + global + age)
+   with **newest-per-`(session,path)` pinning** so revert always has a pre-image;
+   session-delete cascades snapshots; stale open tool calls finalized; ViewModel
+   caches bounded; `PerfSampler` bounded; Android FTS falls back to a scan on
+   write failure.
+5. **Streaming/UI perf.** Bounded text rendering (tail window while streaming,
+   prefix when finished, chunked "show full"); removed `animateContentSize` on
+   growing content; coalesced deltas (40 ms); async + coalesced rebuilds;
+   off-thread vision decode; composer/app-bar polish; session tags UI; models.dev
+   catalogue enrichment.
+6. **Retry double-render FIXED while keeping live token streaming (`e1d773f`).**
+   New `AgentEvent.PartReset` is emitted once per part at the start of a retried
+   attempt; the app clears that part's delta buffer and drops the failed attempt's
+   tool rows.
+7. **Defensive active-run guard (`06b113c`).** `AgentLoop.prompt` serializes per
+   session with a per-session `Mutex`: a second same-session prompt waits for the
+   first; different sessions still run concurrently.
+8. **Live verification (M9) DONE.**
+   - OpenRouter (paid key) verified: real text + reasoning (`reasoning` field) +
+     usage, and a real multi-step tool loop (write→read→bash→read→answer).
+     Recorded real SSE fixtures are **committed** at
+     `provider-openai/src/test/resources/openrouter_recorded_{text,tool}.sse`,
+     with exact `ProviderEvent` assertions in `OpenAiProviderTest`.
+   - **OpenCode Go — the app's DEFAULT provider — verified live** with a real
+     free-tier key: `--provider opencode-go --model space-bunny-free` ran a real
+     write→read tool loop. This validates the app's default provider path.
+   - Found+fixed live: resolver was broken for slash-namespaced model ids
+     (`openrouter/auto`); `parseUsage` dropped real `cost` / `cache_write_tokens`.
+
+## 2. What's left / blocked
+
+- **Zen/Go per-model routing** (`/responses` for GPT/Grok, `/messages` for
+  Claude/Qwen) — **blocked**: needs a PAID OpenCode key to record real streams.
+  Free tier returns **403 "Model access is disabled"** for Claude/GPT. Do not
+  claim this works.
+- **Multi-session concurrency from the UI** — the engine allows it (per-session
+  locks); the UI does not drive N chats at once yet.
+- **`m15` on-device perf re-sweep** — the streaming fix landed; a fresh device
+  sweep (long-session heap/fd/DB/WAL under load) is pending.
+- Deferred: structured output (`json_schema`), `skill` / `external-directory`
+  tools.
+- Explicit non-goals: OAuth, local models, MCP, LSP, plugins, git-commit UI.
+
+## 3. Keys / credentials — the traps
+
+- **NEVER commit or paste a key.** Rotate when dev is finished. Live tests are
+  manual (`live.yml`, `workflow_dispatch`, secret-gated), never on push/PR.
+- **OpenRouter (paid) key works.** Fine to use for the live smoke + stress.
+- **OpenCode free-tier key works for FREE models on `/chat/completions` only.**
+  `space-bunny-free` is the known-good free model id. It does **not** unlock
+  Claude/GPT.
+- **`/models` on opencode.ai is PUBLIC (no auth).** A `/models` 200 is **not**
+  proof a key is valid — always verify with a real inference call.
+- **Auth surfaces differ:** Zen/Go `/chat/completions` and `/responses` use
+  `Authorization: Bearer`; Zen/Go `/messages` (Anthropic surface) uses
+  `x-api-key` + `anthropic-version` — a Bearer there returns 401 "Missing API
+  key". Go additionally requires `x-opencode-session` and a custom User-Agent.
+- Free tier returns **403 "Model access is disabled"** for Claude/GPT, so
+  Zen/Go `/messages` + `/responses` parity stays blocked until a paid key.
+
+## 4. Build / test / stress (exact)
+
+Local JVM fast loop (`:app` is CI-only; no Android SDK in the guest):
 
 ```
-./gradlew :cli:run --args="--provider openrouter --model openrouter/auto --prompt \"...\" --yes"
+bash -lc '. /root/env.sh && cd /data/user/0/ai.opencode.app/files/projects/playground \
+  && ./gradlew :core:test :sandbox:test :tools:test :provider-openai:test \
+     :provider-anthropic:test :store-sqlite:test :server:test :cli:classes \
+     --no-daemon --console=plain'
 ```
 
-- Text run: streamed a real answer.
-- Tool-loop run: multi-step write → read → bash → read → answer executed and
-  streamed correctly.
+Long-session stress harness (manual, env-key only, **not** run by CI; measures
+heap/fd/DB/WAL growth and asserts stability):
 
-This is the only live path. The OpenCode free tier rejects third-party clients
-(`FreeTierError: can only be used from within OpenCode`), so keyless live runs
-are impossible. `live.yml` is therefore **manual-only** (`workflow_dispatch`),
-**secrets-gated**, and never on push/PR, so no PR can spend tokens. Real
-OpenRouter SSE bodies from these runs are recorded in
-`provider-openai/src/test/resources/openrouter_recorded_text.sse` and
-`..._tool.sse` (currently untracked).
+```
+OPENROUTER_API_KEY=... ./gradlew :cli:stress --console=plain --args="--turns 25 --max-steps 4"
+```
 
-**Resolver fix** (`SimpleProviderRegistry.resolve`, working tree): it used to
-split `provider/model` on the first slash and look up the remainder as the model
-id, which failed for providers whose model IDs contain slashes (OpenRouter slugs
-like `openrouter/auto`). It now tries the full ref as a model id first, then the
-split, consults the catalogue cache, and skips an unregistered `providerId`
-instead of NPE-ing in `models()`.
+CI polling must match `sha=$SHA` (`ci.sh` can print a stale run first):
 
-## 1. Repo + build
-
-- Repo: `/data/user/0/ai.opencode.app/files/projects/playground`
-  (`turanmertkaraca-bit/spindle`), branch `main`.
-- Push works from the guest: `git push origin main` (remote has the token).
-- Local fast loop (pure JVM only):
-  `bash -lc '. /root/env.sh && cd /data/user/0/ai.opencode.app/files/projects/playground && ./gradlew :core:test :sandbox:test :tools:test :provider-openai:test :provider-anthropic:test :store-sqlite:test :server:test --no-daemon --console=plain'`
-- `:app` is **CI-only** (no Android SDK in the guest).
-- Helpers (guest `/root/`): `ci.sh` (run/job status), `log.sh` (failing job log
-  → `/tmp/log.txt`), `apk.sh` (download `lumen-debug-apk` → Downloads),
-  `shots.sh` (download `lumen-screenshots` → Downloads).
-- `.ref/getart.pl` (in-repo) extracts an artifact id from artifacts JSON.
-- Read screenshots directly with `read` at
-  `/storage/emulated/0/Download/lumen-shots/<name>.png`.
-
-## 2. CI
-
-`.github/workflows/ci.yml`: jobs `jvm backend` + `android app (robolectric)`.
-The JVM job compiles/tests `:core`, `:sandbox`, `:tools`, `:provider-openai`,
-`:provider-anthropic`, `:store-sqlite`, `:server`, and `:cli:classes` (the CLI's
-run path is otherwise never compiled). The Android job runs `:app:testDebugUnitTest`
-+ `assembleDebug`, artifacts `lumen-debug-apk`, `lumen-screenshots`,
-`unit-test-reports`. Both workflows declare `permissions: contents: read`. Poll by
-sha:
 ```
 SHA=$(git rev-parse --short=7 HEAD)
-for i in $(seq 1 30); do out=$(bash /root/ci.sh); echo "$out" | head -1
-  echo "$out" | grep -qE "conclusion=(success|failure|cancelled)" && { echo "$out"; break; }
+for i in $(seq 1 30); do out=$(bash /root/ci.sh); line=$(echo "$out" | grep "sha=$SHA" | head -1)
+  echo "${line:-$(echo "$out" | head -1)}"
+  echo "$line" | grep -qE "conclusion=(success|failure|cancelled)" && { echo "$out"; break; }
   sleep 30; done
 ```
-`ci.sh` can print a stale run first — always match `sha=$SHA`.
 
-## 3. Architecture
+APK/screenshots: `bash /root/apk.sh` can grab a **stale** run — prefer fetching
+the artifact for the exact run id via the GitHub API. Screenshots via
+`/root/shots.sh` (read from `/storage/emulated/0/Download/lumen-shots/`).
 
-Modules: `:core` (pure JVM: model, agent loop, events, SPIs, markdown parser,
-references resolver, revert engine, UI math), `:sandbox` (TarGz + InAppProxy),
-`:tools`, `:provider-openai`, `:provider-anthropic`, `:store-sqlite`, `:cli`,
-`:server`, `:app`.
+## 5. Architecture (quick map)
 
-Key capabilities already working on device:
-- Agent loop: approval policy (ALLOW/ASK/DENY), agent modes (build/plan/explore/
-  general), AGENTS.md rules, structured `FileEdit` + pre-edit snapshots, usage
-  events, session search/fork/rewind.
-- Linux userland: bundled **static busybox** applets first on PATH (cures
-  SIGSYS "Bad system call"), Alpine rootfs wrappers, opt-in Debian proot layer
-  (`DebianEnvironment`, not auto-downloaded). `targetSdk 28` exec exemption.
-- Chat: merged think→answer, markdown rendering, distinct compact tool cards
-  (collapsed; expand for bounded scroll output), subagent call tree, live todo
-  board, changes card w/ per-file revert, usage meter, sent-image thumbnails,
-  `↓ new` cue + haptic, reading-friendly scroll, no spine rail.
-- Files cockpit, interactive terminal, sandboxed HTML canvas, vision attach,
-  websearch tool, session search/fork UI, storage manager, diagnostics log.
-- Tool inspector: `durationMs` + tool metadata carried into `UiStep.toolMetadata`
-  and shown in the tool card body.
-- Background resilience: `RunService` (ongoing notification + partial wake lock)
-  keeps long runs alive; `Session.state` is persisted across RUNNING/IDLE/ERROR
-  and orphaned RUNNING sessions are reconciled to IDLE on cold start.
-- Indirect changes: `WorkspaceWatcher` polls the workspace during a run and folds
-  script-made writes into the Changes view.
-- Budget: per-session cost ceiling is configurable in Settings (off / $0.50 /
-  $2 / $5, persisted in KeyStore). The loop emits `AgentEvent.BudgetWarning` at
-  `ContextBudget.warnAtFraction`, stops at the ceiling, and the usage meter shows
-  spend against the limit.
-- Adaptive two-pane: files cockpit shows list + editor side by side on >=600dp.
-- On-device perf probe: `PerfSampler` samples frame jank + heap during a run and
-  appends a `perf:` line to diagnostics (copyable). First sweep is clean; a
-  stopped run no longer logs a cancellation error.
-- Search: the app's `AndroidSessionStore` now maintains an FTS5 `message_fts`
-  index (kept in sync on insert/update/rewind/delete) and falls back to the old
-  linear scan when the platform SQLite lacks FTS5.
+`:core` (pure JVM: model, agent loop, events, SPIs, markdown, references,
+revert, UI math), `:sandbox` (TarGz + InAppProxy), `:tools`, `:provider-openai`,
+`:provider-anthropic`, `:store-sqlite`, `:cli`, `:server`, `:app`. `:core` has no
+Android deps.
 
-## ~~!!! TOP PRIORITY~~ RESOLVED — run survives backgrounding (`87ebe96`)
+Working on device: agent loop (approval policy, agent modes, AGENTS.md rules,
+structured `FileEdit` + snapshots, usage/budget events, session
+search/fork/rewind/tags); bundled static busybox + Alpine rootfs + opt-in Debian
+proot (`targetSdk 28` exec exemption); chat (think→answer, markdown, compact tool
+cards, subagent tree, live todo board, changes card w/ per-file revert, usage
+meter, image thumbnails); files cockpit, terminal, sandboxed canvas, vision,
+websearch, storage manager, diagnostics; `RunService` foreground keep-alive;
+models.dev catalogue; on-device `PerfSampler`.
 
-**Fixed** by moving the loop off `viewModelScope` into the Application-scoped
-`LumenApp.applicationScope`; `closeChat`/`onCleared` no longer cancel it and only
-an explicit stop does, with a shared event bus + live-run tracking so a reopened
-ViewModel reflects an in-flight run. (Kept below for the on-device retest
-checklist and the original diagnosis.)
+## 6. Known residuals / invariants (do not regress)
 
-User report: "give it a job, go back into the app, it looks like the app
-immediately killed itself as soon as I got out." A run did **not** survive the
-user leaving the app, which made the app useless for real jobs.
+- **Retry keeps streaming** via `PartReset` (emitted per part at the start of a
+  retried attempt). Do **not** buffer retries or reintroduce double-render.
+- **Per-session serialization:** `AgentLoop.prompt` holds a per-session `Mutex`;
+  same-session prompts queue, different sessions run concurrently.
+- **Snapshot pinning:** `pruneBounded` always keeps the newest snapshot per
+  `(session, path)` so revert has a pre-image even after pruning.
+- `PartReset` must be mirrored in `:server` `WireEvent` and the app `StepMapper`
+  (both already are; the exhaustive-`when` test guards this).
+- Compaction is ratio-only overflow + no-op guard; it never wipes the tail.
 
-What existed at the time (verify it actually works on device):
-- `RunService` (foreground, `dataSync`, ongoing notification + `PARTIAL_WAKE_LOCK`)
-  is started in `ChatViewModel.send()` and stopped in `stop()`/finally.
-- `ChatViewModel.onCleared()` was changed to `runJob?.cancel()` +
-  `RunService.stop(...)` — correct only if the VM is truly being destroyed.
-  Unverified whether a backgrounded Activity destroys the VM or the process is
-  being killed outright.
+## 7. Docs index
 
-Prime suspects, in order (assign one agent each):
-1. **Process death on background.** Look for an OOM/`killProcess`, `finish()`
-   in `onStop`, `android:noHistory`, or a stray `System.exit`/`Runtime.halt`.
-   Check `MainActivity` (`onStop`/`onDestroy`/`onTrimMemory`) and anything that
-   calls `closeChat()`/`finish()` when the task leaves foreground.
-2. **`onCleared` cancelling the run.** If the Activity is recreated/the VM is
-   cleared while backgrounded, `runJob?.cancel()` kills the run. Move the run off
-   `viewModelScope` into a process-scoped owner (`RunService` or an
-   Application-scoped `CoroutineScope`) so leaving the UI cannot cancel it.
-3. **Missing `<service>` runtime behavior.** Confirm `startForeground` actually
-   runs (notification appears) and the FGS type/permissions are satisfiable at
-   `targetSdk 28`. Android 12+ can throw on a background FGS start; 14+ caps
-   `dataSync` FGS in the background.
-4. **Run coroutine tied to the UI.** Even with the service alive, the loop runs
-   in `viewModelScope`; the service is only a keep-alive shell. The robust fix is
-   to host the loop in the service/`Application` scope and have the VM observe it.
-5. **`cannot open <file>` after a build task.** The agent narrates "I'll build X"
-   then no next bubble; `openFile` then errors. Check whether a mutating tool
-   emits a resolvable path, whether the model narrated without calling a tool,
-   and relative-vs-absolute resolution in `ChatViewModel.openFile`/`inWorkspace`.
-
-On-device evidence per repro (user can run & paste):
-- `Settings → diagnostics → copy` (has `run start`, `tool:`, `perf:`, errors).
-- Does a `perf:` line appear after backgrounding (run survived) or never (died)?
-- `adb shell dumpsys activity processes | grep -i lumen` right after backgrounding;
-  `adb logcat -b crash` for a native/ANR kill;
-  `adb shell dumpsys batterystats dev.lumen.app` tail for FGS/wakelock.
-
-## 3a. Pending on-device retest (lower priority)
-
-A stop-mid-run then immediate re-send used to crash with a duplicate
-`LazyColumn` key. Fixed in `df63624` (send replaces the optimistic row; rebuild
-on `StateChanged` idle; `StepMapper.dedupeById` last-wins; refuse to start a run
-while the previous coroutine is alive). Not yet retested on device.
-
-## 4. CI status
-
-Last confirmed green: `973a63b` (`jvm backend` + `android app (robolectric)`).
-The old peek-backlinks KNOWN RED was fixed (`useUnmergedTree = true`). The JVM
-job now also compiles `:cli:classes` (see §2); head has since advanced to
-`6b1f056` — check the Actions tab (or `ci.sh`) for the current head.
-
-## Docs index (read with this file)
-
-- `docs/PLAN.md` — milestones M0–M10 + merge track m11–m15 (status checkboxes).
-- `docs/CAPABILITIES.md` — capability model, parity checklist, app NON-GOALS.
+- `docs/PLAN.md` — milestones M0–M10 + merge track m11–m15 (statuses).
+- `docs/CAPABILITIES.md` — capability model, parity checklist, app non-goals.
 - `docs/SPEC.md` — engine contracts (loop, events, SPIs, wire protocol).
-- `docs/PROVIDERS.md` — provider configs and the OpenCode Go session header.
-- `docs/UI-POLISH.md` — deferred final polish pass (do NOT regress fixed items).
+- `docs/PROVIDERS.md` — provider configs + Zen/Go auth surfaces.
+- `docs/UI-POLISH.md` — polish pass (composer/app-bar landed; remainder parked).
 - `docs/PARITY.md` — what was ported from opencode and what was dropped.
-
-## 5. Deferred UI polish (user explicitly parked to the end)
-See `docs/UI-POLISH.md`. Headline: composer/input-box feel, and the top-bar
-`fork`/`files`/`shell` buttons look plain. Do NOT regress the already-fixed
-items listed there.
-
-## 6. Non-goals (do not build)
-
-MCP, LSP, plugins, OAuth providers, keyless free tier, HTTP server/SSE bridge,
-git-commit UI (v1), local models (v1). Provider routing parity (Zen/Go
-`/responses` + `/messages`) is parked until we can record a real keyed SSE.
-
-## 7. Tool-harness gotcha (not the app)
-
-Occasionally a tool call is emitted as literal `<parameter name="bash">…` text
-instead of a real call — nothing runs, and it looks like a network stall. It is
-a model/harness artifact after long turns, not the app or the server; restarting
-the session clears it. Keep commands short; avoid giant single-line blocks.

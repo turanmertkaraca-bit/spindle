@@ -45,14 +45,17 @@ JVM-testable; 7–9 are platform adapters.
 | Retry/backoff, cancellation, step budget | ✅ |
 | Compaction (trim + summarize) | ✅ |
 | Subagents (child sessions, `parentId`) | ✅ |
-| Primary-agent selection at runtime (build/plan/explore/general) | ➕ |
-| Rules / reminders injection (AGENTS.md, house style) | ➕ |
+| Primary-agent selection at runtime (build/plan/explore/general) | ✅ |
+| Rules / reminders injection (AGENTS.md, house style) | ✅ |
 | Session token + cost totals surfaced as events | ✅ |
 | Max-cost budget + warnings | ✅ (pricing populated; ceiling fires) |
+| Per-session run serialization (same-session prompts queue; distinct sessions run concurrently) | ✅ |
 | Structured output (`json_schema`) | ➕ (defer) |
 
-New events required: `UsageUpdated`, `TitleUpdated`, `RunStateChanged`
-(per-session), `SubagentStateChanged`, `FileEdited`, `SnapshotCreated`.
+New events: `UsageUpdated`, `TitleUpdated`, `RunStateChanged` (per-session),
+`SubagentStateChanged`, `FileEdited`, `SnapshotCreated`, and `PartReset` (retry
+reset; retracts a failed attempt's streamed parts while keeping the retry live —
+see SPEC §8).
 
 ### 1.2 Session & store — `:core` + `:store-sqlite`
 
@@ -60,12 +63,12 @@ New events required: `UsageUpdated`, `TitleUpdated`, `RunStateChanged`
 |---|---|
 | create/update/delete session, ordered messages, todos | ✅ |
 | Durable SQLite store (schema + migration runner) | ✅ |
-| Full-text search over messages/parts | ➕ |
-| Fork / branch a session at a message | ➕ |
-| Rewind / revert to a message | ➕ |
-| Persisted session run state (a reopened running child reads as running) | ➕ |
-| Pin / archive / tags / rename | ✅ (tags UI: add/remove/clear + filter) |
-| Retention / prune | ✅ |
+| Full-text search over messages/parts | ✅ (FTS5 + scan fallback; `maintain()` optimize) |
+| Fork / branch a session at a message | ✅ |
+| Rewind / revert to a message | ✅ (snapshot-pinned pre-images) |
+| Persisted session run state (a reopened running child reads as running) | ✅ |
+| Pin / archive / tags / rename | ✅ (tags UI: add/remove/clear + any-of filter) |
+| Retention / prune | ✅ (bounded snapshots via `pruneBounded`) |
 
 ### 1.3 Tools & approval — `:core` + `:tools`
 
@@ -73,12 +76,12 @@ New events required: `UsageUpdated`, `TitleUpdated`, `RunStateChanged`
 |---|---|
 | `read` `write` `edit` `glob` `grep` | ✅ |
 | `apply_patch` | ✅ |
-| `bash` (sandboxed `/bin/sh`) | 🟡 (no PTY → see 1.7) |
+| `bash` (sandboxed `/bin/sh`) | 🟡 (non-interactive; PTY terminal is separate → see 1.4) |
 | `webfetch` | ✅ |
 | `todowrite` | ✅ |
 | `question` | ✅ |
 | `task` (subagents) | ✅ |
-| `websearch` | ➕ |
+| `websearch` | ✅ (keyless DuckDuckGo HTML) |
 | `skill` | ➕ (defer) |
 | `external-directory` | ➕ (explicit user-granted roots) |
 
@@ -99,7 +102,8 @@ run(command, cwd, timeoutMs, env) -> { exit, stdout+stderr, truncated }
 openPty(...) -> interactive session
 ```
 
-Implementations: host `/bin/sh` (dev/CI), Debian proot + PTY (device). Ported
+Implementations (shipped ✅): host `/bin/sh` (dev/CI), Debian proot + PTY
+(device), plus the bundled static busybox applets first on PATH. Ported
 from `Debian.java` (`prootArgv`, `guestProcess`, `runGuest`, rootfs
 install/curate) and `Sandbox.java` (wrapper generation). This is the single
 biggest parity win and the reason targetSdk stays 28.
@@ -111,9 +115,9 @@ canonical-path clamp (port `FilesActivity` clamp rules), snapshots, save-from-UI
 
 | capability | status |
 |---|---|
-| read/write/list/stat/search | ➕ |
-| External-change watcher (event-driven, port `DirWatcher`) | 📦 |
-| Snapshot before write + revert | ➕ |
+| read/write/list/stat/search | ✅ (files cockpit) |
+| External-change watcher (event-driven, port `DirWatcher`) | ✅ (`WorkspaceWatcher`) |
+| Snapshot before write + revert | ✅ (`SnapshotStore`; pinned pre-images) |
 | Git-lite status / diff | ➕ (defer commit UI) |
 
 ### 1.6 Provider / auth / cost
@@ -122,31 +126,31 @@ canonical-path clamp (port `FilesActivity` clamp rules), snapshots, save-from-UI
 |---|---|
 | OpenAI-compatible + Anthropic streaming | ✅ |
 | DeepSeek, OpenRouter, Zen, Go configs | ✅ |
-| Zen/Go `/responses` + `/messages` routing | ➕ |
+| Zen/Go `/responses` + `/messages` routing | ➕ (blocked on a paid OpenCode key; free tier 403s Claude/GPT) |
 | models.dev catalogue (ported snapshot + live enrichment) | ✅ |
-| Key store (port `AuthStore`, `KeysActivity`) | 📦 |
+| Key store (port `AuthStore`, `KeysActivity`) | ✅ (encrypted `KeyStore` + key screen) |
 | OAuth providers | ❌ |
-| Free tier without a key | ❌ (native client is rejected by the free tier — user does not need it) |
+| Free tier without a key | ❌ (no keyless path; a free-tier key serves only free `/chat/completions` models) |
 
 ### 1.7 Environment manager — `:platform-android`
 
 | capability | status |
 |---|---|
-| Debian rootfs install / curate / prune | 📦 |
-| apt, git, python, node, gcc available to the agent | 📦 |
+| Debian rootfs install / curate / prune | ✅ (opt-in, not auto-downloaded) |
+| apt, git, python, node, gcc available to the agent | ✅ (through `ShellExecutor`) |
 | Package-manager surface (install/remove) | ➕ |
 | Service manager (start/stop long-running processes) | ➕ |
-| Storage footprint report + safe reclaim | 📦 |
+| Storage footprint report + safe reclaim | ✅ |
 
 ### 1.8 Platform lifecycle
 
 | capability | status |
 |---|---|
 | Foreground `RunService` for long runs + notification | ✅ |
-| Resumable runs; store is truth across process death | ✅ (Application-scoped run) |
-| Wake lock only while working | 📦 |
+| Resumable runs; store is truth across process death | ✅ (Application-scoped `LumenApp.applicationScope`; `onCleared` cannot cancel) |
+| Wake lock only while working | ✅ (`PARTIAL_WAKE_LOCK` in `RunService`) |
 | Watchdog / boot behavior | 📦 |
-| Multi-session concurrency (run N chats at once) | ➕ |
+| Multi-session concurrency (run N chats at once) | ➕ (engine: per-session mutex allows it; UI does not drive it) |
 
 ### 1.9 Observability
 
