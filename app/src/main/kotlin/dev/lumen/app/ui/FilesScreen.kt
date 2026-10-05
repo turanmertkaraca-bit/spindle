@@ -120,8 +120,8 @@ fun FilesScreen(
                                 primary = true,
                                 contentDescription = "create new",
                                 items = listOf(
-                                    TopMenuAction("New file", "new-file") { onNew(NewKind.File) },
-                                    TopMenuAction("New folder", "new-folder") { onNew(NewKind.Folder) },
+                                    TopMenuAction("New file", "new-file") { newKind = NewKind.File },
+                                    TopMenuAction("New folder", "new-folder") { newKind = NewKind.Folder },
                                 ),
                             )
                         },

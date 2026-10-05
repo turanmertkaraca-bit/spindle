@@ -101,18 +101,13 @@ internal fun LumenBarAction(
 ) {
     val shape = LumenShapes.pill
     val filled = primary && enabled
-    var m = Modifier
-        .heightIn(min = 40.dp)
-        .clip(shape)
-        .then(
-            if (filled) {
-                Modifier.background(colors.water)
-            } else {
-                Modifier.background(colors.surface).border(1.dp, colors.rule, shape)
-            },
-        )
-        .clickable(enabled = enabled) { onClick() }
-        .padding(horizontal = 14.dp)
+    val base = Modifier.heightIn(min = 40.dp).clip(shape)
+    val surface = if (filled) {
+        base.background(colors.water)
+    } else {
+        base.background(colors.surface).border(1.dp, colors.rule, shape)
+    }
+    var m = surface.clickable(enabled = enabled) { onClick() }.padding(horizontal = 14.dp)
     if (contentDescription != null) m = m.semantics { this.contentDescription = contentDescription }
     Box(m.testTag(tag), contentAlignment = Alignment.Center) {
         Text(
