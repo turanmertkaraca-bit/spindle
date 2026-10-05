@@ -69,7 +69,7 @@ fun DiagnosticsScreen(
                     "copy",
                     color = colors.dim, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
+                        .clip(LumenShapes.small)
                         .clickable {
                             clipboard.setText(AnnotatedString(diag.joinToString("\n") { "${stamp(it.at)} ${it.text}" }))
                         }
@@ -80,7 +80,7 @@ fun DiagnosticsScreen(
                     "clear",
                     color = colors.dim, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
+                        .clip(LumenShapes.small)
                         .clickable { onClear() }
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                         .testTag("diag-clear"),
@@ -89,7 +89,7 @@ fun DiagnosticsScreen(
                     "done",
                     color = colors.accent, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
+                        .clip(LumenShapes.small)
                         .clickable { onBack() }
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                         .testTag("diag-back"),
@@ -102,8 +102,8 @@ fun DiagnosticsScreen(
         Spacer(Modifier.height(8.dp))
         Column(
             Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .border(1.dp, colors.rule, RoundedCornerShape(12.dp))
+                .clip(LumenShapes.card)
+                .border(1.dp, colors.rule, LumenShapes.card)
                 .background(colors.surface)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
@@ -127,8 +127,8 @@ fun DiagnosticsScreen(
                     color = if (enabled) colors.accent else colors.faint,
                     fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .border(1.dp, if (enabled) colors.rule else colors.faint, RoundedCornerShape(50))
+                        .clip(LumenShapes.pill)
+                        .border(1.dp, if (enabled) colors.rule else colors.faint, LumenShapes.pill)
                         .clickable(enabled = enabled) { onInstallDebian() }
                         .padding(horizontal = 14.dp, vertical = 9.dp)
                         .testTag("install-debian"),
@@ -137,8 +137,8 @@ fun DiagnosticsScreen(
                     "refresh",
                     color = colors.dim, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .border(1.dp, colors.rule, RoundedCornerShape(50))
+                        .clip(LumenShapes.pill)
+                        .border(1.dp, colors.rule, LumenShapes.pill)
                         .clickable { onRefreshLinux() }
                         .padding(horizontal = 14.dp, vertical = 9.dp)
                         .testTag("linux-refresh"),
@@ -150,7 +150,7 @@ fun DiagnosticsScreen(
         Text("event log", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
         Spacer(Modifier.height(8.dp))
         if (diag.isEmpty()) {
-            Text("no events yet", color = colors.faint, fontFamily = Mono, fontSize = 12.sp)
+            StateHint(colors, "no events yet", detail = "activity will appear here", tag = "diag-empty")
         } else {
             LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("diag-log")) {
                 itemsIndexed(diag) { _, line ->

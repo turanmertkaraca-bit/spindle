@@ -114,7 +114,7 @@ fun HomeScreen(
                         "◐",
                         color = colors.faint, fontFamily = Mono, fontSize = 16.sp,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(LumenShapes.small)
                             .clickable { onToggleTheme() }
                             .padding(4.dp)
                             .testTag("theme"),
@@ -126,7 +126,7 @@ fun HomeScreen(
                         "files",
                         color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(LumenShapes.small)
                             .clickable { onFiles() }
                             .padding(horizontal = 8.dp, vertical = 6.dp)
                             .testTag("files"),
@@ -138,7 +138,7 @@ fun HomeScreen(
                         ">_",
                         color = colors.dim, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(LumenShapes.small)
                             .clickable { onTerminal() }
                             .padding(horizontal = 8.dp, vertical = 6.dp)
                             .testTag("terminal"),
@@ -149,7 +149,7 @@ fun HomeScreen(
                     "settings",
                     color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
+                        .clip(LumenShapes.small)
                         .clickable { onSettings() }
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                         .testTag("settings"),
@@ -160,7 +160,7 @@ fun HomeScreen(
 
         Box(
             Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(50))
+                .clip(LumenShapes.pill)
                 .background(colors.water)
                 .clickable { onNewChat() }
                 .padding(vertical = 14.dp)
@@ -173,9 +173,9 @@ fun HomeScreen(
 
         Box(
             Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(50))
+                .clip(LumenShapes.pill)
                 .background(colors.surface)
-                .border(1.dp, colors.rule, RoundedCornerShape(50))
+                .border(1.dp, colors.rule, LumenShapes.pill)
                 .padding(horizontal = 16.dp, vertical = 10.dp),
         ) {
             if (searchQuery.isEmpty()) {
@@ -198,7 +198,7 @@ fun HomeScreen(
                 color = if (showArchived) colors.accent else colors.faint,
                 fontFamily = Mono, fontSize = 11.sp,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
                     .clickable { onShowArchived(!showArchived) }
                     .padding(horizontal = 8.dp, vertical = 4.dp)
                     .testTag("show-archived"),
@@ -231,7 +231,7 @@ fun HomeScreen(
                         "clear",
                         color = colors.accent, fontFamily = Mono, fontSize = 11.sp,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(LumenShapes.small)
                             .clickable { onClearTagFilters() }
                             .padding(horizontal = 6.dp, vertical = 4.dp)
                             .testTag("clear-tags"),
@@ -244,7 +244,7 @@ fun HomeScreen(
         if (search != null) {
             if (search.isEmpty()) {
                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                    Text("no matches", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
+                    StateHint(colors, "no matches", detail = "try a different query", tag = "search-empty")
                 }
             } else {
                 LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("search-results")) {
@@ -252,7 +252,7 @@ fun HomeScreen(
                         Column(
                             Modifier.fillMaxWidth()
                                 .padding(vertical = 2.dp)
-                                .clip(RoundedCornerShape(12.dp))
+                                .clip(LumenShapes.card)
                                 .clickable { onOpen(hit.sessionId.value) }
                                 .padding(horizontal = 12.dp, vertical = 10.dp)
                                 .testTag("search-hit-${hit.messageId}"),
@@ -293,7 +293,7 @@ fun HomeScreen(
                         Row(
                             Modifier.fillMaxWidth()
                                 .padding(vertical = 2.dp)
-                                .clip(RoundedCornerShape(12.dp))
+                                .clip(LumenShapes.card)
                                 .clickable { onOpen(s.id) }
                                 .padding(horizontal = 12.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -338,7 +338,7 @@ fun HomeScreen(
                                 "⋯",
                                 color = colors.dim, fontFamily = Mono, fontSize = 15.sp,
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
+                                    .clip(LumenShapes.small)
                                     .clickable { expanded = !expanded }
                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                                     .testTag("more-${s.id}"),
@@ -352,8 +352,8 @@ fun HomeScreen(
                                 ) {
                                     Box(
                                         Modifier.weight(1f)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .border(1.dp, colors.rule, RoundedCornerShape(8.dp))
+                                            .clip(LumenShapes.inset)
+                                            .border(1.dp, colors.rule, LumenShapes.inset)
                                             .padding(horizontal = 10.dp, vertical = 8.dp),
                                     ) {
                                         BasicTextField(
@@ -394,8 +394,8 @@ fun HomeScreen(
                                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                         Box(
                                             Modifier.weight(1f)
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .border(1.dp, colors.rule, RoundedCornerShape(8.dp))
+                                                .clip(LumenShapes.inset)
+                                                .border(1.dp, colors.rule, LumenShapes.inset)
                                                 .padding(horizontal = 10.dp, vertical = 8.dp),
                                         ) {
                                             if (tagDraft.isEmpty()) {
@@ -459,7 +459,7 @@ fun HomeScreen(
                 Text(
                     "delete", color = colors.accent, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
+                        .clip(LumenShapes.small)
                         .clickable {
                             onDelete(id)
                             deleteTarget = null
@@ -472,7 +472,7 @@ fun HomeScreen(
                 Text(
                     "cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
+                        .clip(LumenShapes.small)
                         .clickable { deleteTarget = null }
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                         .testTag("delete-cancel"),
@@ -489,8 +489,8 @@ private fun RowAction(colors: LumenColors, label: String, tag: String, onClick: 
         label,
         color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
         modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .border(1.dp, colors.rule, RoundedCornerShape(6.dp))
+            .clip(LumenShapes.small)
+            .border(1.dp, colors.rule, LumenShapes.small)
             .clickable { onClick() }
             .padding(horizontal = 8.dp, vertical = 4.dp)
             .testTag(tag),
@@ -512,8 +512,8 @@ private fun TagChip(
         fontFamily = Mono, fontSize = 10.5.sp,
         maxLines = 1,
         modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .border(1.dp, if (selected) colors.water else colors.rule, RoundedCornerShape(6.dp))
+            .clip(LumenShapes.small)
+            .border(1.dp, if (selected) colors.water else colors.rule, LumenShapes.small)
             .background(if (selected) colors.surface else Color.Transparent)
             .clickable { onClick() }
             .padding(horizontal = 7.dp, vertical = 3.dp)

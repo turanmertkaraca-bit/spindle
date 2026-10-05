@@ -73,7 +73,7 @@ fun SettingsScreen(
                 "done",
                 color = colors.accent, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
                     .clickable { onBack() }
                     .padding(horizontal = 8.dp, vertical = 6.dp)
                     .testTag("settings-done"),
@@ -96,14 +96,17 @@ fun SettingsScreen(
         Text("model", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
         Spacer(Modifier.height(8.dp))
         val models = ProviderCatalogue.defaultModels(provider)
+        if (models.isEmpty()) {
+            StateHint(colors, "no models configured", detail = "check the provider or add a key", tag = "models-empty")
+        }
         for (m in models) {
             val ref = "$provider/${m.id}"
             val selected = model == ref
             Row(
                 Modifier.fillMaxWidth()
                     .padding(vertical = 2.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .border(1.dp, if (selected) colors.water else colors.rule, RoundedCornerShape(10.dp))
+                    .clip(LumenShapes.panel)
+                    .border(1.dp, if (selected) colors.water else colors.rule, LumenShapes.panel)
                     .background(if (selected) colors.surface else Color.Transparent)
                     .clickable { onModel(ref) }
                     .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -187,8 +190,8 @@ fun SettingsScreen(
         Spacer(Modifier.height(24.dp))
         Box(
             Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(50))
-                .border(1.dp, colors.rule, RoundedCornerShape(50))
+                .clip(LumenShapes.pill)
+                .border(1.dp, colors.rule, LumenShapes.pill)
                 .clickable { onEditKey() }
                 .padding(vertical = 14.dp)
                 .testTag("edit-key"),
@@ -209,8 +212,8 @@ private fun SettingsLink(
 ) {
     Row(
         Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, colors.rule, RoundedCornerShape(12.dp))
+            .clip(LumenShapes.card)
+            .border(1.dp, colors.rule, LumenShapes.card)
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 11.dp)
             .testTag(tag),
@@ -239,8 +242,8 @@ private fun chip(
         color = if (selected) colors.fg else colors.dim,
         fontFamily = Mono, fontSize = 13.sp,
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .border(1.dp, if (selected) colors.water else colors.rule, RoundedCornerShape(8.dp))
+            .clip(LumenShapes.inset)
+            .border(1.dp, if (selected) colors.water else colors.rule, LumenShapes.inset)
             .background(if (selected) colors.surface else Color.Transparent)
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 9.dp)

@@ -63,7 +63,7 @@ fun StorageScreen(
                     "rescan",
                     color = colors.dim, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
+                        .clip(LumenShapes.small)
                         .clickable { onRescan() }
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                         .testTag("storage-rescan"),
@@ -72,7 +72,7 @@ fun StorageScreen(
                     "done",
                     color = colors.accent, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
+                        .clip(LumenShapes.small)
                         .clickable { onBack() }
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                         .testTag("storage-back"),
@@ -100,8 +100,8 @@ fun StorageScreen(
 
         Box(
             Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(50))
-                .border(1.dp, colors.rule, RoundedCornerShape(50))
+                .clip(LumenShapes.pill)
+                .border(1.dp, colors.rule, LumenShapes.pill)
                 .clickable { onClearAll() }
                 .padding(vertical = 13.dp)
                 .testTag("storage-clear-all"),
@@ -112,9 +112,24 @@ fun StorageScreen(
         Spacer(Modifier.height(14.dp))
 
         val categories = storage?.categories.orEmpty().sortedByDescending { it.bytes }
-        LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("storage-list")) {
-            items(categories, key = { it.name }) { category ->
-                CategoryRow(colors = colors, category = category, onClear = { onClear(category.name) })
+        if (categories.isEmpty()) {
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                StateHint(
+                    colors = colors,
+                    text = when {
+                        storage == null -> "calculating storage…"
+                        storage.scanning -> "scanning storage…"
+                        else -> "nothing measured yet"
+                    },
+                    detail = "clearable caches will appear here",
+                    tag = "storage-empty",
+                )
+            }
+        } else {
+            LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("storage-list")) {
+                items(categories, key = { it.name }) { category ->
+                    CategoryRow(colors = colors, category = category, onClear = { onClear(category.name) })
+                }
             }
         }
 
@@ -135,7 +150,7 @@ private fun CategoryRow(
     Row(
         Modifier.fillMaxWidth()
             .padding(vertical = 2.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(LumenShapes.card)
             .padding(horizontal = 12.dp, vertical = 11.dp)
             .testTag("storage-row-${category.name}"),
         verticalAlignment = Alignment.CenterVertically,
@@ -159,8 +174,8 @@ private fun CategoryRow(
                 "clear",
                 color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .border(1.dp, colors.rule, RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
+                    .border(1.dp, colors.rule, LumenShapes.small)
                     .clickable { onClear() }
                     .padding(horizontal = 10.dp, vertical = 5.dp)
                     .testTag("storage-clear-${category.name}"),

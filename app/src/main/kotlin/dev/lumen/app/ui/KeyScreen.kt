@@ -99,7 +99,7 @@ fun KeyScreen(
                     "◐",
                     color = colors.faint, fontFamily = Mono, fontSize = 16.sp,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
+                        .clip(LumenShapes.small)
                         .clickable { onToggleTheme() }
                         .padding(4.dp)
                         .testTag("theme")
@@ -127,8 +127,8 @@ fun KeyScreen(
                     color = if (selected) colors.fg else colors.dim,
                     fontFamily = Mono, fontSize = 13.sp,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .border(1.dp, if (selected) colors.water else colors.rule, RoundedCornerShape(8.dp))
+                        .clip(LumenShapes.inset)
+                        .border(1.dp, if (selected) colors.water else colors.rule, LumenShapes.inset)
                         .background(if (selected) colors.surface else Color.Transparent)
                         .clickable { provider = p.first }
                         .padding(horizontal = 14.dp, vertical = 9.dp)
@@ -142,9 +142,9 @@ fun KeyScreen(
         Text("api key", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
         Spacer(Modifier.height(8.dp))
         Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+            Modifier.fillMaxWidth().clip(LumenShapes.panel)
                 .background(colors.surface)
-                .border(1.dp, colors.rule, RoundedCornerShape(10.dp))
+                .border(1.dp, colors.rule, LumenShapes.panel)
                 .padding(start = 12.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -177,7 +177,7 @@ fun KeyScreen(
                 if (visible) "hide" else "show",
                 color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
                     .clickable { visible = !visible }
                     .padding(horizontal = 6.dp, vertical = 6.dp)
                     .semantics { contentDescription = if (visible) "hide key" else "show key" },
@@ -186,7 +186,7 @@ fun KeyScreen(
                 "paste",
                 color = colors.accent, fontFamily = Mono, fontSize = 12.sp,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
                     .clickable {
                         val text = clipboard.getText()?.text
                         if (!text.isNullOrBlank()) key = text.trim()
@@ -205,9 +205,9 @@ fun KeyScreen(
         if (error != null) {
             Row(
                 Modifier.fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(LumenShapes.panel)
                     .background(colors.rule)
-                    .border(1.dp, colors.alert().copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+                    .border(1.dp, colors.alert().copy(alpha = 0.45f), LumenShapes.panel)
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -224,9 +224,9 @@ fun KeyScreen(
         }
         Box(
             Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(50))
+                .clip(LumenShapes.pill)
                 .background(if (canGo) colors.water else Color.Transparent)
-                .border(1.dp, if (canGo) Color.Transparent else colors.rule, RoundedCornerShape(50))
+                .border(1.dp, if (canGo) Color.Transparent else colors.rule, LumenShapes.pill)
                 .clickable(enabled = canGo) { onSubmit(provider, key) }
                 .padding(vertical = 14.dp)
                 .testTag("continue"),

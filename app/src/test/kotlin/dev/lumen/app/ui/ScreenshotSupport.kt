@@ -46,6 +46,20 @@ object ScreenshotSupport {
     }
 
     /**
+     * Draw [activity]'s decor view and write it to `[dir]/[name]`. Any failure is
+     * recorded to `[name].error.txt` instead of propagating, so the light/dark
+     * sweep always yields evidence for every screen and never fails the build.
+     */
+    fun shoot(activity: Activity, dir: File, name: String, scale: Float = 1f) {
+        runCatching {
+            writePng(captureDecor(activity, scale), File(dir, name))
+        }.onFailure {
+            dir.mkdirs()
+            File(dir, "$name.error.txt").writeText(it.stackTraceToString())
+        }
+    }
+
+    /**
      * Mean absolute per-channel difference between [a] and [b], sampling every
      * [stride]-th pixel in both axes. Returns 0.0 for identical images; larger is
      * more different. A stride of 4 keeps the cost low on full-size frames.

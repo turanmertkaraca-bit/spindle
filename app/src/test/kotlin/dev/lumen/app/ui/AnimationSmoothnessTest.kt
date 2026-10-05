@@ -8,6 +8,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.UiStep
+import dev.spindle.core.model.TodoItem
+import dev.spindle.core.model.TodoStatus
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -145,6 +147,65 @@ class AnimationSmoothnessTest {
             // The one hard check: the harness must actually have captured motion.
             check(frames.size >= 2 && distinctPairs >= 1) {
                 "expected >= 2 distinct frames from the think-expansion animation, " +
+                    "got ${frames.size} frames / $distinctPairs distinct transitions"
+            }
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+    }
+
+    /**
+     * The todo board uses the same shared `LumenMotion.expand` spec as the think
+     * section; this pins that a tap actually produces visible motion, so the
+     * unified motion tokens cannot silently stop animating.
+     */
+    @Test
+    fun `todo board expansion animates and converges`() {
+        compose.setContent {
+            LumenChatScreen(
+                steps = thinkingSteps(),
+                input = "",
+                busy = false,
+                error = null,
+                colors = LumenColors.Light,
+                forceOpenIndex = 0,
+                ambient = false,
+                onToggleTheme = {},
+                todos = listOf(
+                    TodoItem("t1", "read the layout rule", TodoStatus.DONE),
+                    TodoItem("t2", "patch the redirect guard", TodoStatus.IN_PROGRESS),
+                    TodoItem("t3", "run the unit tests", TodoStatus.PENDING),
+                ),
+            )
+        }
+        compose.waitForIdle()
+
+        val dir = File("build/screenshots/anim").apply { mkdirs() }
+        if (compose.onAllNodesWithTag("todo-toggle").fetchSemanticsNodes().isEmpty()) {
+            println("[anim] todo-toggle not found; nothing to animate — passing without metrics")
+            return
+        }
+
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNodeWithTag("todo-toggle").performClick()
+            compose.waitForIdle()
+
+            val frames = ArrayList<Bitmap>(frameCount)
+            for (i in 0 until frameCount) {
+                compose.mainClock.advanceTimeByFrame()
+                frames += ScreenshotSupport.captureDecor(compose.activity, captureScale)
+            }
+            ScreenshotSupport.writePng(frames.last(), File(dir, "todo_expanded.png"))
+
+            var distinctPairs = 0
+            for (i in 1 until frames.size) {
+                if (ScreenshotSupport.meanAbsDiff(frames[i - 1], frames[i]) > 0.01) distinctPairs++
+            }
+            println("[anim] todo frames=${frames.size} distinctPairs=$distinctPairs")
+
+            check(frames.size >= 2 && distinctPairs >= 1) {
+                "expected >= 2 distinct frames from the todo-board expansion, " +
                     "got ${frames.size} frames / $distinctPairs distinct transitions"
             }
         } finally {

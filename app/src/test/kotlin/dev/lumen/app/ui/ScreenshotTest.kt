@@ -5,6 +5,13 @@ import android.graphics.Canvas
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import dev.lumen.app.DiagLine
+import dev.lumen.app.EditorState
+import dev.lumen.app.FileEntry
+import dev.lumen.app.FilesState
+import dev.lumen.app.LinuxEnvironmentState
+import dev.lumen.app.StorageCategory
+import dev.lumen.app.StorageReport
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.UiImage
 import dev.lumen.app.ui.model.UiStep
@@ -21,7 +28,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
-import java.io.FileOutputStream
 
 /**
  * Renders the real screens to PNGs so the UI can be inspected without a device.
@@ -170,17 +176,11 @@ class ScreenshotTest {
     }
 
     private fun shoot(name: String, content: @Composable () -> Unit) {
-        compose.setContent(content)
         val dir = File("build/screenshots").apply { mkdirs() }
         runCatching {
+            compose.setContent(content)
             compose.waitForIdle()
-            val view = compose.activity.window.decorView
-            val w = view.width
-            val h = view.height
-            check(w > 0 && h > 0) { "decor view not laid out: ${w}x$h" }
-            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            view.draw(Canvas(bmp))
-            FileOutputStream(File(dir, name)).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            ScreenshotSupport.shoot(compose.activity, dir, name)
         }.onFailure {
             File(dir, "$name.error.txt").writeText(it.stackTraceToString())
         }
@@ -609,4 +609,121 @@ class ScreenshotTest {
             onProvider = {}, onModel = {}, onTheme = {}, onEditKey = {}, onBack = {},
         )
     }
+
+    /** A populated folder listing, plus an html file so the canvas affordance shows. */
+    private fun filesSample(): FilesState = FilesState(
+        dir = "",
+        entries = listOf(
+            FileEntry(name = "src", path = "src", isDir = true, size = 0, modified = 0),
+            FileEntry(name = "README.md", path = "README.md", isDir = false, size = 12_400, modified = 0),
+            FileEntry(name = "index.html", path = "index.html", isDir = false, size = 3_200, modified = 0),
+        ),
+    )
+
+    private fun storageSample(): StorageReport = StorageReport(
+        total = 812L * 1024L * 1024L,
+        categories = listOf(
+            StorageCategory("workspace", 640L * 1024L * 1024L, clearable = false),
+            StorageCategory("cache", 120L * 1024L * 1024L, clearable = true),
+            StorageCategory("logs", 52L * 1024L * 1024L, clearable = true),
+        ),
+        scanning = false,
+    )
+
+    private fun filesShot(name: String, colors: LumenColors, files: FilesState?) = shoot(name) {
+        FilesScreen(
+            colors = colors, files = files, editor = null,
+            onOpenDir = {}, onUp = {}, onEnter = {}, onSaveFile = { _, _ -> },
+            onCloseEditor = {}, onCreateFile = { _, _ -> }, onCreateDir = { _, _ -> },
+            onRename = { _, _ -> }, onDelete = { _, _ -> }, onBack = {},
+        )
+    }
+
+    private fun filesEditorShot(name: String, colors: LumenColors) = shoot(name) {
+        FilesScreen(
+            colors = colors, files = filesSample(),
+            editor = EditorState(path = "README.md", lines = listOf("# Lumen", "", "a native agent app")),
+            onOpenDir = {}, onUp = {}, onEnter = {}, onSaveFile = { _, _ -> },
+            onCloseEditor = {}, onCreateFile = { _, _ -> }, onCreateDir = { _, _ -> },
+            onRename = { _, _ -> }, onDelete = { _, _ -> }, onBack = {},
+        )
+    }
+
+    private fun terminalShot(name: String, colors: LumenColors, lines: List<String>, running: Boolean) = shoot(name) {
+        TerminalScreen(
+            colors = colors, lines = lines, running = running, error = null,
+            onSend = {}, onInterrupt = {}, onClear = {}, onBack = {},
+        )
+    }
+
+    private fun canvasShot(name: String, colors: LumenColors, html: String) = shoot(name) {
+        CanvasScreen(html = html, colors = colors, sourceName = "demo.html", onBack = {})
+    }
+
+    private fun diagnosticsShot(name: String, colors: LumenColors, diag: List<DiagLine>) = shoot(name) {
+        DiagnosticsScreen(
+            colors = colors, diag = diag,
+            linux = LinuxEnvironmentState(alpineReady = true, debianReady = true, debianActive = true),
+            onInstallDebian = {}, onRefreshLinux = {}, onClear = {}, onBack = {},
+        )
+    }
+
+    private fun storageShot(name: String, colors: LumenColors, storage: StorageReport?) = shoot(name) {
+        StorageScreen(
+            colors = colors, storage = storage,
+            onRescan = {}, onClear = {}, onClearAll = {}, onBack = {},
+        )
+    }
+
+    private val canvasHtml = """
+        <html><body style="margin:0;background:#101018;color:#eaeaff;font-family:monospace;padding:24px">
+        <h1>lumen canvas</h1><p>a page the agent wrote, rendered in the sandbox.</p>
+        </body></html>
+    """.trimIndent()
+
+    private val diagLines = listOf(
+        DiagLine(1_700_000_000_000, "run start: make the timeline a spine"),
+        DiagLine(1_700_000_001_200, "tool: read TimelineLayout.kt"),
+        DiagLine(1_700_000_004_400, "run end: ok"),
+    )
+
+    /** Files: populated, an open editor, empty and loading, in both themes. */
+    @Test fun files_light() = filesShot("files_light.png", LumenColors.Light, filesSample())
+    @Test fun files_dark() = filesShot("files_dark.png", LumenColors.Dark, filesSample())
+    @Test fun files_editor_light() = filesEditorShot("files_editor_light.png", LumenColors.Light)
+    @Test fun files_editor_dark() = filesEditorShot("files_editor_dark.png", LumenColors.Dark)
+    @Test fun files_empty_light() = filesShot("files_empty_light.png", LumenColors.Light, FilesState("", emptyList()))
+    @Test fun files_empty_dark() = filesShot("files_empty_dark.png", LumenColors.Dark, FilesState("", emptyList()))
+    @Test fun files_loading_light() = filesShot("files_loading_light.png", LumenColors.Light, null)
+    @Test fun files_loading_dark() = filesShot("files_loading_dark.png", LumenColors.Dark, null)
+
+    /** Terminal: live output plus the empty/starting states, both themes. */
+    @Test fun terminal_light() = terminalShot(
+        "terminal_light.png", LumenColors.Light,
+        listOf("lumen ready\n", "$ echo hi\n", "hi\n"), running = true,
+    )
+    @Test fun terminal_dark() = terminalShot(
+        "terminal_dark.png", LumenColors.Dark,
+        listOf("lumen ready\n", "$ echo hi\n", "hi\n"), running = true,
+    )
+    @Test fun terminal_empty_light() = terminalShot("terminal_empty_light.png", LumenColors.Light, emptyList(), running = true)
+    @Test fun terminal_empty_dark() = terminalShot("terminal_empty_dark.png", LumenColors.Dark, emptyList(), running = false)
+
+    /** Canvas: a rendered page and the empty state, both themes. */
+    @Test fun canvas_light() = canvasShot("canvas_light.png", LumenColors.Light, canvasHtml)
+    @Test fun canvas_dark() = canvasShot("canvas_dark.png", LumenColors.Dark, canvasHtml)
+    @Test fun canvas_empty_light() = canvasShot("canvas_empty_light.png", LumenColors.Light, "")
+    @Test fun canvas_empty_dark() = canvasShot("canvas_empty_dark.png", LumenColors.Dark, "")
+
+    /** Diagnostics: a populated log and the empty log, both themes. */
+    @Test fun diagnostics_light() = diagnosticsShot("diagnostics_light.png", LumenColors.Light, diagLines)
+    @Test fun diagnostics_dark() = diagnosticsShot("diagnostics_dark.png", LumenColors.Dark, diagLines)
+    @Test fun diagnostics_empty_light() = diagnosticsShot("diagnostics_empty_light.png", LumenColors.Light, emptyList())
+    @Test fun diagnostics_empty_dark() = diagnosticsShot("diagnostics_empty_dark.png", LumenColors.Dark, emptyList())
+
+    /** Storage: a measured breakdown and the empty scan, both themes. */
+    @Test fun storage_light() = storageShot("storage_light.png", LumenColors.Light, storageSample())
+    @Test fun storage_dark() = storageShot("storage_dark.png", LumenColors.Dark, storageSample())
+    @Test fun storage_empty_light() = storageShot("storage_empty_light.png", LumenColors.Light, StorageReport(0L, emptyList(), scanning = false))
+    @Test fun storage_empty_dark() = storageShot("storage_empty_dark.png", LumenColors.Dark, null)
 }

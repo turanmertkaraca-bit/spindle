@@ -112,7 +112,7 @@ fun CanvasScreen(
             Text(
                 "\u2039", color = colors.dim, fontFamily = Mono, fontSize = 20.sp,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
                     .clickable { onBack() }
                     .padding(horizontal = 8.dp, vertical = 2.dp)
                     .testTag("canvas-back"),
@@ -127,39 +127,48 @@ fun CanvasScreen(
             Text(
                 "reload", color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
                     .clickable { requested += 1 }
                     .padding(horizontal = 8.dp, vertical = 4.dp)
                     .testTag("canvas-reload"),
             )
         }
-        key(reload) {
-            AndroidView(
-                modifier = Modifier.fillMaxWidth().weight(1f).testTag("canvas-web"),
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        setBackgroundColor(colors.bg.toArgb())
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.allowFileAccess = false
-                        settings.allowContentAccess = false
-                        settings.allowFileAccessFromFileURLs = false
-                        settings.allowUniversalAccessFromFileURLs = false
-                        settings.blockNetworkLoads = true
-                        settings.mediaPlaybackRequiresUserGesture = true
-                        settings.cacheMode = WebSettings.LOAD_NO_CACHE
-                        webViewClient = WebViewClient()
-                        loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
-                        webView = this
-                    }
-                },
-                onRelease = { web ->
-                    runCatching { web.loadUrl("about:blank") }
-                    runCatching { (web.parent as? ViewGroup)?.removeView(web) }
-                    runCatching { web.destroy() }
-                    if (webView === web) webView = null
-                },
-            )
+        if (html.isBlank()) {
+            Box(
+                Modifier.fillMaxWidth().weight(1f),
+                contentAlignment = Alignment.Center,
+            ) {
+                StateHint(colors, "nothing to render", detail = "the page has no HTML", tag = "canvas-empty")
+            }
+        } else {
+            key(reload) {
+                AndroidView(
+                    modifier = Modifier.fillMaxWidth().weight(1f).testTag("canvas-web"),
+                    factory = { ctx ->
+                        WebView(ctx).apply {
+                            setBackgroundColor(colors.bg.toArgb())
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            settings.allowFileAccess = false
+                            settings.allowContentAccess = false
+                            settings.allowFileAccessFromFileURLs = false
+                            settings.allowUniversalAccessFromFileURLs = false
+                            settings.blockNetworkLoads = true
+                            settings.mediaPlaybackRequiresUserGesture = true
+                            settings.cacheMode = WebSettings.LOAD_NO_CACHE
+                            webViewClient = WebViewClient()
+                            loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+                            webView = this
+                        }
+                    },
+                    onRelease = { web ->
+                        runCatching { web.loadUrl("about:blank") }
+                        runCatching { (web.parent as? ViewGroup)?.removeView(web) }
+                        runCatching { web.destroy() }
+                        if (webView === web) webView = null
+                    },
+                )
+            }
         }
     }
 }

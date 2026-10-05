@@ -83,16 +83,30 @@ fun TerminalScreen(
         Column(Modifier.fillMaxSize()) {
             TerminalHeader(colors, running, onBack, onClear)
 
-            Box(
-                Modifier.fillMaxWidth().weight(1f)
-                    .verticalScroll(scroll)
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-            ) {
-                Text(
-                    output.ifEmpty { "…" },
-                    color = colors.fg, fontFamily = Mono, fontSize = 12.5.sp, lineHeight = 18.sp,
-                    modifier = Modifier.fillMaxWidth().testTag("terminal-output"),
-                )
+            if (lines.isEmpty()) {
+                Box(
+                    Modifier.fillMaxWidth().weight(1f).padding(horizontal = 14.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    StateHint(
+                        colors = colors,
+                        text = if (running) "waiting for output…" else "shell exited",
+                        detail = if (running) "the command's output will appear here" else "tap restart to open a new shell",
+                        tag = "terminal-empty",
+                    )
+                }
+            } else {
+                Box(
+                    Modifier.fillMaxWidth().weight(1f)
+                        .verticalScroll(scroll)
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        output,
+                        color = colors.fg, fontFamily = Mono, fontSize = 12.5.sp, lineHeight = 18.sp,
+                        modifier = Modifier.fillMaxWidth().testTag("terminal-output"),
+                    )
+                }
             }
 
             if (error != null) {
@@ -122,7 +136,7 @@ private fun TerminalHeader(
         Text(
             "‹", color = colors.dim, fontFamily = Mono, fontSize = 20.sp,
             modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
+                .clip(LumenShapes.small)
                 .clickable { onBack() }
                 .padding(horizontal = 8.dp, vertical = 2.dp)
                 .testTag("terminal-back"),
@@ -139,7 +153,7 @@ private fun TerminalHeader(
         Text(
             "clear", color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
             modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
+                .clip(LumenShapes.small)
                 .clickable { onClear() }
                 .padding(horizontal = 7.dp, vertical = 5.dp)
                 .testTag("terminal-clear"),
@@ -180,9 +194,9 @@ private fun InputRow(
     ) {
         Box(
             Modifier.weight(1f)
-                .clip(RoundedCornerShape(10.dp))
+                .clip(LumenShapes.panel)
                 .background(colors.surface)
-                .border(1.dp, colors.rule, RoundedCornerShape(10.dp))
+                .border(1.dp, colors.rule, LumenShapes.panel)
                 .padding(horizontal = 10.dp, vertical = 8.dp),
         ) {
             if (draft.isEmpty()) {
@@ -210,7 +224,7 @@ private fun InputRow(
             fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
+                .clip(LumenShapes.small)
                 .clickable(enabled = running) { onInterrupt() }
                 .padding(horizontal = 6.dp, vertical = 6.dp)
                 .testTag("terminal-ctrl-c"),
@@ -221,7 +235,7 @@ private fun InputRow(
             color = if (canRestart || canSend) colors.accent else colors.faint,
             fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
             modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
+                .clip(LumenShapes.small)
                 .clickable(enabled = canRestart || canSend) { submit() }
                 .padding(horizontal = 7.dp, vertical = 6.dp)
                 .testTag(if (canRestart) "terminal-restart" else "terminal-send"),

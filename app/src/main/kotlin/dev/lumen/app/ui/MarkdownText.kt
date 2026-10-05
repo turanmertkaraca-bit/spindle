@@ -162,8 +162,8 @@ fun MarkdownBody(
                     "show less",
                     color = colors.accent, fontFamily = MdMono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .border(1.dp, colors.rule, RoundedCornerShape(6.dp))
+                        .clip(LumenShapes.small)
+                        .border(1.dp, colors.rule, LumenShapes.small)
                         .clickable { showFull = false }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                         .testTag("md-show-less"),
@@ -180,8 +180,8 @@ fun MarkdownBody(
                     "\u2026[${markdown.length - cap} chars hidden] \u00b7 show full",
                     color = colors.accent, fontFamily = MdMono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .border(1.dp, colors.rule, RoundedCornerShape(6.dp))
+                        .clip(LumenShapes.small)
+                        .border(1.dp, colors.rule, LumenShapes.small)
                         .clickable { showFull = true }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                         .testTag("md-show-full"),
@@ -300,9 +300,9 @@ private fun MarkdownCode(block: MdBlock.Code, colors: LumenColors) {
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(9.dp))
+            .clip(LumenShapes.inset)
             .background(colors.bg.copy(alpha = 0.55f))
-            .border(1.dp, colors.rule, RoundedCornerShape(9.dp))
+            .border(1.dp, colors.rule, LumenShapes.inset)
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = 10.dp, vertical = 8.dp),
     ) {

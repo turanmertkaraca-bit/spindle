@@ -111,9 +111,9 @@ fun FilesScreen(
                     val listing = files
                     val listingError = listing?.error
                     if (listing == null) {
-                        Hint(colors, "loading…")
+                        Hint(colors, "loading files…")
                     } else if (listingError != null && listing.entries.isEmpty()) {
-                        Hint(colors, listingError)
+                        Hint(colors, listingError, error = true)
                     } else {
                         LazyColumn(
                             Modifier.fillMaxWidth().weight(1f).testTag("files-list"),
@@ -131,7 +131,7 @@ fun FilesScreen(
                                 item(key = "__empty") {
                                     Text(
                                         "empty folder", color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 14.dp),
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 14.dp).testTag("files-empty"),
                                     )
                                 }
                             }
@@ -229,7 +229,7 @@ private fun FilesHeader(
         Text(
             "‹", color = colors.dim, fontFamily = Mono, fontSize = 20.sp,
             modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
+                .clip(LumenShapes.small)
                 .clickable { onBack() }
                 .padding(horizontal = 8.dp, vertical = 2.dp)
                 .testTag("files-back"),
@@ -257,7 +257,7 @@ private fun HeaderAction(
     Text(
         label, color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
         modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
+            .clip(LumenShapes.small)
             .clickable { onClick() }
             .padding(horizontal = 7.dp, vertical = 5.dp)
             .testTag(tag),
@@ -278,7 +278,7 @@ private fun Breadcrumb(colors: LumenColors, dir: String, onOpenDir: (String) -> 
             color = if (segments.isEmpty()) colors.fg else colors.water,
             fontFamily = Mono, fontSize = 12.sp,
             modifier = Modifier
-                .clip(RoundedCornerShape(5.dp))
+                .clip(LumenShapes.glyph)
                 .clickable { onOpenDir("") }
                 .padding(horizontal = 4.dp, vertical = 3.dp)
                 .testTag("crumb-root"),
@@ -294,7 +294,7 @@ private fun Breadcrumb(colors: LumenColors, dir: String, onOpenDir: (String) -> 
                 fontFamily = Mono, fontSize = 12.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(5.dp))
+                    .clip(LumenShapes.glyph)
                     .clickable { onOpenDir(target) }
                     .padding(horizontal = 4.dp, vertical = 3.dp)
                     .testTag("crumb-$target"),
@@ -315,7 +315,7 @@ private fun EntryRow(
     var menu by remember { mutableStateOf(false) }
     Row(
         Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(LumenShapes.card)
             .clickable { onEnter(entry) }
             .padding(start = 12.dp, end = 6.dp, top = 9.dp, bottom = 9.dp)
             .testTag("entry-${entry.path}"),
@@ -343,7 +343,7 @@ private fun EntryRow(
                     "\u25b6 view",
                     color = colors.water, fontFamily = Mono, fontSize = 10.5.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
+                        .clip(LumenShapes.small)
                         .clickable { onOpenCanvas(entry.path) }
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                         .testTag("view-${entry.path}"),
@@ -354,7 +354,7 @@ private fun EntryRow(
             Text(
                 "⋯", color = colors.faint, fontFamily = Mono, fontSize = 15.sp,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
                     .clickable { menu = true }
                     .padding(horizontal = 8.dp, vertical = 2.dp)
                     .testTag("menu-${entry.path}"),
@@ -423,7 +423,7 @@ private fun EditorOverlay(
                 color = if (canSave) colors.accent else colors.faint,
                 fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
                     .clickable(enabled = canSave) { onSave(draft) }
                     .padding(horizontal = 7.dp, vertical = 5.dp)
                     .testTag("editor-save"),
@@ -489,8 +489,8 @@ private fun NameDialog(
                 textStyle = TextStyle(color = colors.fg, fontFamily = Mono, fontSize = 14.sp),
                 cursorBrush = SolidColor(colors.water),
                 modifier = Modifier.fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .border(1.dp, colors.rule, RoundedCornerShape(8.dp))
+                    .clip(LumenShapes.inset)
+                    .border(1.dp, colors.rule, LumenShapes.inset)
                     .padding(10.dp)
                     .testTag("name-input"),
             )
@@ -501,7 +501,7 @@ private fun NameDialog(
                 color = if (valid) colors.accent else colors.faint,
                 fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
                     .clickable(enabled = valid) { onConfirm(value.trim()) }
                     .padding(horizontal = 8.dp, vertical = 6.dp)
                     .testTag("name-confirm"),
@@ -511,7 +511,7 @@ private fun NameDialog(
             Text(
                 "cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
                     .clickable { onDismiss() }
                     .padding(horizontal = 8.dp, vertical = 6.dp)
                     .testTag("name-cancel"),
@@ -540,7 +540,7 @@ private fun ConfirmDialog(
             Text(
                 confirm, color = colors.accent, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
                     .clickable { onConfirm() }
                     .padding(horizontal = 8.dp, vertical = 6.dp)
                     .testTag("confirm-yes"),
@@ -550,7 +550,7 @@ private fun ConfirmDialog(
             Text(
                 "cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
                     .clickable { onDismiss() }
                     .padding(horizontal = 8.dp, vertical = 6.dp)
                     .testTag("confirm-no"),
@@ -560,9 +560,9 @@ private fun ConfirmDialog(
 }
 
 @Composable
-private fun Hint(colors: LumenColors, text: String) {
+private fun Hint(colors: LumenColors, text: String, error: Boolean = false) {
     Box(Modifier.fillMaxWidth().padding(vertical = 40.dp), contentAlignment = Alignment.Center) {
-        Text(text, color = colors.faint, fontFamily = Mono, fontSize = 12.sp)
+        StateHint(colors, text, tint = if (error) LumenAlert else colors.water)
     }
 }
 

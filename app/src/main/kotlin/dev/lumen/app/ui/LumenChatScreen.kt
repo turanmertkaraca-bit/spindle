@@ -14,17 +14,11 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.AnimationState
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDecay
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.exponentialDecay
-import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
@@ -79,6 +73,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -345,7 +340,7 @@ fun LumenChatScreen(
         val value = t.animateFloat(
             initialValue = 0.35f,
             targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(1400, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            animationSpec = LumenMotion.pulse,
             label = "pulse",
         )
         val read: () -> Float = { value.value }
@@ -605,9 +600,10 @@ private fun NewCue(colors: LumenColors, onClick: () -> Unit) {
     val edge = colors.spectrum.getOrElse(2) { colors.water }
     Row(
         Modifier
-            .clip(RoundedCornerShape(50))
+            .shadow(LumenElevation.floating, LumenShapes.pill)
+            .clip(LumenShapes.pill)
             .background(colors.surface)
-            .border(1.dp, edge.copy(alpha = 0.35f), RoundedCornerShape(50))
+            .border(1.dp, edge.copy(alpha = 0.35f), LumenShapes.pill)
             .clickable { onClick() }
             .padding(horizontal = 12.dp, vertical = 6.dp)
             .testTag("new-cue"),
@@ -634,7 +630,7 @@ private fun BarControl(
     fontSize: TextUnit = 12.sp,
     onClick: () -> Unit,
 ) {
-    val shape = RoundedCornerShape(11.dp)
+    val shape = LumenShapes.control
     Box(
         Modifier
             .heightIn(min = 44.dp)
@@ -704,9 +700,9 @@ private fun MessageRow(
             )
         } else {
             val bubbleShape = if (isYou) {
-                RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp)
+                LumenShapes.bubbleYou
             } else {
-                RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp)
+                LumenShapes.bubbleAgent
             }
 
             Column(
@@ -801,8 +797,8 @@ private fun MessageRow(
                         color = colors.water, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                         modifier = Modifier
                             .testTag("canvas-view-${step.id}")
-                            .clip(RoundedCornerShape(6.dp))
-                            .border(1.dp, colors.water.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                            .clip(LumenShapes.small)
+                            .border(1.dp, colors.water.copy(alpha = 0.35f), LumenShapes.small)
                             .clickable { onOpenCanvas(htmlPath) }
                             .padding(horizontal = 8.dp, vertical = 4.dp),
                     )
@@ -813,8 +809,8 @@ private fun MessageRow(
                         "rewind to here",
                         color = colors.water, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .border(1.dp, colors.water.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                            .clip(LumenShapes.small)
+                            .border(1.dp, colors.water.copy(alpha = 0.35f), LumenShapes.small)
                             .clickable {
                                 onRewind(mid)
                                 rewindArmed = false
@@ -863,17 +859,17 @@ private fun UserImages(images: List<UiImage>, colors: LumenColors) {
                     modifier = Modifier
                         .widthIn(min = 120.dp, max = 240.dp)
                         .heightIn(max = 200.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .border(1.dp, colors.rule, RoundedCornerShape(10.dp))
+                        .clip(LumenShapes.panel)
+                        .border(1.dp, colors.rule, LumenShapes.panel)
                         .testTag("msg-image"),
                 )
             } else {
                 Row(
                     Modifier
                         .widthIn(max = 260.dp)
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(LumenShapes.panel)
                         .background(colors.bg.copy(alpha = 0.4f))
-                        .border(1.dp, colors.water.copy(alpha = 0.30f), RoundedCornerShape(10.dp))
+                        .border(1.dp, colors.water.copy(alpha = 0.30f), LumenShapes.panel)
                         .padding(horizontal = 10.dp, vertical = 8.dp)
                         .testTag("msg-image"),
                     verticalAlignment = Alignment.CenterVertically,
@@ -881,9 +877,9 @@ private fun UserImages(images: List<UiImage>, colors: LumenColors) {
                     Box(
                         Modifier
                             .size(20.dp)
-                            .clip(RoundedCornerShape(5.dp))
+                            .clip(LumenShapes.glyph)
                             .background(colors.water.copy(alpha = 0.16f))
-                            .border(1.dp, colors.water.copy(alpha = 0.45f), RoundedCornerShape(5.dp)),
+                            .border(1.dp, colors.water.copy(alpha = 0.45f), LumenShapes.glyph),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text("img", color = colors.water, fontFamily = Mono, fontSize = 7.5.sp)
@@ -1050,7 +1046,7 @@ private fun ToolCard(
             accentForStatic = accentBase.copy(alpha = 0.75f),
             bodyPulse = pulse,
             modifier = modifier,
-            shape = RoundedCornerShape(12.dp),
+            shape = LumenShapes.card,
         )
         return
     }
@@ -1073,7 +1069,7 @@ private fun ToolCard(
         accentForStatic = accent,
         bodyPulse = pulse,
         modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
+        shape = LumenShapes.card,
     )
 }
 
@@ -1118,6 +1114,7 @@ private fun ToolCardFrame(
 
     Column(
         modifier
+            .shadow(LumenElevation.card, shape)
             .clip(shape)
             .background(colors.surface)
             .border(1.dp, accentForStatic.copy(alpha = 0.30f), shape)
@@ -1166,8 +1163,8 @@ private fun ToolCardFrame(
         }
         AnimatedVisibility(
             visible = expanded,
-            enter = expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
-            exit = shrinkVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut(),
+            enter = expandVertically(animationSpec = LumenMotion.expand) + fadeIn(animationSpec = LumenMotion.fade),
+            exit = shrinkVertically(animationSpec = LumenMotion.expand) + fadeOut(animationSpec = LumenMotion.fade),
         ) {
             ToolCardBody(step, colors, isSub, bodyPulse)
         }
@@ -1227,7 +1224,7 @@ private fun ToolCardBody(step: UiStep, colors: LumenColors, isSub: Boolean, puls
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(LumenShapes.inset)
                                 .background(colors.bg.copy(alpha = 0.35f))
                                 .padding(horizontal = 9.dp, vertical = 4.dp)
                                 .testTag("tool-row-$k"),
@@ -1480,12 +1477,13 @@ private fun TodoBoard(todos: List<TodoItem>, colors: LumenColors, pulse: () -> F
     var expanded by remember { mutableStateOf(false) }
     val done = todos.count { it.status == TodoStatus.DONE }
     val edge = colors.spectrum.getOrElse(3) { colors.water }
-    val shape = RoundedCornerShape(12.dp)
+    val shape = LumenShapes.card
 
     Column(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp)
+            .shadow(LumenElevation.card, shape)
             .clip(shape)
             .background(colors.surface)
             .border(1.dp, edge.copy(alpha = 0.22f), shape),
@@ -1509,8 +1507,8 @@ private fun TodoBoard(todos: List<TodoItem>, colors: LumenColors, pulse: () -> F
         }
         AnimatedVisibility(
             visible = expanded,
-            enter = expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
-            exit = shrinkVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut(),
+            enter = expandVertically(animationSpec = LumenMotion.expand) + fadeIn(animationSpec = LumenMotion.fade),
+            exit = shrinkVertically(animationSpec = LumenMotion.expand) + fadeOut(animationSpec = LumenMotion.fade),
         ) {
             Column(
                 Modifier
@@ -1558,9 +1556,9 @@ private fun ToolGlyph(accent: Color, failed: Boolean, running: Boolean) {
     Box(
         Modifier
             .size(16.dp)
-            .clip(RoundedCornerShape(5.dp))
+            .clip(LumenShapes.glyph)
             .background(accent.copy(alpha = if (running) 0.14f else 0.12f))
-            .border(1.dp, accent.copy(alpha = 0.50f), RoundedCornerShape(5.dp)),
+            .border(1.dp, accent.copy(alpha = 0.50f), LumenShapes.glyph),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -1583,9 +1581,9 @@ private fun ToolStatusPill(failed: Boolean, running: Boolean, loading: Boolean, 
         label,
         color = tint, fontFamily = Mono, fontSize = 9.5.sp, letterSpacing = 0.6.sp,
         modifier = Modifier
-            .clip(RoundedCornerShape(50))
+            .clip(LumenShapes.pill)
             .background(tint.copy(alpha = 0.14f))
-            .border(1.dp, tint.copy(alpha = 0.35f), RoundedCornerShape(50))
+            .border(1.dp, tint.copy(alpha = 0.35f), LumenShapes.pill)
             .padding(horizontal = 7.dp, vertical = 2.dp)
             .testTag("tool-status"),
     )
@@ -1609,7 +1607,7 @@ private fun ThinkSection(think: String, colors: LumenColors) {
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(LumenShapes.panel)
             .background(colors.water.copy(alpha = 0.10f))
             .clickable { open = !open }
             .padding(horizontal = 10.dp, vertical = 7.dp)
@@ -1625,8 +1623,8 @@ private fun ThinkSection(think: String, colors: LumenColors) {
         }
         AnimatedVisibility(
             visible = open,
-            enter = expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
-            exit = shrinkVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut(),
+            enter = expandVertically(animationSpec = LumenMotion.expand) + fadeIn(animationSpec = LumenMotion.fade),
+            exit = shrinkVertically(animationSpec = LumenMotion.expand) + fadeOut(animationSpec = LumenMotion.fade),
         ) {
             Column(Modifier.testTag("think-body")) {
                 Spacer(Modifier.height(6.dp))
@@ -1652,8 +1650,8 @@ private fun ThinkSection(think: String, colors: LumenColors) {
                         "show less",
                         color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .border(1.dp, colors.water.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                            .clip(LumenShapes.small)
+                            .border(1.dp, colors.water.copy(alpha = 0.35f), LumenShapes.small)
                             .clickable { showAll = false }
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                             .testTag("think-show-less"),
@@ -1669,8 +1667,8 @@ private fun ThinkSection(think: String, colors: LumenColors) {
                             "\u2026[${think.length - THINK_WINDOW_CHARS} chars hidden] \u00b7 show all",
                             color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                             modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .border(1.dp, colors.water.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                                .clip(LumenShapes.small)
+                                .border(1.dp, colors.water.copy(alpha = 0.35f), LumenShapes.small)
                                 .clickable { showAll = true }
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                                 .testTag("think-show-all"),
@@ -1724,8 +1722,8 @@ private fun WindowedText(
                 "show less",
                 color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .border(1.dp, colors.rule, RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
+                    .border(1.dp, colors.rule, LumenShapes.small)
                     .clickable { showAll = false }
                     .padding(horizontal = 8.dp, vertical = 4.dp)
                     .testTag("literal-show-less"),
@@ -1739,8 +1737,8 @@ private fun WindowedText(
                 "\u2026[${text.length - LITERAL_MAX_CHARS} chars hidden] \u00b7 show all",
                 color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .border(1.dp, colors.rule, RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
+                    .border(1.dp, colors.rule, LumenShapes.small)
                     .clickable { showAll = true }
                     .padding(horizontal = 8.dp, vertical = 4.dp)
                     .testTag("literal-show-all"),
@@ -1798,9 +1796,9 @@ private fun ErrorNotice(message: String, colors: LumenColors, onEditKey: (() -> 
         lower.contains("api key") || lower.contains("unauthorized")
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .clip(LumenShapes.panel)
             .background(colors.rule)
-            .border(1.dp, colors.danger().copy(alpha = 0.45f), RoundedCornerShape(10.dp))
+            .border(1.dp, colors.danger().copy(alpha = 0.45f), LumenShapes.panel)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1818,7 +1816,7 @@ private fun ErrorNotice(message: String, colors: LumenColors, onEditKey: (() -> 
                 "update key",
                 color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(LumenShapes.small)
                     .clickable { onEditKey() }
                     .padding(horizontal = 6.dp, vertical = 4.dp)
                     .testTag("update-key"),
@@ -1846,12 +1844,13 @@ private fun ChangesCard(
     var expanded by remember { mutableStateOf(false) }
     var openFile by remember { mutableStateOf<String?>(null) }
     val edge = colors.spectrum.getOrElse(2) { colors.water }
-    val shape = RoundedCornerShape(12.dp)
+    val shape = LumenShapes.card
 
     Column(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp)
+            .shadow(LumenElevation.card, shape)
             .clip(shape)
             .background(colors.surface)
             .border(1.dp, edge.copy(alpha = 0.22f), shape),
@@ -1876,8 +1875,8 @@ private fun ChangesCard(
         }
         AnimatedVisibility(
             visible = expanded,
-            enter = expandVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeIn(),
-            exit = shrinkVertically(animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) + fadeOut(),
+            enter = expandVertically(animationSpec = LumenMotion.expand) + fadeIn(animationSpec = LumenMotion.fade),
+            exit = shrinkVertically(animationSpec = LumenMotion.expand) + fadeOut(animationSpec = LumenMotion.fade),
         ) {
             Column(
                 Modifier
@@ -1892,7 +1891,7 @@ private fun ChangesCard(
                     Row(
                         Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
+                            .clip(LumenShapes.inset)
                             .clickable { openFile = if (fileOpen) null else path }
                             .padding(horizontal = 8.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1904,7 +1903,7 @@ private fun ChangesCard(
                             maxLines = 1, overflow = TextOverflow.Ellipsis,
                             modifier = Modifier
                                 .weight(1f)
-                                .clip(RoundedCornerShape(4.dp))
+                                .clip(LumenShapes.small)
                                 .clickable { onOpenFile(path, null) }
                                 .padding(vertical = 2.dp)
                                 .testTag("changes-file-$path"),
@@ -1916,20 +1915,24 @@ private fun ChangesCard(
                             "revert",
                             color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                             modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
+                                .clip(LumenShapes.small)
                                 .clickable { edits.lastOrNull()?.let(onRevert) }
                                 .padding(horizontal = 6.dp, vertical = 3.dp)
                                 .testTag("changes-revert-$path"),
                         )
                     }
-                    AnimatedVisibility(visible = fileOpen) {
+                    AnimatedVisibility(
+                        visible = fileOpen,
+                        enter = expandVertically(animationSpec = LumenMotion.expand) + fadeIn(animationSpec = LumenMotion.fade),
+                        exit = shrinkVertically(animationSpec = LumenMotion.expand) + fadeOut(animationSpec = LumenMotion.fade),
+                    ) {
                         val diff = edits.joinToString("\n") { it.unifiedDiff }.trim()
                         Box(
                             Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(9.dp))
+                                .clip(LumenShapes.inset)
                                 .background(colors.bg.copy(alpha = 0.4f))
-                                .border(1.dp, colors.rule, RoundedCornerShape(9.dp))
+                                .border(1.dp, colors.rule, LumenShapes.inset)
                                 .padding(horizontal = 10.dp, vertical = 8.dp)
                                 .testTag("changes-diff"),
                         ) {
@@ -1947,7 +1950,7 @@ private fun ChangesCard(
                         "copy diff",
                         color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(LumenShapes.small)
                             .clickable { clipboard.setText(AnnotatedString(all)) }
                             .padding(horizontal = 6.dp, vertical = 5.dp)
                             .testTag("copy-diff"),
@@ -2001,11 +2004,12 @@ private fun AskCard(
     onSkipQuestion: () -> Unit,
 ) {
     val edge = colors.spectrum.getOrElse(2) { colors.water }
-    val shape = RoundedCornerShape(12.dp)
+    val shape = LumenShapes.card
     Column(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp)
+            .shadow(LumenElevation.card, shape)
             .clip(shape)
             .background(colors.surface)
             .border(1.dp, edge.copy(alpha = 0.30f), shape)
@@ -2064,8 +2068,8 @@ private fun QuestionAsk(
                 fontFamily = Mono, fontSize = 12.5.sp,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(9.dp))
-                    .border(1.dp, if (isSelected) colors.water else colors.rule, RoundedCornerShape(9.dp))
+                    .clip(LumenShapes.inset)
+                    .border(1.dp, if (isSelected) colors.water else colors.rule, LumenShapes.inset)
                     .background(if (isSelected) colors.bg.copy(alpha = 0.35f) else Color.Transparent)
                     .clickable {
                         if (ask.multiple) {
@@ -2101,9 +2105,9 @@ private fun AskAction(
         color = if (accent) colors.bg else colors.fg,
         fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
         modifier = Modifier
-            .clip(RoundedCornerShape(50))
+            .clip(LumenShapes.pill)
             .background(if (accent) colors.water else colors.surface)
-            .border(1.dp, if (accent) colors.water else colors.rule, RoundedCornerShape(50))
+            .border(1.dp, if (accent) colors.water else colors.rule, LumenShapes.pill)
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 8.dp)
             .testTag(tag),
@@ -2153,7 +2157,7 @@ private fun Composer(
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
         targetValue = if (pressed) 0.9f else 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh),
+        animationSpec = LumenMotion.press,
         label = "send-scale",
     )
     Column {
@@ -2203,15 +2207,15 @@ private fun Composer(
                     "image",
                     color = colors.water, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .border(1.dp, colors.water.copy(alpha = 0.35f), RoundedCornerShape(50))
+                        .clip(LumenShapes.pill)
+                        .border(1.dp, colors.water.copy(alpha = 0.35f), LumenShapes.pill)
                         .clickable { onAttach() }
                         .padding(horizontal = 9.dp, vertical = 6.dp)
                         .testTag("attach-image"),
                 )
                 Spacer(Modifier.width(8.dp))
             }
-            val fieldShape = RoundedCornerShape(50)
+            val fieldShape = LumenShapes.pill
             Box(
                 Modifier.weight(1f)
                     .clip(fieldShape)
@@ -2259,7 +2263,7 @@ private fun Composer(
             // The primary action: a filled 44dp target. Idle-with-text is a bright
             // spectral send; busy is a solid danger stop; blank-and-idle is a dim,
             // bordered, disabled send so the control never disappears or shifts.
-            val actionShape = RoundedCornerShape(50)
+            val actionShape = LumenShapes.pill
             Box(
                 Modifier
                     .graphicsLayer { scaleX = scale; scaleY = scale }
@@ -2311,11 +2315,12 @@ private fun FileSuggestions(
 ) {
     if (suggestions.isEmpty()) return
     val edge = colors.spectrum.getOrElse(2) { colors.water }
-    val shape = RoundedCornerShape(12.dp)
+    val shape = LumenShapes.card
     Column(
         Modifier
             .fillMaxWidth()
             .padding(start = 16.dp, end = 14.dp, bottom = 6.dp)
+            .shadow(LumenElevation.floating, shape)
             .clip(shape)
             .background(colors.surface)
             .border(1.dp, edge.copy(alpha = 0.30f), shape)
@@ -2351,9 +2356,9 @@ private fun AttachmentChip(
 ) {
     Row(
         Modifier
-            .clip(RoundedCornerShape(50))
+            .clip(LumenShapes.pill)
             .background(colors.surface)
-            .border(1.dp, colors.water.copy(alpha = 0.30f), RoundedCornerShape(50))
+            .border(1.dp, colors.water.copy(alpha = 0.30f), LumenShapes.pill)
             .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
             .testTag("attachment-$index"),
         verticalAlignment = Alignment.CenterVertically,
@@ -2369,7 +2374,7 @@ private fun AttachmentChip(
             "\u00d7",
             color = colors.faint, fontFamily = Mono, fontSize = 14.sp,
             modifier = Modifier
-                .clip(RoundedCornerShape(50))
+                .clip(LumenShapes.pill)
                 .clickable { onRemove(index) }
                 .padding(horizontal = 5.dp, vertical = 1.dp)
                 .testTag("attachment-remove-$index"),
@@ -2431,9 +2436,9 @@ private fun AgentModeChip(
         color = if (selected) colors.bg else colors.dim,
         fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
         modifier = Modifier
-            .clip(RoundedCornerShape(50))
+            .clip(LumenShapes.pill)
             .background(if (selected) tint else colors.surface)
-            .border(1.dp, if (selected) tint else colors.rule, RoundedCornerShape(50))
+            .border(1.dp, if (selected) tint else colors.rule, LumenShapes.pill)
             .clickable { onSelect(label) }
             .padding(horizontal = 12.dp, vertical = 5.dp)
             .testTag(tag),
@@ -2476,12 +2481,13 @@ private fun FilePeekOverlay(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
+                .shadow(LumenElevation.floating, LumenShapes.sheet)
+                .clip(LumenShapes.sheet)
                 .background(colors.surface)
                 .border(
                     1.dp,
                     colors.spectrum.getOrElse(2) { colors.water }.copy(alpha = 0.25f),
-                    RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
+                    LumenShapes.sheet,
                 )
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
@@ -2504,7 +2510,7 @@ private fun FilePeekOverlay(
                     "close",
                     color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
+                        .clip(LumenShapes.small)
                         .clickable { onClose() }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                         .testTag("peek-close"),
@@ -2586,7 +2592,7 @@ private fun PeekBacklinks(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(LumenShapes.inset)
                         .clickable { onJumpToStep(link.stepIndex) }
                         .padding(horizontal = 8.dp, vertical = 6.dp)
                         .testTag("backlink-$index"),
