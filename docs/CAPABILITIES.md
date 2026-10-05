@@ -50,7 +50,7 @@ JVM-testable; 7–9 are platform adapters.
 | Session token + cost totals surfaced as events | ✅ |
 | Max-cost budget + warnings | ✅ (pricing populated; ceiling fires) |
 | Per-session run serialization (same-session prompts queue; distinct sessions run concurrently) | ✅ |
-| Structured output (`json_schema`) | ➕ (defer) |
+| Structured output (`json_schema`, opt-in) | ✅ (engine: `ResponseFormat`; OpenAI-compatible adapter only; Anthropic ignores it; no host opts in yet) |
 
 New events: `UsageUpdated`, `TitleUpdated`, `RunStateChanged` (per-session),
 `SubagentStateChanged`, `FileEdited`, `SnapshotCreated`, and `PartReset` (retry
@@ -82,8 +82,8 @@ see SPEC §8).
 | `question` | ✅ |
 | `task` (subagents) | ✅ |
 | `websearch` | ✅ (keyless DuckDuckGo HTML) |
-| `skill` | ➕ (defer) |
-| `external-directory` | ➕ (explicit user-granted roots) |
+| `skill` | ✅ (closed local `SKILL.md` discovery/load under the session cwd) |
+| `external-directory` | ✅ (read-only; explicit user-granted roots; an empty allow-list denies every request) |
 
 Every tool result carries a structured diff + typed metadata (✅ shape in
 `ToolOutcome`; tighten per tool).
@@ -126,7 +126,8 @@ canonical-path clamp (port `FilesActivity` clamp rules), snapshots, save-from-UI
 |---|---|
 | OpenAI-compatible + Anthropic streaming | ✅ |
 | DeepSeek, OpenRouter, Zen, Go configs | ✅ |
-| Zen/Go `/responses` + `/messages` routing | ➕ (blocked on a paid OpenCode key; free tier 403s Claude/GPT) |
+| Zen/Go per-model routing (`/messages` for Claude/Qwen, `/chat/completions` otherwise) | ✅ (wired + fixture-tested; `/responses` for GPT/Grok is **deliberately rejected** with an explicit terminal `Failure`) |
+| Zen/Go live Claude/GPT streams | ❌ (blocked on a paid OpenCode key; free tier 403s `/messages`, `/responses` and `/chat/completions` for Claude/GPT) |
 | models.dev catalogue (ported snapshot + live enrichment) | ✅ |
 | Key store (port `AuthStore`, `KeysActivity`) | ✅ (encrypted `KeyStore` + key screen) |
 | OAuth providers | ❌ |

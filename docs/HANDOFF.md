@@ -1,11 +1,14 @@
 # Lumen — session handoff (read me first)
 
 Native Android agent app. `spindle` repo, branch `main`, package `dev.lumen.app`.
-`HEAD = 06b113c8b7c085890d834dfd7b1ffe63c9734614`. CI (`.github/workflows/ci.yml`,
-both `jvm backend` + `android app (robolectric)`) is **green at 06b113c**. `:cli`
-is now gated in the jvm job (`:cli:classes`), so its run path compiles in CI even
-though it never spends tokens. Working tree: documentation edits only, no code
-changes pending.
+`HEAD = a4807fd` (`docs: add long-session stress re-sweep (m15)`). CI
+(`.github/workflows/ci.yml`) runs both a `jvm backend` job and an
+`android app (robolectric)` job; `a4807fd` is docs-only. The docs-sync commit
+brings these status docs in line with `a4807fd` (CI status for `a4807fd` +
+docs-sync is **not** asserted here — re-check the run). `:cli` is gated in the
+jvm job (`:cli:classes`), so its run path compiles in CI even though it never
+spends tokens. Working tree: the docs-sync edits, plus a pre-existing
+uncommitted teardown-drain hardening in `SessionRetentionTest.kt` (see §6).
 
 ```
 ██  NEVER COMMIT tokens/secrets. The git remote already embeds the PAT.  ██
@@ -15,65 +18,72 @@ changes pending.
 
 ## 1. What's done (this session)
 
-1. **Background-run bug FIXED (`87ebe96`).** The agent loop runs in the
-   Application-scoped owner `LumenApp.applicationScope`, not `viewModelScope`;
-   `closeChat`/`onCleared` no longer cancel it, only an explicit stop does. Shared
-   event bus + live-run tracking let a reopened ViewModel reflect an in-flight
-   run; `RunService` hardened. Top-priority issue is closed.
-2. **Core engine correctness.** Compaction no longer wipes the tail/current
-   prompt and can always shrink (ratio-only overflow + no-op guard); `Wire` emits
-   a matching tool reply per call; `maxSteps` finalizes PENDING tools; retry no
-   longer double-counts usage; cancellation is correct; symlink sandbox escape
-   closed.
-3. **Provider streaming hardening.** Mid-stream `IOException` → `Failure`;
-   cancellation aborts the OkHttp call; exactly one terminal; a single
-   `ToolCallStart` with accumulated id/name; `ToolCallEnd` before `Finished`;
-   Anthropic threads `sessionHint`/`userAgent`/`x-opencode-session`; SSE line
-   reads bounded (16 MiB); clean EOF → retryable `Failure`; bounded reasoning
-   tracking.
-4. **Long-session stability.** FTS `optimize` + WAL checkpoint at end of run
-   (`maintain()`); bounded snapshots (`pruneBounded` per-session + global + age)
-   with **newest-per-`(session,path)` pinning** so revert always has a pre-image;
-   session-delete cascades snapshots; stale open tool calls finalized; ViewModel
-   caches bounded; `PerfSampler` bounded; Android FTS falls back to a scan on
-   write failure.
-5. **Streaming/UI perf.** Bounded text rendering (tail window while streaming,
-   prefix when finished, chunked "show full"); removed `animateContentSize` on
-   growing content; coalesced deltas (40 ms); async + coalesced rebuilds;
-   off-thread vision decode; composer/app-bar polish; session tags UI; models.dev
-   catalogue enrichment.
-6. **Retry double-render FIXED while keeping live token streaming (`e1d773f`).**
-   New `AgentEvent.PartReset` is emitted once per part at the start of a retried
-   attempt; the app clears that part's delta buffer and drops the failed attempt's
-   tool rows.
-7. **Defensive active-run guard (`06b113c`).** `AgentLoop.prompt` serializes per
-   session with a per-session `Mutex`: a second same-session prompt waits for the
-   first; different sessions still run concurrently.
-8. **Live verification (M9) DONE.**
-   - OpenRouter (paid key) verified: real text + reasoning (`reasoning` field) +
-     usage, and a real multi-step tool loop (write→read→bash→read→answer).
-     Recorded real SSE fixtures are **committed** at
-     `provider-openai/src/test/resources/openrouter_recorded_{text,tool}.sse`,
-     with exact `ProviderEvent` assertions in `OpenAiProviderTest`.
-   - **OpenCode Go — the app's DEFAULT provider — verified live** with a real
-     free-tier key: `--provider opencode-go --model space-bunny-free` ran a real
-     write→read tool loop. This validates the app's default provider path.
-   - Found+fixed live: resolver was broken for slash-namespaced model ids
-     (`openrouter/auto`); `parseUsage` dropped real `cost` / `cache_write_tokens`.
+1. **Zen/Go per-model wire routing (`1845a77`).** New pure routing table
+   (`provider-openai/OpenCodeRoutes.kt`) + a `:cli` composite
+   (`OpenCodeRoutingProvider`): Claude-family/Qwen → `/messages` via the existing
+   Anthropic adapter (`x-api-key` + `anthropic-version`; Go also threads
+   `x-opencode-session` + a custom `User-Agent`). GPT/Grok `/responses` targets
+   return an explicit terminal `Failure` — `/responses` is **deliberately not
+   implemented** rather than silently mis-routed. Committed fixture
+   (`opencode_go_claude.sse`) + routing/header assertions.
+2. **`skill` + `external-directory` tools (`15635e8`), in `:tools`.** `skill`
+   is a closed local `SKILL.md` discovery/loader clamped under the session cwd;
+   `external-directory` is read-only over an explicit user-granted allow-list
+   (canonicalized + containment-checked) and denies everything when the list is
+   empty. Both registered in `DefaultTools` with source-compatible defaulted
+   params (`skillsRoot`, `externalRoots`).
+3. **Opt-in structured output (`bf86874`).** `ResponseFormat(name, schemaJson,
+   strict)` + defaulted `ChatRequest.responseFormat` and
+   `AgentConfig.responseFormat`, threaded `AgentConfig → Wire → request`. The
+   OpenAI-compatible adapter emits `response_format:json_schema` only when set
+   (malformed schema JSON omits the key); Anthropic ignores it. **No host opts
+   in**, so it is unreachable from `:cli`/`:app`/`:server` today.
+4. **UI polish pass (`ea2e38e` + `189b695`).** Shared `LumenTokens`
+   (`LumenShapes`/`LumenElevation`), `LumenMotion`, `LumenState`; calm
+   empty/loading/error states across Home, Files, Terminal, Canvas, Settings,
+   Diagnostics, Storage; unified motion without `animateContentSize`; the
+   Robolectric screenshot sweep extended to every screen in light **and** dark
+   (CI artifact `lumen-screenshots`). `189b695` was the follow-up Canvas import
+   compile fix.
+5. **`m15` long-session stress re-sweep PASS (`a4807fd`).** `docs/PERF-RE-SWEEP.md`:
+   25 live OpenRouter turns, retained heap flat ~6 MB (0.00 MB/turn), fds
+   38→39, DB+WAL ≤192 KB, 0 errors. This is the **JVM** harness; the on-device
+   re-sweep is still pending.
+6. **Prior-session wins still in force:** background-run fix (`87ebe96`),
+   core-engine correctness, provider streaming hardening, long-session
+   stability, retry `PartReset` (`e1d773f`), per-session prompt serialization
+   (`06b113c`), and the M9 live smoke — OpenRouter (paid) real text/reasoning/
+   usage + multi-step tool loop, and OpenCode Go (free key,
+   `space-bunny-free`) real write→read loop. Committed fixtures under
+   `provider-openai/src/test/resources/openrouter_recorded_{text,tool}.sse`.
+7. **Docs sync (the docs-sync commit).** `PLAN`/`CAPABILITIES`/`PARITY`/`SPEC`/
+   `UI-POLISH`/`HANDOFF`/`README` brought in line with the code above.
 
 ## 2. What's left / blocked
 
-- **Zen/Go per-model routing** (`/responses` for GPT/Grok, `/messages` for
-  Claude/Qwen) — **blocked**: needs a PAID OpenCode key to record real streams.
-  Free tier returns **403 "Model access is disabled"** for Claude/GPT. Do not
-  claim this works.
+- **Zen/Go live Claude/GPT** — routing is implemented and fixture-tested, but the
+  live Claude/GPT paths are **blocked**: needs a PAID OpenCode key to record real
+  streams. Free tier returns **403 "Model access is disabled"** for Claude/GPT on
+  `/messages`, `/responses` and `/chat/completions`. Only free `/chat/completions`
+  models (`space-bunny-free`) run live. Do not claim Claude/GPT works.
+- **Host opt-in for structured output** — the engine supports
+  `ResponseFormat`/`responseFormat`, but no host (`:cli`, `:app`, `:server`)
+  constructs one, so `json_schema` output is unreachable from any entry point.
+- **Host opt-in for `external-directory`** — the tool denies everything until a
+  host supplies granted roots via `DefaultTools.registry(externalRoots = ...)`;
+  no host does yet. `skill` defaults to `.opencode/skills` under the session cwd.
+- **`m15` on-device perf/ANR re-sweep** — the JVM stress re-sweep is PASS
+  (`a4807fd`); the **on-device** sweep (ART/ANR/frame timing, battery/thermal,
+  long-session heap/fd/DB/WAL) is still pending and unverified.
 - **Multi-session concurrency from the UI** — the engine allows it (per-session
   locks); the UI does not drive N chats at once yet.
-- **`m15` on-device perf re-sweep** — the streaming fix landed; a fresh device
-  sweep (long-session heap/fd/DB/WAL under load) is pending.
-- Deferred: structured output (`json_schema`), `skill` / `external-directory`
-  tools.
-- Explicit non-goals: OAuth, local models, MCP, LSP, plugins, git-commit UI.
+- **Known flake** — `SessionRetentionTest > stop tears down the frame sampler`
+  fails intermittently at `tearDown` with
+  `IllegalStateException: Dispatchers.Main is used concurrently with setting it`
+  (Robolectric queued main-looper runnables racing `Dispatchers.resetMain()`); a
+  rerun is green. See §6.
+- Explicit non-goals: OAuth, local models, MCP, LSP, plugins, marketplace skills,
+  git-commit UI.
 
 ## 3. Keys / credentials — the traps
 
@@ -89,8 +99,10 @@ changes pending.
   `Authorization: Bearer`; Zen/Go `/messages` (Anthropic surface) uses
   `x-api-key` + `anthropic-version` — a Bearer there returns 401 "Missing API
   key". Go additionally requires `x-opencode-session` and a custom User-Agent.
-- Free tier returns **403 "Model access is disabled"** for Claude/GPT, so
-  Zen/Go `/messages` + `/responses` parity stays blocked until a paid key.
+- Free tier returns **403 "Model access is disabled"** for Claude/GPT on
+  `/messages`, `/responses` and `/chat/completions`. The routing itself is
+  implemented + fixture-tested (`1845a77`); only the **live** Claude/GPT
+  verification stays blocked until a paid key.
 
 ## 4. Build / test / stress (exact)
 
@@ -138,7 +150,10 @@ proot (`targetSdk 28` exec exemption); chat (think→answer, markdown, compact t
 cards, subagent tree, live todo board, changes card w/ per-file revert, usage
 meter, image thumbnails); files cockpit, terminal, sandboxed canvas, vision,
 websearch, storage manager, diagnostics; `RunService` foreground keep-alive;
-models.dev catalogue; on-device `PerfSampler`.
+models.dev catalogue; on-device `PerfSampler`. Also in `:tools` now: `skill`
+(local `SKILL.md`) and `external-directory` (read-only granted roots). The
+`:cli` provider graph composes OpenAI/Anthropic adapters behind
+`OpenCodeRoutingProvider`; `OpenCodeRouter` is the pure per-model table.
 
 ## 6. Known residuals / invariants (do not regress)
 
@@ -151,6 +166,16 @@ models.dev catalogue; on-device `PerfSampler`.
 - `PartReset` must be mirrored in `:server` `WireEvent` and the app `StepMapper`
   (both already are; the exhaustive-`when` test guards this).
 - Compaction is ratio-only overflow + no-op guard; it never wipes the tail.
+- **Flaky test:** `SessionRetentionTest > stop tears down the frame sampler`
+  intermittently fails at `tearDown` with `IllegalStateException: Dispatchers.Main
+  is used concurrently with setting it` (Robolectric queued main-looper runnables
+  racing `Dispatchers.resetMain()`); a rerun is green. An **uncommitted** attempt
+  to drain the main looper + join the test-owned run scopes before
+  `resetMain()` is present in the working tree but has **not** been validated as a
+  fix. The other sampler test (`onCleared ...`) is not known to flake.
+- **Structured output is engine-only:** `responseFormat` is honored solely by the
+  OpenAI-compatible adapter and no host sets it. Do not describe it as a shipped
+  surface.
 
 ## 7. Docs index
 
@@ -158,5 +183,6 @@ models.dev catalogue; on-device `PerfSampler`.
 - `docs/CAPABILITIES.md` — capability model, parity checklist, app non-goals.
 - `docs/SPEC.md` — engine contracts (loop, events, SPIs, wire protocol).
 - `docs/PROVIDERS.md` — provider configs + Zen/Go auth surfaces.
-- `docs/UI-POLISH.md` — polish pass (composer/app-bar landed; remainder parked).
+- `docs/UI-POLISH.md` — polish pass (all items landed `ea2e38e` + `189b695`).
+- `docs/PERF-RE-SWEEP.md` — m15 long-session JVM stress re-sweep (PASS; off-device).
 - `docs/PARITY.md` — what was ported from opencode and what was dropped.

@@ -19,7 +19,7 @@ Legend: ✅ ported · 🟡 partial · ❌ not ported (by choice unless noted)
 | Token estimate + overflow policy | `agent/ContextPolicy.kt` | ✅ |
 | Compaction (trim + summarize) | `agent/Compaction.kt` | ✅ |
 | Session title/summary auto-gen | — | ❌ (UI can title from first message) |
-| Structured output (`json_schema`) | — | ❌ |
+| Structured output (`json_schema`) | `ResponseFormat` + `ChatRequest.responseFormat` (OpenAI adapter emits `response_format` only when set; Anthropic ignores it; host opt-in pending) | ✅ |
 | Snapshots / revert / undo / fork | `SnapshotStore` (pinned pre-images) + per-file revert + fork/rewind | ✅ |
 | Session tags / pin / archive / retention | `Session.tags/pinned/archived` + tags UI + `pruneBounded` | ✅ |
 | Per-session prompt serialization | `AgentLoop` per-session `Mutex` | ✅ |
@@ -34,8 +34,9 @@ Legend: ✅ ported · 🟡 partial · ❌ not ported (by choice unless noted)
 | Anthropic `messages` SSE | `:provider-anthropic` | ✅ |
 | `reasoning_content` / thinking deltas | both adapters | ✅ |
 | DeepSeek, OpenRouter | OpenAI adapter | ✅ |
-| OpenCode Zen/Go | OpenAI adapter (`x-opencode-session` + custom UA) | 🟡 `/chat/completions` models only |
-| Zen/Go `/messages`, `/responses`, `/models/gemini-*`, `/systemone` | — | ❌ |
+| OpenCode Zen/Go | per-model router: OpenAI adapter (`/chat/completions`) + Anthropic adapter (`/messages`); Go threads `x-opencode-session` + custom UA | ✅ `/messages` wired + fixture-tested; live Claude/GPT blocked on a paid key |
+| Zen/Go `/responses` (GPT/Grok) | `OpenCodeRoutingProvider` emits an explicit terminal `Failure` (deliberately not implemented) | ❌ by choice |
+| Zen/Go `/models/gemini-*`, `/systemone` | — | ❌ |
 | OAuth providers (Vertex, Bedrock, Copilot, GitLab, Poe…) | — | ❌ |
 | Local providers (Ollama/LM Studio style) | — | ❌ |
 | Vision / image input | `Part.File` + `supportsVision` (composer attach) | ✅ |
@@ -53,10 +54,10 @@ Legend: ✅ ported · 🟡 partial · ❌ not ported (by choice unless noted)
 | `question` | `QuestionTool` + `QuestionGate` | ✅ |
 | `task` (subagents) | `TaskTool` + `SubagentSpawner` | ✅ general + explore |
 | `websearch` | `WebSearchTool` (keyless DuckDuckGo HTML) | ✅ |
-| `skill` | — | ❌ |
+| `skill` | `SkillTool` (closed local `SKILL.md` discovery under the session cwd) | ✅ |
 | `lsp` | — | ❌ |
 | `code-mode` | — | ❌ |
-| `external-directory` | — | ❌ (sandbox is strict) |
+| `external-directory` | `ExternalDirectoryTool` (read-only; explicit user-granted roots; empty allow-list denies all) | ✅ |
 | Post-run truncation store | flat char cap | 🟡 |
 
 ## Agents & orchestration
@@ -67,7 +68,7 @@ Legend: ✅ ported · 🟡 partial · ❌ not ported (by choice unless noted)
 | Multiple primary agents (build/plan/custom) | `AgentConfig.PRIMARY` + `byName` (runtime selection) | ✅ |
 | `@init` → `AGENTS.md` | — | ❌ (no generator) |
 | Rules / reminders injection | `AgentLoop.systemPrompt` reads `<cwd>/AGENTS.md` + host rules | ✅ |
-| Agent Skills | — | ❌ |
+| Agent Skills | `skill` tool: local `SKILL.md` discovery/load (no marketplaces) | ✅ |
 | `@`-mention subagents | — | ❌ (UI concern) |
 
 ## Permissions
@@ -102,6 +103,8 @@ executor swaps.
 
 ## Gaps ranked by when they will bite
 
-1. **Zen/Go `/responses` + `/messages` routing** — needed for GPT/Grok and Claude/Qwen
-   via the gateways.
+1. **Zen/Go live Claude/GPT streams** — the routing is wired and fixture-tested
+   (`/messages` for Claude/Qwen), but the free-tier key 403s Claude/GPT on every
+   surface, so a **paid** key is required to record real streams. `/responses`
+   (GPT/Grok) is deliberately rejected, not planned.
 2. Everything else — optional ecosystem.

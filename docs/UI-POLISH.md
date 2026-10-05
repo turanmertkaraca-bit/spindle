@@ -27,6 +27,27 @@ comes first; this file is the running list so nothing is lost.
 - This was a function-first pass; a final visual/motion sweep is still parked
   (items 3–6 below).
 
+## Landed (`ea2e38e` + `189b695`, polish pass)
+
+Items 3–6 below are now done:
+
+- **Shared tokens** (`LumenTokens.kt`): `LumenShapes` (corner radii) and
+  `LumenElevation` are the single source of truth for cards, panels, chips,
+  fields and bubbles; the AMOLED/prism look is unchanged, only the literals are
+  named.
+- **Calm states** (`LumenState.kt`): one `StateHint` empty/loading/error
+  placeholder used across Home, Files, Terminal, Canvas, Settings, Diagnostics
+  and Storage, so no surface renders as a blank void (error tints it warm).
+- **Unified motion** (`LumenMotion.kt`): one expand spring + fade tween + press
+  spring + run pulse shared app-wide; still deliberately **no**
+  `animateContentSize` on growing, unbounded text. `AnimationSmoothnessTest`
+  steps the frame clock and pins that the unified specs actually animate.
+- **Screenshot sweep** (`ScreenshotTest.kt`): every screen in light **and** dark
+  (chat, Home, Files + editor + empty/loading, Terminal + empty, Canvas + empty,
+  Settings, Diagnostics + empty, Storage + empty, Key), uploaded as the
+  `lumen-screenshots` CI artifact. `189b695` was the follow-up Canvas import
+  compile fix found by CI.
+
 ## Already addressed (for reference, do not regress)
 
 - Removed the left spine rail.
@@ -45,8 +66,11 @@ comes first; this file is the running list so nothing is lost.
 2. App bar: button treatment (icons/labels), tap targets, title truncation,
    back affordance. — **landed `aaac126`**.
 3. Consistent corner radii + elevation across cards (tool, changes, todo,
-   permission, question, canvas, files). — open.
-4. Empty/loading/error states across every screen. — open.
+   permission, question, canvas, files). — **landed `ea2e38e`** (`LumenTokens`).
+4. Empty/loading/error states across every screen. — **landed `ea2e38e`**
+   (`LumenState`).
 5. Motion: unify spring specs; verify no jitter via `AnimationSmoothnessTest`.
-   — open.
-6. Screenshot sweep: every screen, light + dark, read them all. — open.
+   — **landed `ea2e38e`** (`LumenMotion`; the test steps the frame clock).
+6. Screenshot sweep: every screen, light + dark, read them all. — **landed
+   `ea2e38e` + `189b695`**; the sweep now covers every screen in both themes
+   (uploaded as the `lumen-screenshots` artifact).

@@ -33,10 +33,16 @@ Legend: `[x]` done · `[~]` partial · `[ ]` todo · `[—]` deliberately deferr
 - [x] Anthropic content-block ↔ `ProviderEvent` mapping (incl. tool_use input_json_delta).
 - [x] DeepSeek, OpenRouter, Zen, Go configs in the CLI (`buildProviders`).
 - [x] OpenCode Go: stable `x-opencode-session` header + custom `User-Agent`.
-- [ ] Per-model wire routing inside Zen/Go (Claude/Qwen/MiniMax live on `/messages`,
-      GPT/Grok on `/responses`). v1 only routes the OpenAI-compatible subset.
-      **Blocked**: needs a PAID OpenCode key to record real streams; the free tier
-      returns 403 "Model access is disabled" for Claude/GPT.
+- [x] Per-model wire routing inside Zen/Go (`1845a77`): Claude-family/Qwen →
+      `/messages` via the Anthropic adapter (`x-api-key` + `anthropic-version`;
+      Go also threads `x-opencode-session` + custom `User-Agent`). GPT/Grok
+      `/responses` targets return an explicit terminal `Failure` — `/responses`
+      is **deliberately not implemented**, not silently mis-routed. Routing is
+      fixture + unit tested.
+- [~] Live Claude/GPT streams **blocked**: needs a PAID OpenCode key to record
+      real streams; the free tier returns 403 "Model access is disabled" for
+      Claude/GPT on `/messages`, `/responses` and `/chat/completions`. Only free
+      models (`space-bunny-free`) run live, on Go `/chat/completions`.
 
 ## M3 — SQLite store — `[x]` DONE
 
@@ -119,7 +125,7 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
 - [x] `CAPABILITIES.md`: domains, parity checklist, new SPIs, non-goals.
 - [x] `PLAN.md` merge track (this section).
 
-### m12 — Core gaps (Android-free, JVM-tested) — `[~]` MOSTLY DONE
+### m12 — Core gaps (Android-free, JVM-tested) — `[x]` DONE
 
 - [x] Runtime agent selection (build/plan/explore/general).
 - [x] Rules / AGENTS.md injection.
@@ -129,8 +135,20 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
       (retry reset that keeps live token streaming — see SPEC §8).
 - [x] Per-session run serialization (`AgentLoop.prompt` holds a per-session
       `Mutex`; different sessions still run concurrently).
-- [ ] Provider routing parity: Zen/Go `/responses` + `/messages` per model.
-      **Blocked** on a paid OpenCode key (free tier 403s Claude/GPT).
+- [x] Provider routing parity: Zen/Go per-model wire routing (`1845a77`) —
+      Claude/Qwen → `/messages` via the Anthropic adapter; GPT/Grok → explicit
+      terminal `Failure` for `/responses` (**deliberately rejected**). Fixture +
+      routing tests committed. Live Claude/GPT remains **blocked** on a paid
+      OpenCode key (free tier 403s).
+- [x] Structured output opt-in (`bf86874`): `ResponseFormat(name, schemaJson,
+      strict)` + defaulted `ChatRequest.responseFormat` and
+      `AgentConfig.responseFormat`; the OpenAI-compatible adapter emits
+      `response_format` only when set (Anthropic ignores it). No host wires it
+      yet — unreachable from `:cli`/`:app`/`:server` until a host opts in.
+- [x] `skill` + `external-directory` tools (`15635e8`), registered in
+      `DefaultTools`: local `SKILL.md` discovery/load clamped under the session
+      cwd, and read-only access to explicit user-granted roots (empty allow-list
+      denies everything).
 - [x] `ApprovalPolicy` (allow/ask/deny per tool + path/command glob, persisted).
 - [x] Store: full-text search, fork/branch, rewind, persisted run state.
 - [x] Pin / archive / rename session surfaces (Home row actions; archived
@@ -176,14 +194,19 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
 - [x] Full Linux userland: Alpine (bundled) + opt-in Debian proot, behind
       `ShellExecutor`; targetSdk 28 exec exemption.
 - [x] Adaptive two-pane (tablet/foldable) — files cockpit list + editor.
+- [x] Off-device long-session stress re-sweep **PASS** (`a4807fd`,
+      `docs/PERF-RE-SWEEP.md`): 25 live OpenRouter turns, retained heap flat at
+      ~6 MB (0.00 MB/turn), fds 38→39, DB+WAL ≤192 KB, 0 errors. This is the
+      JVM harness, **not** an on-device measurement.
 - [~] On-device perf/ANR sweep: first pass clean (48–57 fps, 1–6% janky,
       p95 ≤33 ms, worst ≤200 ms only at cancel, peak heap ≤37 MB). Streaming
       perf fix has since landed (bounded tail-window rendering, no
       `animateContentSize` on growing content, 40 ms coalesced deltas, async
       rebuilds), plus the long-session stability work. A fresh on-device re-sweep
-      (battery/thermal, long-session heap/fd/DB/WAL retention) is **pending**;
-      `PerfSampler` logs a `perf:` line to diagnostics per run.
-- [x] CI green gate + screenshot evidence; APK update-in-place.
+      (battery/thermal, long-session heap/fd/DB/WAL retention) is still
+      **pending**; `PerfSampler` logs a `perf:` line to diagnostics per run.
+- [x] CI green gate + screenshot evidence (light+dark across every screen,
+      uploaded as the `lumen-screenshots` artifact); APK update-in-place.
 
 ## Risks
 
@@ -192,8 +215,10 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
   provider; re-record on failures instead of guessing. Live checks are manual.
 - **Free-tier limits** — OpenCode has no keyless path, but a free-tier key DOES
   work for **free models on `/chat/completions`** (e.g. `space-bunny-free`);
-  free tier returns 403 "Model access is disabled" for Claude/GPT, so Zen/Go
-  `/responses` + `/messages` routing stays blocked until a paid key. `:models`
+  free tier returns 403 "Model access is disabled" for Claude/GPT on
+  `/messages`, `/responses` and `/chat/completions`, so per-model routing is
+  implemented and fixture-tested but the **live** Claude/GPT paths stay blocked
+  until a paid key. `:models`
   on opencode.ai is public, so a 200 is not proof a key is valid. Live smoke
   needs a `DEEPSEEK_API_KEY` / `OPENROUTER_API_KEY` / `OPENCODE_API_KEY` /
   `ANTHROPIC_API_KEY` GitHub secret and is manual-only (`workflow_dispatch`), so

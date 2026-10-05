@@ -22,7 +22,7 @@ reconcile. The Android/Compose UI is a thin consumer of the event stream.
 | `:provider-openai` | OpenAI-compatible streaming (`chat/completions`) |
 | `:provider-anthropic` | Anthropic-style streaming (`messages`) |
 | `:store-sqlite` | durable `SessionStore` on SQLite (JDBC; Room later on Android) |
-| `:tools` | read, write, edit, bash, apply_patch, glob, grep, webfetch, todowrite, question, task |
+| `:tools` | read, write, edit, bash, apply_patch, glob, grep, webfetch, websearch, todowrite, question, task, skill, external-directory |
 | `:cli` | headless harness + live smoke tests |
 
 `:core` has **no Android dependencies**, so the whole backend is testable on a plain
@@ -31,9 +31,14 @@ JVM (including GitHub Actions).
 ## Status
 
 Backend is feature-complete, and the native Android/Compose app (`:app`,
-`dev.lumen.app`) is built on it: streaming providers, durable sessions, 12 tools,
-subagent delegation, retries, cancellation, per-session prompt serialization,
-and context compaction. See `docs/HANDOFF.md` (read first), `docs/PLAN.md`,
+`dev.lumen.app`) is built on it: streaming providers with per-model Zen/Go
+routing (Claude/Qwen → `/messages`; GPT/Grok `/responses` deliberately
+rejected), durable sessions, 14 tools (incl. `skill` + read-only
+`external-directory`), opt-in `json_schema` structured output (engine-only; no
+host opts in yet), subagent delegation, retries, cancellation, per-session
+prompt serialization, and context compaction. The UI has had its polish pass
+(shared tokens/motion, calm empty/loading/error states; light+dark screenshot
+sweep over every screen). See `docs/HANDOFF.md` (read first), `docs/PLAN.md`,
 `docs/SPEC.md` and `docs/PARITY.md` (what we ported from opencode and what we
 deliberately did not).
 
@@ -50,8 +55,10 @@ There is no keyless path — live calls always need a key. A paid
 `OPENROUTER_API_KEY` (and the committed recorded SSE fixtures) is the primary
 verified path; an OpenCode free-tier key also works for **free models on
 `/chat/completions`** (e.g. `--provider opencode-go --model space-bunny-free`),
-but the free tier 403s Claude/GPT, so Zen/Go `/responses` + `/messages` routing
-stays blocked on a paid key.
+but the free tier 403s Claude/GPT on every surface, so the **live** Zen/Go
+`/messages` (Claude/Qwen) and `/responses` (GPT/Grok) paths stay blocked on a
+paid key. Routing itself is wired and fixture-tested; `/responses` is
+deliberately rejected, not mis-routed.
 
 ```
 ./gradlew :cli:run --args="--provider openrouter --model openrouter/auto --prompt \"...\" --yes"

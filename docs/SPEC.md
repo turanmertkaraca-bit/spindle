@@ -215,6 +215,13 @@ data class ToolSpec(
     val parametersJson: String,    // JSON Schema object, as text
 )
 
+@Serializable
+data class ResponseFormat(
+    val name: String,        // response_format.json_schema.name
+    val schemaJson: String,  // raw JSON Schema text, parsed at request time
+    val strict: Boolean = true,
+)
+
 data class ChatRequest(
     val model: String,
     val system: String,
@@ -225,8 +232,19 @@ data class ChatRequest(
     val reasoningEffort: String? = null,  // ignored by adapters that lack it
     val thinking: Boolean? = null,        // explicit thinking mode (DeepSeek)
     val sessionHint: String? = null,      // stable per-conversation id (Go)
+    val responseFormat: ResponseFormat? = null,  // opt-in; see below
 )
 ```
+
+### 3.2.1 Structured output (opt-in)
+
+`responseFormat` is `null` by default, leaving every adapter request body
+unchanged. Threaded `AgentConfig.responseFormat` → `Wire.request` →
+`ChatRequest.responseFormat`. When set, the **OpenAI-compatible** adapter emits
+`response_format: {type: json_schema, json_schema: {name, schema, strict}}`;
+malformed `schemaJson` omits the key rather than failing. `:provider-anthropic`
+ignores the field entirely. No host (`:cli`, `:app`, `:server`) opts in yet, so it
+is not reachable from any shipped entry point.
 
 ### 3.3 Provider
 
@@ -326,9 +344,12 @@ optimization.
 ### 4.2 Provider → wire format
 
 `chat/completions` is used by DeepSeek, OpenRouter, and the OpenAI-capable models
-of Zen/Go. `messages` (Anthropic) is used by models that only speak that shape on
-Zen/Go. `responses` is listed by the Zen/Go docs as an available surface; spindle
-v1 does **not** target it (see §13).
+of Zen/Go. `messages` (Anthropic) is used by Claude-family/Qwen models on Zen/Go.
+`responses` is listed by the Zen/Go docs as an available surface; spindle v1 does
+**not** implement it and rejects it explicitly (see §13). Routing is per model
+via `OpenCodeRouter` (pure, side-effect-free); the `OpenCodeRoutingProvider`
+composite in `:cli` dispatches `/messages` to the Anthropic adapter and returns a
+terminal `Failure` for `/responses`.
 
 | provider | default wire | accepts tools | notes |
 |---|---|---|---|
@@ -517,6 +538,8 @@ All paths are resolved against `ctx.cwd` and must remain inside it (see §12).
 | `grep` | `{pattern:string, path?:string, include?:string, context?:int}` → matching lines with `file:line` prefixes. |
 | `todowrite` | `{todos:[{content:string, status:string}]}` → replaces the session todo list; emits state to the store. |
 | `question` | `{question:string, options:[string], multiple?:bool}` → suspends for the user's answer via `ctx.ask`, returns the selection. |
+| `skill` | `{name?:string}` → omit `name` to list local skills (directories under the skills root holding a `SKILL.md`); pass an id/name to load its instructions. Root defaults to `.opencode/skills` and is clamped inside `ctx.cwd`. |
+| `external-directory` | `{op:"list"|"stat"|"read", path:string, offset?:int, limit?:int}` → read-only access under explicit user-granted roots outside `ctx.cwd`; every path is canonicalized and refused unless it lands under a granted root. An empty allow-list denies everything. |
 
 Notes:
 
@@ -527,6 +550,10 @@ Notes:
   maps onto `SessionStore.setTodos`.
 - `question` is passive: it never mutates the repo and exists to resolve genuine
   ambiguity instead of guessing.
+- `skill` never reads outside the (cwd-clamped) skills root and never follows
+  symlinks; `external-directory` is read-only and cannot become a general sandbox
+  escape. Both are **opt-in at the host**: `DefaultTools.registry(skillsRoot,
+  externalRoots)`; with no granted external roots the tool denies every request.
 
 ---
 
@@ -758,13 +785,23 @@ These are explicit non-goals. They are not bugs; do not build them now.
   and closed.
 - **Plugins** — no dynamic loading, no hook system, no third-party extension
   points.
-- **Structured output / `skill` / `external-directory`** — deferred; the tool set
-  is closed and `json_schema` output is not targeted.
+- **Structured output beyond the opt-in path** — `json_schema` output is now
+  implemented as an opt-in engine capability (§3.2.1), **not dropped**. What is
+  still out of scope: wiring it into any host, provider-agnostic translation
+  (only the OpenAI-compatible adapter honours it), and schema validation of the
+  model's returned JSON.
+- **`skill` marketplaces / `external-directory` writes** — the `skill` tool loads
+  only local `SKILL.md` files under the session cwd; `external-directory` is
+  read-only over explicit user-granted roots. No plugin/marketplace fetches and
+  no writes outside the sandbox.
 - **Compaction beyond trim + summarize** — no hierarchical/embeddings-based
   memory. When context pressure arrives, the only allowed strategy is trimming old
   parts plus a single summarization pass.
-- **`/responses` wire surface** — Zen/Go advertise it; v1 targets
-  `chat/completions` and `messages` only. Per-model routing parity is **blocked**
-  on a paid OpenCode key (free tier 403s Claude/GPT).
+- **`/responses` wire surface** — Zen/Go advertise it for GPT/Grok; v1 implements
+  `chat/completions` and `messages` (Claude-family/Qwen) only. `/responses` is
+  **intentionally rejected**, not merely deferred: `OpenCodeRoutingProvider`
+  returns an explicit terminal `Failure` rather than guessing the wire format.
+  Live Claude/GPT streams are separately **blocked** on a paid OpenCode key (free
+  tier 403s `messages`/`responses`/`chat/completions` for Claude/GPT).
 - **Parallel tool execution** — tools run sequentially in call order.
 - **ULID ids / cross-process uniqueness** — `Ids.new` is process-monotonic only.
