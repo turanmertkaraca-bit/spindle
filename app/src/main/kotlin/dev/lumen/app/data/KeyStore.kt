@@ -118,9 +118,13 @@ class KeyStore(context: Context) {
             ?.filter { it.isNotEmpty() }
             ?.toSet()
             ?: emptySet()
-        set(value) = prefs.edit()
-            .putString("allowedPatterns", value.filter { it.isNotBlank() }.joinToString(PATTERN_DELIM))
-            .apply()
+        set(value) {
+            // Bounded so a very long-lived install cannot grow the pref without
+            // limit; the oldest "always allow" entries fall off first (the set is
+            // insertion-ordered), which merely re-prompts for them later.
+            val capped = value.filter { it.isNotBlank() }.takeLast(MAX_ALLOWED_PATTERNS)
+            prefs.edit().putString("allowedPatterns", capped.joinToString(PATTERN_DELIM)).apply()
+        }
 
     val hasKey: Boolean get() = !apiKey.isNullOrBlank()
 
@@ -129,6 +133,9 @@ class KeyStore(context: Context) {
 
         /** Unit separator: cannot occur in tool names, commands or paths we store. */
         private const val PATTERN_DELIM = "\u001F"
+
+        /** Most remembered "always allow" scope keys retained; oldest drop first. */
+        const val MAX_ALLOWED_PATTERNS = 200
 
         /**
          * The model id is `<provider>/<model id>`. OpenRouter model ids may

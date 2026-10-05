@@ -92,6 +92,13 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
     private var ftsReady = false
 
     /**
+     * FTS row rewrites since the last `optimize`. `DELETE`/`INSERT` on an FTS5
+     * table leaves tombstones until a merge, so a long session needs periodic
+     * optimization; the counter avoids doing it after every tiny run.
+     */
+    private var ftsWrites = 0
+
+    /**
      * Run [block] on the IO dispatcher under the store mutex, after ensuring the
      * optional FTS index exists. Every suspend entry point funnels through here.
      */
@@ -159,17 +166,24 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
                     arrayOf(message.id.value, message.sessionId.value, message.role.name, body),
                 )
             }
+            ftsWrites++
         }
     }
 
     private fun ftsDeleteMessage(messageId: String) {
         if (!ftsReady) return
-        runCatching { db.delete("message_fts", "message_id=?", arrayOf(messageId)) }
+        runCatching {
+            db.delete("message_fts", "message_id=?", arrayOf(messageId))
+            ftsWrites++
+        }
     }
 
     private fun ftsDeleteSession(sessionId: String) {
         if (!ftsReady) return
-        runCatching { db.delete("message_fts", "session_id=?", arrayOf(sessionId)) }
+        runCatching {
+            db.delete("message_fts", "session_id=?", arrayOf(sessionId))
+            ftsWrites++
+        }
     }
 
     // ---- sessions ----
@@ -225,6 +239,9 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
         db.delete("parts", "session_id=?", arrayOf(id.value))
         db.delete("messages", "session_id=?", arrayOf(id.value))
         db.delete("todos", "session_id=?", arrayOf(id.value))
+        // Snapshots are large whole-file copies; a deleted session must not leave
+        // them orphaned in the shared DB forever.
+        db.delete("snapshots", "session_id=?", arrayOf(id.value))
         ftsDeleteSession(id.value)
         db.delete("sessions", "id=?", arrayOf(id.value))
     }
@@ -468,6 +485,27 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
         gone.size
     }
 
+    /**
+     * Fold FTS tombstones left by message rewrites/compaction and truncate the
+     * WAL. Called at the end of a run so a very long session cannot grow the
+     * index or the `-wal` file without bound.
+     */
+    override suspend fun maintain() {
+        locked {
+            // Only merge when enough rewrites have accumulated; calling optimize
+            // on every run would make a subagent-heavy session pay O(index) each time.
+            if (ftsReady && ftsWrites >= FTS_OPTIMIZE_AFTER) {
+                runCatching {
+                    db.execSQL("INSERT INTO message_fts(message_fts) VALUES('optimize')")
+                    ftsWrites = 0
+                }
+            }
+            runCatching {
+                db.rawQuery("PRAGMA wal_checkpoint(TRUNCATE)", null).use { it.moveToFirst() }
+            }
+        }
+    }
+
     override fun close() {
         // Guard with the mutex so a close cannot race an in-flight worker query.
         runBlocking {
@@ -554,5 +592,8 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
     private companion object {
         /** Stay well under SQLite's bound-variable limit for old devices. */
         const val SQLITE_PARAM_BATCH = 900
+
+        /** FTS rewrites tolerated before an `optimize` merges the tombstones. */
+        const val FTS_OPTIMIZE_AFTER = 128
     }
 }

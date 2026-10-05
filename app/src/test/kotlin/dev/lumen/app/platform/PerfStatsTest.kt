@@ -38,4 +38,23 @@ class PerfStatsTest {
         assertTrue(line.contains("2 frames"), line)
         assertTrue(line.contains("peak heap 7MB"), line)
     }
+
+    @Test
+    fun `frame samples stop growing at the cap but keep counting`() {
+        val samples = FrameSamples(maxSamples = 3)
+        samples.add(16_000_000L)
+        samples.add(40_000_000L)
+        samples.add(16_000_000L)
+        assertEquals(3, samples.size)
+        assertTrue(samples.saturated)
+
+        samples.add(1_000_000_000L)
+        assertEquals(3, samples.size, "retained samples must never exceed the cap")
+        val summary = samples.summary(peakHeapMb = 5)
+        assertEquals(4, summary.frames, "frames past the cap are still counted")
+        assertEquals(1_000.0, summary.worstMs, "the worst frame past the cap is remembered")
+
+        samples.reset()
+        assertEquals(0, samples.size)
+    }
 }

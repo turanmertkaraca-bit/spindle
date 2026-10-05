@@ -89,6 +89,55 @@ class AndroidSnapshotStore internal constructor(private val shared: AndroidDatab
         removed
     }
 
+    /**
+     * Bounded retention across every session. Age is applied first, then the
+     * per-session cap, then the global cap, all in one transaction so a long
+     * session cannot exhaust storage with whole-file snapshots.
+     */
+    override suspend fun pruneBounded(keepPerSession: Int, maxTotal: Int, maxAgeMillis: Long): Int = locked {
+        var removed = 0
+        db.beginTransaction()
+        try {
+            if (maxAgeMillis > 0) {
+                val cutoff = System.currentTimeMillis() - maxAgeMillis
+                removed += db.delete("snapshots", "created_at < ?", arrayOf(cutoff.toString()))
+            }
+            if (keepPerSession >= 0) {
+                val sessions = db.rawQuery("SELECT DISTINCT session_id FROM snapshots", null).use { c ->
+                    buildList { while (c.moveToNext()) add(c.getString(0)) }
+                }
+                for (sid in sessions) {
+                    val ids = db.rawQuery(
+                        "SELECT id FROM snapshots WHERE session_id=? ORDER BY created_at DESC, rowid DESC",
+                        arrayOf(sid),
+                    ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+                    ids.drop(keepPerSession).forEach { db.delete("snapshots", "id=?", arrayOf(it)); removed++ }
+                }
+            } else {
+                removed += db.delete("snapshots", null, null)
+            }
+            if (maxTotal >= 0) {
+                val count = db.rawQuery("SELECT COUNT(*) FROM snapshots", null).use { c ->
+                    if (c.moveToFirst()) c.getInt(0) else 0
+                }
+                val excess = count - maxTotal
+                if (excess > 0) {
+                    val ids = db.rawQuery(
+                        "SELECT id FROM snapshots ORDER BY created_at ASC, rowid ASC LIMIT ?",
+                        arrayOf(excess.toString()),
+                    ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+                    ids.forEach { db.delete("snapshots", "id=?", arrayOf(it)); removed++ }
+                }
+            } else if (maxTotal < 0) {
+                removed += db.delete("snapshots", null, null)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        removed
+    }
+
     override fun close() {
         // Guard with the mutex so a close cannot race an in-flight worker query.
         kotlinx.coroutines.runBlocking {

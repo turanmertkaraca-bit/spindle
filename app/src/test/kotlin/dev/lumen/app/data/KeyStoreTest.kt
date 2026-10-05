@@ -37,6 +37,16 @@ class KeyStoreTest {
     }
 
     @Test
+    fun `allowed patterns are capped to the newest entries`() {
+        val store = newStore()
+        store.allowedPatterns = (1..KeyStore.MAX_ALLOWED_PATTERNS + 25).map { "cmd$it" }.toSet()
+        val persisted = newStore().allowedPatterns
+        assertEquals(KeyStore.MAX_ALLOWED_PATTERNS, persisted.size)
+        assertTrue("cmd1" !in persisted, "the oldest pattern drops off")
+        assertTrue("cmd${KeyStore.MAX_ALLOWED_PATTERNS + 25}" in persisted, "the newest is kept")
+    }
+
+    @Test
     fun `agent mode defaults to build and round-trips`() {
         val store = newStore()
         assertEquals("build", store.agentMode)

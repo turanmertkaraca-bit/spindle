@@ -8,6 +8,7 @@ import dev.spindle.core.model.PartId
 import dev.spindle.core.model.Role
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
+import dev.spindle.core.model.Snapshot
 import dev.spindle.core.model.ToolCall
 import dev.spindle.core.model.ToolResult
 import dev.spindle.core.model.ToolState
@@ -121,6 +122,21 @@ class AndroidSessionStoreTest {
     }
 
     @Test
+    fun `delete frees the session's snapshots too`() = runTest {
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val store = AndroidSessionStore(database)
+        val snapshots = AndroidSnapshotStore(database)
+        store.createSession(Session(SessionId("ses_snap"), "t", "/tmp", 0, 0))
+        snapshots.record(Snapshot("snap_1", SessionId("ses_snap"), "a.kt", "old", "h", 1L))
+        assertEquals(1, snapshots.forSession(SessionId("ses_snap")).size)
+
+        store.deleteSession(SessionId("ses_snap"))
+
+        assertEquals(0, snapshots.forSession(SessionId("ses_snap")).size)
+        store.close()
+    }
+
+    @Test
     fun `search finds message text and forgets deleted sessions`() = runTest {
         newStore().use { store ->
             store.createSession(Session(SessionId("ses6"), "t", "/tmp", 0, 0))
@@ -137,6 +153,21 @@ class AndroidSessionStoreTest {
 
             store.deleteSession(SessionId("ses6"))
             assertTrue(store.search("needle").isEmpty(), "the index drops deleted sessions")
+        }
+    }
+
+    @Test
+    fun `maintenance keeps the index searchable`() = runTest {
+        newStore().use { store ->
+            store.createSession(Session(SessionId("ses_maint"), "t", "/tmp", 0, 0))
+            store.appendMessage(
+                Message(
+                    MessageId("mm1"), SessionId("ses_maint"), Role.ASSISTANT, createdAt = 1,
+                    parts = listOf(Part.Text(PartId("mp1"), "maintenance needle")),
+                ),
+            )
+            store.maintain()
+            assertEquals(1, store.search("needle").size, "an optimized index is still searchable")
         }
     }
 

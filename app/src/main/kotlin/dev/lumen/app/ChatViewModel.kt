@@ -10,6 +10,7 @@ import dev.lumen.app.platform.AndroidShellExecutor
 import dev.lumen.app.platform.AndroidTerminal
 import dev.lumen.app.platform.DebianEnvironment
 import dev.lumen.app.platform.PerfSampler
+import dev.lumen.app.platform.PerfSummary
 import dev.lumen.app.platform.RunService
 import dev.lumen.app.platform.WorkspaceWatcher
 import dev.lumen.app.ui.model.StepKind
@@ -313,6 +314,8 @@ class ChatViewModel(
      * mid-run would clobber the live run's persisted state.
      */
     private val runningSessions: MutableSet<String>? = null,
+    /** Test seam: overrides the frame sampler so teardown can be asserted. */
+    private val perf: PerfSampler = PerfSampler(),
 ) : ViewModel() {
 
     private val bus: EventBus = eventBus
@@ -366,6 +369,14 @@ class ChatViewModel(
      */
     private var runGeneration = 0
 
+    /**
+     * The run generation that currently owns [perf], or 0 when none. Guarded by
+     * [perfLock]; lets a superseded run's teardown refuse to stop the sampler
+     * that a newer run already started.
+     */
+    private val perfLock = Any()
+    private var perfGeneration = 0
+
     /** Bumped on every session switch so a slow `openSession` cannot land stale. */
     private var sessionOpenToken = 0
 
@@ -384,8 +395,53 @@ class ChatViewModel(
         WorkspaceWatcher(workspace.toFile(), runScope ?: viewModelScope) { changed -> absorbIndirect(changed) }
     }
 
-    /** Frame/heap sampler for the on-device perf sweep; reports one diag line per run. */
-    private val perf = PerfSampler()
+    /**
+     * Start the frame sampler and record which run owns it, so a superseded
+     * run's teardown can tell whether the live sampler is still its own.
+     */
+    private fun startPerf(generation: Int) {
+        synchronized(perfLock) { perfGeneration = generation }
+        runCatching { perf.start() }
+    }
+
+    /**
+     * Stop the sampler only if [generation] still owns it. A superseding run
+     * owns the sampler now, so the old run's `finally` must not stop it.
+     */
+    private fun stopPerf(generation: Int): PerfSummary? {
+        val owned = synchronized(perfLock) {
+            if (perfGeneration == generation) {
+                perfGeneration = 0
+                true
+            } else {
+                false
+            }
+        }
+        return if (owned) runCatching { perf.stop() }.getOrNull() else null
+    }
+
+    /**
+     * Stop the live sampler if a run owns one. [stop]/[onCleared] are
+     * authoritative for the whole ViewModel, so they do not care which run it
+     * is — only that one is live (a no-op otherwise, avoiding a duplicate
+     * summary).
+     */
+    private fun stopPerfNow(): PerfSummary? {
+        val owned = synchronized(perfLock) {
+            if (perfGeneration != 0) {
+                perfGeneration = 0
+                true
+            } else {
+                false
+            }
+        }
+        return if (owned) runCatching { perf.stop() }.getOrNull() else null
+    }
+
+    /** Record a sampler summary in diagnostics when a run actually sampled frames. */
+    private fun reportPerf(summary: PerfSummary?) {
+        summary?.let { if (it.frames > 0) diag(it.line()) }
+    }
 
     /** Record externally-changed paths as change rows the user can see and open. */
     private fun absorbIndirect(paths: Set<String>) {
@@ -399,7 +455,7 @@ class ChatViewModel(
         for (path in fresh) {
             next += FileEdit(id = Ids.new("chg"), sessionId = sid, path = path, at = System.currentTimeMillis())
         }
-        _state.value = current.copy(changes = next)
+        _state.value = current.copy(changes = next.bounded())
     }
 
     // ---- interactive gates ----
@@ -889,6 +945,7 @@ class ChatViewModel(
                 ),
             )
             if (token != sessionOpenToken) return@launch
+            resetSessionCaches()
             replaceTimeline(emptyList())
             _state.value = _state.value.copy(
                 currentSessionId = id.value,
@@ -916,6 +973,9 @@ class ChatViewModel(
             val messages = store.messages(sid)
             val session = store.session(sid)
             if (token != sessionOpenToken) return@launch
+            // Drop the previous session's subagent caches *before* enrich, so
+            // the new session's own children are cached, not immediately wiped.
+            resetSessionCaches()
             val steps = enrich(StepMapper.fromMessages(messages))
             replaceTimeline(steps)
             _state.value = _state.value.copy(
@@ -940,6 +1000,7 @@ class ChatViewModel(
      */
     fun closeChat() {
         sessionOpenToken++
+        resetSessionCaches()
         replaceTimeline(emptyList())
         _state.value = _state.value.copy(
             currentSessionId = null,
@@ -1689,10 +1750,22 @@ class ChatViewModel(
     /** Open a changed file in the peek sheet (workspace-relative path). */
     fun openChangedFile(path: String) = openFile(path)
 
-    /** Test/teardown seam: record a structured change without a full run. */
-    internal fun recordChange(edit: FileEdit) {
-        _state.value = _state.value.copy(changes = _state.value.changes + edit)
+    /**
+     * Append one change row, keeping only the most recent [MAX_RUN_CHANGES] so a
+     * long session with thousands of edits cannot grow the Changes card without
+     * bound. Per-file revert still works for every retained row (and the
+     * snapshot store is unaffected).
+     */
+    private fun addChange(edit: FileEdit) {
+        _state.value = _state.value.copy(changes = (_state.value.changes + edit).bounded())
     }
+
+    /** Cap an edit list to its most recent [MAX_RUN_CHANGES] rows. */
+    private fun RunChanges.bounded(): RunChanges =
+        if (edits.size <= MAX_RUN_CHANGES) this else RunChanges(edits = edits.takeLast(MAX_RUN_CHANGES))
+
+    /** Test/teardown seam: record a structured change without a full run. */
+    internal fun recordChange(edit: FileEdit) = addChange(edit)
 
     // ---- chat ----
 
@@ -1727,8 +1800,7 @@ class ChatViewModel(
                     diag("budget: $pct% used")
                     _state.value = _state.value.copy(hint = "cost budget ${pct}% used")
                 }
-                is AgentEvent.FileEdited -> _state.value =
-                    _state.value.copy(changes = _state.value.changes + e.edit)
+                is AgentEvent.FileEdited -> addChange(e.edit)
                 is AgentEvent.StateChanged -> {
                     val busy = e.state == dev.spindle.core.model.SessionState.RUNNING
                     // A state change is authoritative: flush whatever streamed
@@ -1858,15 +1930,38 @@ class ChatViewModel(
      */
     private val expandedChildren: MutableSet<String> = ConcurrentHashMap.newKeySet<String>()
 
+    /**
+     * Drop every session-scoped subagent cache. Called on session open/new/close
+     * (and ViewModel teardown) so a long-lived process does not accumulate every
+     * subagent transcript of every session it has ever shown.
+     */
+    private fun resetSessionCaches() {
+        childCache.clear()
+        expandedChildren.clear()
+    }
+
     private suspend fun enrich(steps: List<UiStep>): List<UiStep> = steps.map { step ->
         val child = step.childId ?: return@map step
-        val kids = childCache.getOrPut(child) {
-            runCatching { StepMapper.fromMessages(store.messages(SessionId(child))) }.getOrDefault(emptyList())
-        }
+        val kids = childSteps(child)
         step.copy(
             rows = kids.take(8).map { it.label to it.summary },
             childSteps = if (child in expandedChildren) kids else emptyList(),
         )
+    }
+
+    /**
+     * Read (and cache) one subagent's transcript. The cache is cleared on every
+     * session switch and capped at [MAX_CHILD_CACHE], so a session that spawns
+     * an unbounded number of subagents still cannot grow it forever; an evicted
+     * transcript is simply re-read from the store on demand.
+     */
+    private suspend fun childSteps(child: String): List<UiStep> {
+        childCache[child]?.let { return it }
+        val loaded = runCatching { StepMapper.fromMessages(store.messages(SessionId(child))) }
+            .getOrDefault(emptyList())
+        if (childCache.size >= MAX_CHILD_CACHE) childCache.clear()
+        childCache[child] = loaded
+        return loaded
     }
 
     /** Load a subagent's full transcript (on tap) and attach it to the row. */
@@ -1887,9 +1982,7 @@ class ChatViewModel(
         expandedChildren += child
         patch { it.copy(childLoading = true) }
         viewModelScope.launch {
-            val kids = runCatching { StepMapper.fromMessages(store.messages(SessionId(child))) }
-                .getOrDefault(emptyList())
-            childCache[child] = kids
+            val kids = childSteps(child)
             // Re-attach in both the raw list and the enriched view; enrich() will
             // also pick this up on the next rebuild via childCache.
             patch { it.copy(childSteps = kids, childLoading = false) }
@@ -1991,7 +2084,7 @@ class ChatViewModel(
                 snapshots = snapshots,
             )
             try {
-                runCatching { perf.start() }
+                startPerf(generation)
                 withContext(Dispatchers.IO) { runCatching { watcher?.start() } }
                 loop.prompt(
                     sid, text, keys.model, _state.value.agentMode,
@@ -2017,9 +2110,13 @@ class ChatViewModel(
                     runningSessionId = null
                     runningSessions?.remove(sid.value)
                     watcher?.stop()
-                    runCatching { perf.stop() }.getOrNull()?.let { if (it.frames > 0) diag(it.line()) }
                     context?.let { ctx -> runCatching { RunService.stop(ctx) } }
                 }
+                // The sampler is stopped on EVERY end path (normal finish, stop,
+                // cancellation, superseding send). A superseded run no longer
+                // owns the live sampler, so stopPerf is a no-op for it and can
+                // never tear down the run that replaced it.
+                reportPerf(stopPerf(generation))
             }
             if (generation == runGeneration) refreshSessions()
         }
@@ -2036,6 +2133,9 @@ class ChatViewModel(
         clearAsks()
         watcher?.stop()
         context?.let { ctx -> runCatching { RunService.stop(ctx) } }
+        // stop() is authoritative: kill the live sampler even though the run's
+        // own finally now sees a bumped generation and would skip it.
+        reportPerf(stopPerfNow())
         diag("run stopped")
         _state.value = _state.value.copy(busy = false, ask = null)
     }
@@ -2048,6 +2148,11 @@ class ChatViewModel(
         // screen-bound resources are reaped.
         watcher?.stop()
         terminal.shutdown()
+        // Never leave a Choreographer callback alive past this ViewModel.
+        reportPerf(stopPerfNow())
+        // The subagent caches are session state; a destroyed ViewModel must not
+        // pin any of it.
+        resetSessionCaches()
     }
 
     private fun oneLine(s: String, max: Int): String =
@@ -2083,6 +2188,18 @@ class ChatViewModel(
 
         /** Upper bound on retained diagnostics lines. */
         const val MAX_DIAG_LINES = 300
+
+        /**
+         * Upper bound on change rows retained per session for the Changes card.
+         * Older rows are dropped; the snapshot store keeps revert available.
+         */
+        const val MAX_RUN_CHANGES = 500
+
+        /**
+         * Upper bound on cached subagent transcripts before the cache resets, so
+         * a session that spawns many subagents cannot grow it without bound.
+         */
+        private const val MAX_CHILD_CACHE = 256
 
         /** Longest normalized tag accepted; longer input is truncated. */
         const val MAX_TAG_LENGTH = 32
