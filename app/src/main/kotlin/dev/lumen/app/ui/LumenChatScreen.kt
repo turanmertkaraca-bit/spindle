@@ -481,8 +481,8 @@ fun LumenChatScreen(
                             LazyColumn(
                                 state = listState,
                                 flingBehavior = flingBehavior,
-                                contentPadding = PaddingValues(start = 8.dp, end = 12.dp, top = 14.dp, bottom = 16.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                                contentPadding = PaddingValues(start = 8.dp, end = 12.dp, top = 12.dp, bottom = 14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
                                 modifier = Modifier.fillMaxSize().testTag("timeline"),
                             ) {
                                 itemsIndexed(display, key = { _, s -> s.id }) { index, step ->
@@ -604,15 +604,15 @@ private fun NewCue(colors: LumenColors, onClick: () -> Unit) {
             .shadow(LumenElevation.floating, LumenShapes.pill)
             .clip(LumenShapes.pill)
             .background(colors.surface)
-            .border(1.dp, edge.copy(alpha = 0.35f), LumenShapes.pill)
+            .border(1.dp, edge.copy(alpha = 0.22f), LumenShapes.pill)
             .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .padding(horizontal = 11.dp, vertical = 5.dp)
             .testTag("new-cue"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             "\u2193 new",
-            color = colors.water, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 0.6.sp,
+            color = colors.water, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.6.sp,
         )
     }
 }
@@ -715,14 +715,12 @@ private fun MessageRow(
                         if (isYou) {
                             Modifier
                                 .background(colors.surface, bubbleShape)
-                                .border(1.dp, colors.rule, bubbleShape)
+                                .border(1.dp, colors.rule.copy(alpha = 0.55f), bubbleShape)
                         } else {
-                            Modifier
-                                .background(colors.surface, bubbleShape)
-                                .border(1.dp, colors.spectrum.getOrElse(2) { colors.water }.copy(alpha = 0.20f), bubbleShape)
+                            Modifier.background(colors.surface, bubbleShape)
                         },
                     )
-                    .padding(start = if (isYou) 13.dp else 15.dp, end = 13.dp, top = 12.dp, bottom = 12.dp),
+                    .padding(start = if (isYou) 12.dp else 13.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
             ) {
                 // role stamp for agent turns (double-tap it to copy the body)
                 if (!isYou) {
@@ -750,12 +748,12 @@ private fun MessageRow(
                             fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 1.2.sp,
                         )
                     }
-                    Spacer(Modifier.height(6.dp))
+                    Spacer(Modifier.height(5.dp))
                 }
 
                 if (step.think != null) {
                     ThinkSection(step.think, colors)
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(6.dp))
                 }
 
                 if (isYou && step.images.isNotEmpty()) {
@@ -1133,21 +1131,20 @@ private fun ToolCardFrame(
             .shadow(LumenElevation.card, shape)
             .clip(shape)
             .background(colors.surface)
-            .border(1.dp, accentForStatic.copy(alpha = 0.22f), shape)
             .drawBehind {
                 val accent = accentForDraw()
-                val x = 1.5.dp.toPx()
+                val x = 1.dp.toPx()
                 drawLine(
                     color = accent,
                     start = Offset(x, 0f),
                     end = Offset(x, size.height),
-                    strokeWidth = 3.dp.toPx(),
+                    strokeWidth = 2.dp.toPx(),
                 )
             }
             .testTag("tool-card"),
     ) {
         if (step.think != null) {
-            Box(Modifier.padding(start = 10.dp, end = 10.dp, top = 8.dp)) {
+            Box(Modifier.padding(start = 10.dp, end = 10.dp, top = 6.dp)) {
                 ThinkSection(step.think, colors)
             }
         }
@@ -1155,7 +1152,7 @@ private fun ToolCardFrame(
             Modifier
                 .fillMaxWidth()
                 .clickable { onToggle() }
-                .padding(start = 11.dp, end = 10.dp, top = 9.dp, bottom = if (errorLine != null) 4.dp else 9.dp)
+                .padding(start = 10.dp, end = 9.dp, top = 8.dp, bottom = if (errorLine != null) 3.dp else 8.dp)
                 .testTag("tools-toggle"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1184,7 +1181,7 @@ private fun ToolCardFrame(
                 fontFamily = Mono, fontSize = 10.5.sp, lineHeight = 14.sp,
                 maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
-                    .padding(start = 11.dp, end = 10.dp, bottom = 9.dp)
+                    .padding(start = 10.dp, end = 9.dp, bottom = 8.dp)
                     .testTag("tool-error"),
             )
         }
@@ -1505,14 +1502,13 @@ private fun TodoBoard(todos: List<TodoItem>, colors: LumenColors, pulse: () -> F
             .padding(horizontal = 12.dp, vertical = 4.dp)
             .shadow(LumenElevation.card, shape)
             .clip(shape)
-            .background(colors.surface)
-            .border(1.dp, edge.copy(alpha = 0.22f), shape),
+            .background(colors.surface),
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
                 .clickable { expanded = !expanded }
-                .padding(horizontal = 12.dp, vertical = 9.dp)
+                .padding(horizontal = 12.dp, vertical = 7.dp)
                 .testTag("todo-toggle"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1599,12 +1595,11 @@ private fun ToolStatusPill(failed: Boolean, running: Boolean, loading: Boolean, 
     }
     Text(
         label,
-        color = tint, fontFamily = Mono, fontSize = 9.5.sp, letterSpacing = 0.6.sp,
+        color = tint.copy(alpha = 0.9f), fontFamily = Mono, fontSize = 9.sp, letterSpacing = 0.4.sp,
         modifier = Modifier
             .clip(LumenShapes.pill)
-            .background(tint.copy(alpha = 0.14f))
-            .border(1.dp, tint.copy(alpha = 0.35f), LumenShapes.pill)
-            .padding(horizontal = 7.dp, vertical = 2.dp)
+            .background(tint.copy(alpha = 0.10f))
+            .padding(horizontal = 6.dp, vertical = 1.5.dp)
             .testTag("tool-status"),
     )
 }
@@ -1878,14 +1873,13 @@ private fun ChangesCard(
             .padding(horizontal = 12.dp, vertical = 4.dp)
             .shadow(LumenElevation.card, shape)
             .clip(shape)
-            .background(colors.surface)
-            .border(1.dp, edge.copy(alpha = 0.22f), shape),
+            .background(colors.surface),
     ) {
         Row(
             Modifier
                 .fillMaxWidth()
                 .clickable { expanded = !expanded }
-                .padding(horizontal = 12.dp, vertical = 9.dp)
+                .padding(horizontal = 12.dp, vertical = 7.dp)
                 .testTag("changes-toggle"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -2202,15 +2196,15 @@ private fun Composer(
         }
         Row(
             Modifier.fillMaxWidth().background(colors.bg)
-                .padding(start = 16.dp, end = 14.dp, top = 8.dp),
+                .padding(start = 16.dp, end = 14.dp, top = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             AgentModeChip("build", "agent-build", agentMode == "build", colors.water, colors, onAgentMode)
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(6.dp))
             AgentModeChip("plan", "agent-plan", agentMode == "plan", colors.accent, colors, onAgentMode)
             if (agentMode == "plan") {
-                Spacer(Modifier.width(10.dp))
-                Text("read-only plan", color = colors.accent, fontFamily = Mono, fontSize = 10.5.sp)
+                Spacer(Modifier.width(8.dp))
+                Text("read-only plan", color = colors.accent.copy(alpha = 0.75f), fontFamily = Mono, fontSize = 10.sp)
             }
         }
         Box(
@@ -2225,22 +2219,22 @@ private fun Composer(
         FileSuggestions(suggestions, colors, pickSuggestion)
         Row(
             Modifier.fillMaxWidth().background(colors.bg)
-                .padding(start = 16.dp, end = 14.dp, top = 10.dp, bottom = 12.dp),
+                .padding(start = 16.dp, end = 14.dp, top = 8.dp, bottom = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (onAttach != null) {
-                // Secondary affordance: quiet by design so the send control is
-                // unmistakably primary.
+                // Secondary affordance: a dim label by design so the send control
+                // is unmistakably the bar's one action.
                 Text(
                     "image",
-                    color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
+                    color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
                     modifier = Modifier
                         .clip(LumenShapes.small)
                         .clickable { onAttach() }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .padding(horizontal = 6.dp, vertical = 4.dp)
                         .testTag("attach-image"),
                 )
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(4.dp))
             }
             val fieldShape = LumenShapes.pill
             Box(
@@ -2277,14 +2271,14 @@ private fun Composer(
             Spacer(Modifier.width(8.dp))
             if (onEditKey != null) {
                 Text(
-                    "key", color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
-                    modifier = Modifier.clickable { onEditKey() }.padding(horizontal = 6.dp).testTag("key"),
+                    "key", color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp,
+                    modifier = Modifier.clickable { onEditKey() }.padding(horizontal = 4.dp).testTag("key"),
                 )
             }
             if (onToggleTheme != null) {
                 Text(
-                    "◐", color = colors.faint, fontFamily = Mono, fontSize = 15.sp,
-                    modifier = Modifier.clickable { onToggleTheme() }.padding(horizontal = 6.dp).testTag("theme"),
+                    "◐", color = colors.faint, fontFamily = Mono, fontSize = 13.sp,
+                    modifier = Modifier.clickable { onToggleTheme() }.padding(horizontal = 4.dp).testTag("theme"),
                 )
             }
             // The primary action: a filled 44dp target. Idle-with-text is a bright
@@ -2341,7 +2335,6 @@ private fun FileSuggestions(
     onPick: (String) -> Unit,
 ) {
     if (suggestions.isEmpty()) return
-    val edge = colors.spectrum.getOrElse(2) { colors.water }
     val shape = LumenShapes.card
     Column(
         Modifier
@@ -2350,7 +2343,6 @@ private fun FileSuggestions(
             .shadow(LumenElevation.floating, shape)
             .clip(shape)
             .background(colors.surface)
-            .border(1.dp, edge.copy(alpha = 0.30f), shape)
             .heightIn(max = 208.dp)
             .verticalScroll(rememberScrollState())
             .testTag("file-suggestions"),
@@ -2385,14 +2377,14 @@ private fun AttachmentChip(
         Modifier
             .clip(LumenShapes.pill)
             .background(colors.surface)
-            .border(1.dp, colors.water.copy(alpha = 0.30f), LumenShapes.pill)
-            .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
+            .border(1.dp, colors.water.copy(alpha = 0.18f), LumenShapes.pill)
+            .padding(start = 9.dp, end = 4.dp, top = 3.dp, bottom = 3.dp)
             .testTag("attachment-$index"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             image.name,
-            color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
+            color = colors.dim, fontFamily = Mono, fontSize = 10.5.sp,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.widthIn(max = 160.dp),
         )
@@ -2460,14 +2452,14 @@ private fun AgentModeChip(
 ) {
     Text(
         label,
-        color = if (selected) colors.bg else colors.faint,
-        fontFamily = Mono, fontSize = 10.5.sp, fontWeight = FontWeight.Medium,
+        color = if (selected) tint else colors.faint,
+        fontFamily = Mono, fontSize = 10.sp, fontWeight = FontWeight.Medium,
         modifier = Modifier
             .clip(LumenShapes.pill)
-            .background(if (selected) tint else Color.Transparent)
-            .border(1.dp, if (selected) tint else colors.rule, LumenShapes.pill)
+            .background(if (selected) tint.copy(alpha = 0.16f) else Color.Transparent)
+            .border(1.dp, if (selected) tint.copy(alpha = 0.45f) else colors.rule.copy(alpha = 0.6f), LumenShapes.pill)
             .clickable { onSelect(label) }
-            .padding(horizontal = 11.dp, vertical = 4.dp)
+            .padding(horizontal = 9.dp, vertical = 3.dp)
             .testTag(tag),
     )
 }

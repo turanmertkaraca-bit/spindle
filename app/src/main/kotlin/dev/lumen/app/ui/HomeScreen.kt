@@ -1,9 +1,12 @@
 package dev.lumen.app.ui
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -38,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -253,6 +257,15 @@ fun HomeScreen(
     // Destructive delete needs a confirmation; holds the id pending deletion.
     var deleteTarget by remember { mutableStateOf<String?>(null) }
 
+    // A whisper of press feedback on the one primary action; cheap and calm.
+    val newChatInteraction = remember { MutableInteractionSource() }
+    val newChatPressed by newChatInteraction.collectIsPressedAsState()
+    val newChatScale by animateFloatAsState(
+        targetValue = if (newChatPressed) 0.98f else 1f,
+        animationSpec = LumenMotion.press,
+        label = "new-chat-scale",
+    )
+
     // Secondary destinations tuck into one quiet menu so the header stays calm.
     val menuItems = buildList {
         onFiles?.let { add(TopMenuAction("Files", "files", it)) }
@@ -286,9 +299,14 @@ fun HomeScreen(
         // The one obvious thing to do on this screen.
         Box(
             Modifier.fillMaxWidth()
+                .graphicsLayer { scaleX = newChatScale; scaleY = newChatScale }
                 .clip(LumenShapes.pill)
                 .background(colors.water)
-                .clickable { onNewChat() }
+                .clickable(
+                    interactionSource = newChatInteraction,
+                    indication = null,
+                    onClick = onNewChat,
+                )
                 .padding(vertical = 14.dp)
                 .testTag("new-chat"),
             contentAlignment = Alignment.Center,
@@ -359,17 +377,17 @@ fun HomeScreen(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "${sessions.size} ${if (sessions.size == 1) "chat" else "chats"}",
-                color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 0.6.sp,
+                color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.6.sp,
                 modifier = Modifier.weight(1f),
             )
             Text(
                 if (showArchived) "Hide archived" else "Show archived",
-                color = if (showArchived) colors.accent else colors.faint,
-                fontFamily = Mono, fontSize = 11.sp,
+                color = if (showArchived) colors.dim else colors.faint.copy(alpha = 0.85f),
+                fontFamily = Mono, fontSize = 10.5.sp,
                 modifier = Modifier
                     .clip(LumenShapes.small)
                     .clickable { onShowArchived(!showArchived) }
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .padding(horizontal = 6.dp, vertical = 3.dp)
                     .testTag("show-archived"),
             )
         }
@@ -651,14 +669,18 @@ private fun TagChip(
     Text(
         text,
         color = if (selected) colors.fg else colors.dim,
-        fontFamily = Mono, fontSize = 10.5.sp,
+        fontFamily = Mono, fontSize = 10.sp,
         maxLines = 1,
         modifier = Modifier
             .clip(LumenShapes.small)
-            .background(if (selected) colors.surface else Color.Transparent)
-            .border(1.dp, if (selected) colors.water else colors.rule, LumenShapes.small)
+            .background(if (selected) colors.water.copy(alpha = 0.12f) else Color.Transparent)
+            .border(
+                1.dp,
+                if (selected) colors.water.copy(alpha = 0.45f) else colors.rule.copy(alpha = 0.6f),
+                LumenShapes.small,
+            )
             .clickable { onClick() }
-            .padding(horizontal = 7.dp, vertical = 3.dp)
+            .padding(horizontal = 6.dp, vertical = 2.dp)
             .testTag(tag),
     )
 }
