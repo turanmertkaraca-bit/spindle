@@ -1,6 +1,7 @@
 package dev.spindle.provider.openai
 
 import dev.spindle.core.agent.AgentConfig
+import dev.spindle.core.agent.Retry
 import dev.spindle.core.agent.Wire
 import dev.spindle.core.model.FinishReason
 import dev.spindle.core.model.ToolCall
@@ -12,12 +13,16 @@ import dev.spindle.core.provider.ToolSpec
 import dev.spindle.core.provider.WireImage
 import dev.spindle.core.provider.WireMessage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -27,11 +32,14 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
+import okio.Buffer
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -728,5 +736,253 @@ class OpenAiProviderTest {
             val expected = if (name == textFixture) "hello world" else ""
             assertEquals(expected, text, "$name text must not accumulate cumulatively")
         }
+    }
+
+    // --- robustness: long turns, resource lifetime, concurrency --------------
+
+    private fun recordedTextEvents(): List<ProviderEvent> =
+        recordedReasoning.map { ProviderEvent.ReasoningDelta(it) } +
+            listOf(
+                ProviderEvent.TextDelta("hello world"),
+                ProviderEvent.Finished(FinishReason.STOP),
+                ProviderEvent.UsageEvent(
+                    Usage(
+                        inputTokens = 90,
+                        outputTokens = 47,
+                        reasoningTokens = 43,
+                        costUsd = 0.00002392,
+                    ),
+                ),
+            )
+
+    @Test
+    fun `stream truncated before done or finish reason is a retryable failure`() = runTest {
+        // Content-Length body that simply ends: no [DONE], no finish_reason.
+        server.enqueue(
+            MockResponse().setBody(
+                frame("{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}"),
+            ),
+        )
+
+        val events = provider().stream(request()).toList()
+
+        val terminals = events.filter { it is ProviderEvent.Finished || it is ProviderEvent.Failure }
+        assertEquals(1, terminals.size, "exactly one terminal event")
+        val failure = terminals.single() as ProviderEvent.Failure
+        assertTrue(failure.message.contains("ended before completion"), failure.message)
+        assertTrue(Retry.isRetryable(failure.message), "a truncated turn must be retryable: ${failure.message}")
+        assertEquals(
+            listOf(ProviderEvent.TextDelta("partial")),
+            events.filterIsInstance<ProviderEvent.TextDelta>(),
+            "deltas before the truncation must still be delivered",
+        )
+    }
+
+    @Test
+    fun `explicit done without finish reason still yields a clean finished terminal`() = runTest {
+        server.enqueue(MockResponse().setBody(frame("") + "data: [DONE]\n\n"))
+
+        val terminals = provider().stream(request()).toList()
+            .filter { it is ProviderEvent.Finished || it is ProviderEvent.Failure }
+        assertEquals(listOf(ProviderEvent.Finished(FinishReason.UNKNOWN)), terminals)
+    }
+
+    @Test
+    fun `bounded line reader enforces the cap and preserves eof and crlf semantics`() {
+        // The cap applies to the line, not the whole buffer: extra buffered
+        // lines must not trip it.
+        assertEquals("abc", Buffer().writeUtf8("abc\ndef\n").readBoundedUtf8Line(3))
+        assertEquals("abc", Buffer().writeUtf8("abc\r\n").readBoundedUtf8Line())
+        assertEquals("hello", Buffer().writeUtf8("hello").readBoundedUtf8Line())
+        assertNull(Buffer().writeUtf8("").readBoundedUtf8Line())
+
+        val eof = Buffer().writeUtf8("abc")
+        assertEquals("abc", eof.readBoundedUtf8Line())
+        assertNull(eof.readBoundedUtf8Line())
+
+        assertFailsWith<IOException> { Buffer().writeUtf8("abcd\n").readBoundedUtf8Line(3) }
+        // é is two UTF-8 bytes: the limit is measured in bytes, not chars.
+        assertFailsWith<IOException> { Buffer().writeUtf8("ééé\n").readBoundedUtf8Line(4) }
+    }
+
+    @Test
+    fun `oversized sse line fails the turn instead of buffering without bound`() = runTest {
+        server.enqueue(MockResponse().setBody("data: " + "x".repeat(600) + "\n\n"))
+        val subject = OpenAiProvider(
+            baseUrl = server.url("/").toString().trimEnd('/'),
+            apiKey = "test-key",
+            maxSseLineBytes = 256,
+        )
+
+        val terminals = subject.stream(request()).toList()
+            .filter { it is ProviderEvent.Finished || it is ProviderEvent.Failure }
+
+        assertEquals(1, terminals.size)
+        assertTrue((terminals.single() as ProviderEvent.Failure).message.contains("exceeds"), terminals.single().toString())
+    }
+
+    @Test
+    fun `recorded fixtures reassemble across every 1 2 3 5 7 byte split`() = runTest {
+        for (name in listOf(textFixture, toolFixture)) {
+            for (chunk in listOf(1, 2, 3, 5, 7)) {
+                server.enqueue(MockResponse().setChunkedBody(fixture(name), chunk))
+                val events = provider().stream(request()).toList()
+
+                val terminals = events.filter { it is ProviderEvent.Finished || it is ProviderEvent.Failure }
+                assertEquals(1, terminals.size, "$name chunk=$chunk terminal count")
+                if (name == textFixture) {
+                    assertEquals(
+                        "hello world",
+                        events.filterIsInstance<ProviderEvent.TextDelta>().joinToString("") { it.text },
+                        "$name chunk=$chunk text",
+                    )
+                    assertEquals(
+                        recordedReasoning.joinToString(""),
+                        events.filterIsInstance<ProviderEvent.ReasoningDelta>().joinToString("") { it.text },
+                        "$name chunk=$chunk reasoning",
+                    )
+                    assertEquals(ProviderEvent.Finished(FinishReason.STOP), terminals.single())
+                } else {
+                    assertEquals(
+                        listOf(ProviderEvent.ToolCallStart(0, "call_7nzrzS2Wx6yfe4jQzI41CfI2", "get_weather")),
+                        events.filterIsInstance<ProviderEvent.ToolCallStart>(),
+                        "$name chunk=$chunk start",
+                    )
+                    assertEquals(
+                        Json.parseToJsonElement("""{"city":"Paris"}"""),
+                        Json.parseToJsonElement(
+                            events.filterIsInstance<ProviderEvent.ToolCallArgsDelta>().joinToString("") { it.argsDelta },
+                        ),
+                        "$name chunk=$chunk args",
+                    )
+                    assertEquals(ProviderEvent.Finished(FinishReason.TOOL_CALLS), terminals.single())
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `long stream emits every delta once with one terminal and usage once`() = runTest {
+        val chunks = 5_000
+        val body = buildString {
+            repeat(chunks) {
+                append("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"x\"}}]}\n\n")
+            }
+            append("data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+            append("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\n")
+            append("data: [DONE]\n\n")
+        }
+        server.enqueue(MockResponse().setChunkedBody(body, 37))
+
+        val events = provider().stream(request()).toList()
+
+        assertEquals("x".repeat(chunks), events.filterIsInstance<ProviderEvent.TextDelta>().joinToString("") { it.text })
+        assertEquals(chunks, events.count { it is ProviderEvent.TextDelta }, "no duplicate or missing deltas")
+        assertEquals(1, events.count { it is ProviderEvent.Finished || it is ProviderEvent.Failure })
+        assertEquals(1, events.count { it is ProviderEvent.UsageEvent }, "usage emitted once")
+    }
+
+    @Test
+    fun `long cumulative reasoning does not accumulate and emits each suffix once`() = runTest {
+        val frames = 2_000
+        // Each frame carries a CUMULATIVE `reasoning` snapshot. The adapter must
+        // emit only the new suffix and keep just the previous snapshot in memory.
+        val built = StringBuilder()
+        val acc = StringBuilder()
+        repeat(frames) {
+            acc.append("r")
+            built.append("data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning\":\"")
+                .append(acc)
+                .append("\"}}]}\n\n")
+        }
+        built.append("data: [DONE]\n\n")
+
+        server.enqueue(MockResponse().setChunkedBody(built.toString(), 41))
+        val events = provider().stream(request()).toList()
+
+        val reasoning = events.filterIsInstance<ProviderEvent.ReasoningDelta>().joinToString("") { it.text }
+        assertEquals("r".repeat(frames), reasoning)
+        assertEquals(frames, events.count { it is ProviderEvent.ReasoningDelta }, "each cumulative suffix emitted once")
+        assertEquals(1, events.count { it is ProviderEvent.Finished || it is ProviderEvent.Failure })
+    }
+
+    @Test
+    fun `concurrent streams on one provider keep independent per-stream state`() = runTest {
+        val copies = 6
+        repeat(copies) { server.enqueue(MockResponse().setChunkedBody(fixture(textFixture), 7)) }
+        val subject = provider()
+
+        val results = withContext(Dispatchers.IO) {
+            coroutineScope {
+                (1..copies).map { async { subject.stream(request()).toList() } }.awaitAll()
+            }
+        }
+
+        assertEquals(copies, results.size)
+        results.forEachIndexed { i, events ->
+            assertEquals(1, events.count { it is ProviderEvent.Finished || it is ProviderEvent.Failure }, "stream $i terminal")
+            assertEquals(recordedTextEvents(), events, "stream $i must not share state with its peers")
+        }
+    }
+
+    @Test
+    fun `sequential streams close their body and reuse the pooled connection`() = runTest {
+        val subject = provider()
+        server.enqueue(MockResponse().setBody("data: [DONE]\n\n"))
+        subject.stream(request()).toList()
+        server.enqueue(MockResponse().setBody("data: [DONE]\n\n"))
+        subject.stream(request()).toList()
+
+        val first = server.takeRequest()
+        val second = server.takeRequest()
+        assertEquals(0, first.sequenceNumber)
+        assertEquals(1, second.sequenceNumber, "leaked response body would force a fresh connection")
+    }
+
+    @Test
+    fun `http error closes its body and the connection is reusable`() = runTest {
+        val subject = provider()
+        server.enqueue(MockResponse().setResponseCode(500).setBody("{\"error\":\"boom\"}"))
+        subject.stream(request()).toList()
+        server.enqueue(MockResponse().setBody("data: [DONE]\n\n"))
+        subject.stream(request()).toList()
+
+        val first = server.takeRequest()
+        val second = server.takeRequest()
+        assertEquals(0, first.sequenceNumber)
+        assertEquals(1, second.sequenceNumber)
+    }
+
+    @Test
+    fun `repeated models calls close their body and reuse the connection`() = runTest {
+        val subject = provider()
+        server.enqueue(MockResponse().setBody("{\"data\":[{\"id\":\"gpt-4o\"}]}"))
+        server.enqueue(MockResponse().setBody("{\"data\":[{\"id\":\"gpt-4o\"}]}"))
+        subject.models()
+        subject.models()
+
+        val first = server.takeRequest()
+        val second = server.takeRequest()
+        assertEquals(0, first.sequenceNumber)
+        assertEquals(1, second.sequenceNumber, "models() must not leak its response body")
+    }
+
+    @Test
+    fun `cancelling a stalled stream releases it and a later stream still works`() = runBlocking {
+        val subject = provider()
+        server.enqueue(
+            MockResponse()
+                .setBody("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n")
+                .setBodyDelay(3, TimeUnit.SECONDS),
+        )
+        val job = launch(Dispatchers.IO) { subject.stream(request()).collect { } }
+        delay(200)
+        job.cancel()
+        withTimeout(5_000) { job.join() }
+        assertTrue(job.isCancelled, "cancelled call must be released promptly")
+
+        server.enqueue(MockResponse().setBody("data: [DONE]\n\n"))
+        val events = withTimeout(10_000) { subject.stream(request()).toList() }
+        assertEquals(1, events.count { it is ProviderEvent.Finished || it is ProviderEvent.Failure })
     }
 }

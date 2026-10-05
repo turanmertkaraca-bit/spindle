@@ -33,6 +33,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okio.BufferedSource
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -43,6 +44,39 @@ private val json = Json {
 }
 
 private val JSON_MEDIA: MediaType = "application/json; charset=utf-8".toMediaType()
+
+/**
+ * Hard cap on a single SSE line. A frame's JSON must be parsed as a whole, so
+ * one line is inherently held in memory; the cap stops a malformed or hostile
+ * stream (a line that never terminates) from growing the adapter without bound
+ * over a long turn. 16 MiB comfortably fits the largest realistic tool argument.
+ */
+internal const val MAX_SSE_LINE_BYTES: Long = 16L * 1024 * 1024
+
+/**
+ * Like [BufferedSource.readUtf8Line] but bounded: throws [IOException] if a line
+ * exceeds [maxBytes] before its terminator is seen, while still returning the
+ * final unterminated line at EOF (and null once the stream is exhausted).
+ */
+internal fun BufferedSource.readBoundedUtf8Line(maxBytes: Long = MAX_SSE_LINE_BYTES): String? {
+    while (true) {
+        val newline = indexOf('\n'.code.toByte())
+        if (newline != -1L) {
+            if (newline > maxBytes) throw IOException("SSE line exceeds $maxBytes bytes")
+            return readUtf8Line()
+        }
+        // No newline buffered: if the buffered bytes already exceed the cap the
+        // current (unterminated) line is over the limit — fail before reading more.
+        if (buffer.size > maxBytes) throw IOException("SSE line exceeds $maxBytes bytes")
+        // Force an actual read by asking for one byte beyond what is buffered:
+        // request(1) would report success forever while bytes sit unconsumed and
+        // contain no newline. A false result here means a true end-of-stream.
+        if (!request(buffer.size + 1)) {
+            if (buffer.size == 0L) return null
+            return readUtf8()
+        }
+    }
+}
 
 /** Sensible built-in catalogue; Anthropic has no public `/models` listing here. */
 val ANTHROPIC_DEFAULT_MODELS: List<ModelInfo> = listOf(
@@ -96,6 +130,8 @@ class AnthropicProvider(
     private val defaultModels: List<ModelInfo> = ANTHROPIC_DEFAULT_MODELS,
     private val userAgent: String? = null,
     private val extraHeaders: Map<String, String> = emptyMap(),
+    /** Upper bound on a single SSE line; guards long/hostile streams. */
+    private val maxSseLineBytes: Long = MAX_SSE_LINE_BYTES,
 ) : Provider {
 
     private val root: String = baseUrl.trimEnd('/')
@@ -157,7 +193,7 @@ class AnthropicProvider(
                         val data = StringBuilder()
                         var failed = false
                         while (true) {
-                            val line = source.readUtf8Line() ?: break
+                            val line = source.readBoundedUtf8Line(maxSseLineBytes) ?: break
                             if (line.isEmpty()) {
                                 if (data.isNotEmpty()) {
                                     val frame = data.toString()
@@ -180,7 +216,11 @@ class AnthropicProvider(
                         }
                         if (!failed && !state.sawFinish) {
                             state.closeToolCalls(emitEvent)
-                            emitFinish(FinishReason.UNKNOWN)
+                            // A stream ends with message_stop (or a stop_reason on
+                            // message_delta). Reaching EOF with neither means the
+                            // connection died mid-turn: surface a Failure so the loop
+                            // retries instead of persisting a truncated response.
+                            terminal(ProviderEvent.Failure("Anthropic: stream ended before completion (unexpected EOF)"))
                         }
                     } catch (e: IOException) {
                         terminal(ProviderEvent.Failure("Anthropic stream I/O: ${e.message}", e))

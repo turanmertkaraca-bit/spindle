@@ -35,6 +35,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okio.BufferedSource
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -61,6 +62,39 @@ private const val MAX_PRICE_PER_M = 10_000.0
 // per-1M price such as 0.05 when it arrives under `cost`, and would silently
 // reinterpret a per-token value >= 1 as if it were per-1M.
 private const val PER_TOKEN_SCALE = 1_000_000.0
+
+/**
+ * Hard cap on a single SSE line. A frame's JSON must be parsed as a whole, so
+ * one line is inherently held in memory; the cap stops a malformed or hostile
+ * stream (a line that never terminates) from growing the adapter without bound
+ * over a long turn. 16 MiB comfortably fits the largest realistic tool argument.
+ */
+internal const val MAX_SSE_LINE_BYTES: Long = 16L * 1024 * 1024
+
+/**
+ * Like [BufferedSource.readUtf8Line] but bounded: throws [IOException] if a line
+ * exceeds [maxBytes] before its terminator is seen, while still returning the
+ * final unterminated line at EOF (and null once the stream is exhausted).
+ */
+internal fun BufferedSource.readBoundedUtf8Line(maxBytes: Long = MAX_SSE_LINE_BYTES): String? {
+    while (true) {
+        val newline = indexOf('\n'.code.toByte())
+        if (newline != -1L) {
+            if (newline > maxBytes) throw IOException("SSE line exceeds $maxBytes bytes")
+            return readUtf8Line()
+        }
+        // No newline buffered: if the buffered bytes already exceed the cap the
+        // current (unterminated) line is over the limit — fail before reading more.
+        if (buffer.size > maxBytes) throw IOException("SSE line exceeds $maxBytes bytes")
+        // Force an actual read by asking for one byte beyond what is buffered:
+        // request(1) would report success forever while bytes sit unconsumed and
+        // contain no newline. A false result here means a true end-of-stream.
+        if (!request(buffer.size + 1)) {
+            if (buffer.size == 0L) return null
+            return readUtf8()
+        }
+    }
+}
 
 /**
  * Live entries replace embedded ones by id; embedded-only ids are preserved so a
@@ -163,6 +197,8 @@ class OpenAiProvider(
     private val extraHeaders: Map<String, String> = emptyMap(),
     private val userAgent: String = "spindle/0.1",
     private val defaultModels: List<ModelInfo> = emptyList(),
+    /** Upper bound on a single SSE line; guards long/hostile streams. */
+    private val maxSseLineBytes: Long = MAX_SSE_LINE_BYTES,
 ) : Provider {
 
     private val root: String = baseUrl.trimEnd('/')
@@ -254,7 +290,7 @@ class OpenAiProvider(
                         val data = StringBuilder()
                         var done = false
                         while (!done) {
-                            val line = source.readUtf8Line() ?: break
+                            val line = source.readBoundedUtf8Line(maxSseLineBytes) ?: break
                             if (line.isEmpty()) {
                                 if (data.isNotEmpty()) {
                                     val frame = data.toString()
@@ -277,7 +313,14 @@ class OpenAiProvider(
                         }
                         if (!state.sawFinish) {
                             state.closeToolCalls(emitEvent)
-                            emitFinish(FinishReason.UNKNOWN)
+                            // An explicit `[DONE]` sentinel means the provider ended
+                            // the stream but omitted finish_reason, so UNKNOWN is a
+                            // legitimate terminal. Reaching EOF with neither `[DONE]`
+                            // nor a finish_reason is a truncated turn: surface it as a
+                            // Failure so the loop retries instead of silently
+                            // persisting a partial response.
+                            if (done) emitFinish(FinishReason.UNKNOWN)
+                            else terminal(ProviderEvent.Failure("OpenAI: stream ended before completion (unexpected EOF)"))
                         }
                     } catch (e: IOException) {
                         terminal(ProviderEvent.Failure("OpenAI stream I/O: ${e.message}", e))
@@ -404,7 +447,14 @@ private class OpenAiStreamState {
     private val bufferedArgs = HashMap<Int, StringBuilder>()
     private val started = sortedSetOf<Int>()
     private val ended = HashSet<Int>()
-    private var emittedReasoning = ""
+
+    /**
+     * Some routes stream `reasoning` as incremental fragments, others as a
+     * cumulative snapshot of everything so far. Only the previous raw value is
+     * needed to tell the two apart — tracking that (instead of concatenating the
+     * whole reasoning block) keeps adapter memory bounded across a long turn.
+     */
+    private var lastReasoning = ""
 
     var sawFinish = false
         private set
@@ -469,17 +519,15 @@ private class OpenAiStreamState {
 
     private fun emitReasoning(value: String, emit: (ProviderEvent) -> Unit) {
         when {
-            value == emittedReasoning -> Unit
-            value.startsWith(emittedReasoning) -> {
-                val suffix = value.substring(emittedReasoning.length)
-                if (suffix.isNotEmpty()) {
-                    emit(ProviderEvent.ReasoningDelta(suffix))
-                    emittedReasoning = value
-                }
+            value.isEmpty() || value == lastReasoning -> Unit
+            lastReasoning.isNotEmpty() && value.startsWith(lastReasoning) -> {
+                val suffix = value.substring(lastReasoning.length)
+                if (suffix.isNotEmpty()) emit(ProviderEvent.ReasoningDelta(suffix))
+                lastReasoning = value
             }
             else -> {
                 emit(ProviderEvent.ReasoningDelta(value))
-                emittedReasoning += value
+                lastReasoning = value
             }
         }
     }
