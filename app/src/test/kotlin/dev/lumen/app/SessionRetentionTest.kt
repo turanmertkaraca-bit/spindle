@@ -1,6 +1,7 @@
 package dev.lumen.app
 
 import android.content.Context
+import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import dev.lumen.app.data.KeyStore
 import dev.lumen.app.platform.PerfSampler
@@ -27,6 +28,7 @@ import dev.spindle.core.tool.ShellExecutor
 import dev.spindle.core.tool.ShellResult
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
@@ -39,6 +41,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.File
 import java.nio.file.Files
@@ -64,8 +67,26 @@ class SessionRetentionTest {
 
     @After
     fun tearDown() {
+        // Cancel and settle the test-owned run scopes first, so a still-unwinding
+        // run cannot dispatch on Main while it is being swapped back.
+        runScopes.forEach { scope ->
+            scope.cancel()
+            runBlocking { scope.coroutineContext[Job]?.join() }
+        }
+        // Then drain anything a run posted to the Robolectric main looper —
+        // notably the Choreographer frame callback PerfSampler installs. A queued
+        // runnable that reads Dispatchers.Main races resetMain() (the
+        // "used concurrently with setting it" failure), and Robolectric also
+        // reports leftover runnables as a suppressed teardown error.
+        shadowOf(Looper.getMainLooper()).idle()
         Dispatchers.resetMain()
     }
+
+    /** Test-owned scopes, reaped in [tearDown] even when a test fails early. */
+    private val runScopes = mutableListOf<CoroutineScope>()
+
+    private fun testRunScope(): CoroutineScope =
+        CoroutineScope(Dispatchers.Unconfined).also { runScopes += it }
 
     private fun keys(): KeyStore =
         KeyStore(ApplicationProvider.getApplicationContext<Context>())
@@ -153,7 +174,7 @@ class SessionRetentionTest {
         val sid = SessionId("ses_stop")
         runBlocking { store.createSession(Session(sid, "t", dir.path, 0, 0)) }
         val perf = PerfSampler()
-        val runScope = CoroutineScope(Dispatchers.Unconfined)
+        val runScope = testRunScope()
         // The provider never finishes, so the run is still live when stop() is
         // called; startPerf has already run by the time send() returns.
         val vm = runnableVm(dir, store, perf, runScope, SuspendingProvider())
@@ -165,7 +186,6 @@ class SessionRetentionTest {
 
         vm.stop()
         assertFalse(samplerRunning(perf), "stop() must stop the sampler")
-        runScope.cancel()
     }
 
     @Test
@@ -175,7 +195,7 @@ class SessionRetentionTest {
         val sid = SessionId("ses_clear")
         runBlocking { store.createSession(Session(sid, "t", dir.path, 0, 0)) }
         val perf = PerfSampler()
-        val runScope = CoroutineScope(Dispatchers.Unconfined)
+        val runScope = testRunScope()
         val vm = runnableVm(dir, store, perf, runScope, SuspendingProvider())
 
         vm.openSession(sid.value)
@@ -187,7 +207,6 @@ class SessionRetentionTest {
         cleared.isAccessible = true
         cleared.invoke(vm)
         assertFalse(samplerRunning(perf), "onCleared must stop the sampler")
-        runScope.cancel()
     }
 
     @Test
