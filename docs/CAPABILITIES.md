@@ -249,6 +249,6 @@ Built on the domains above, before any UI.
 3. Every feature lands with its function test **before** its UI.
 4. No UI/functional regressions; the old app is the parity baseline.
 5. Never reuse a version number; every release updates in place (persistent
-   debug keystore). **Release discipline:** bump `versionCode` (currently `3`)
+   debug keystore). **Release discipline:** bump `versionCode` (currently `4`)
    in `app/build.gradle.kts` for every release — the in-place update path keys on
-   it, so a reuse would silently block an install. `versionName` is `0.1.2`.
+   it, so a reuse would silently block an install. `versionName` is `0.1.3`.

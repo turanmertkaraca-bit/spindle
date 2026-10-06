@@ -30,7 +30,7 @@ JVM (including GitHub Actions).
 
 ## Status
 
-**`0.1.2`** (`versionCode 3`). Backend is feature-complete, and the native
+**`0.1.3`** (`versionCode 4`). Backend is feature-complete, and the native
 Android/Compose app (`:app`, `dev.lumen.app`) is built on it: streaming providers
 with per-model Zen/Go routing (`/messages` for Claude/Qwen, **fixture-tested**;
 GPT/Grok `/responses` deliberately rejected), durable sessions, 14 tools (incl.
@@ -63,11 +63,30 @@ The 0.1.2 wave adds:
   proxy resolves them, HTTP status surfaced) both returned `[tool ok]` in a live
   OpenRouter CLI run.
 
-The UI has had the base polish pass plus three refinement passes (shared
+The 0.1.3 UI/UX fix wave adds:
+
+- **Readable boundaries** — an opaque `outline` colour role + a `row` shape give
+  every card/row/input a minimal 1dp gray rounded boundary, with raised panel
+  surfaces so the layout reads as layers.
+- **Connected tool runs** — tool cards and thinking rows are joined into visual
+  runs (`UiStep.linkedAbove` via `StepMapper.linkRuns` + a thin rail) instead of
+  isolated cards; raw tool JSON is never shown (question/prompt/query and other
+  friendly args are surfaced).
+- **Pinned streaming tail** — the newest line stays glued to the bottom when the
+  usage meter, cards or the IME shrink the viewport.
+- **API keys** — the key screen is redesigned with compact provider radio rows, a
+  visible field boundary, and unified inline test feedback.
+- **In-chat quick settings** — a sheet over the transcript (provider, model,
+  theme, budget, ask-before-tools + key/full-settings links) so tuning a chat no
+  longer jumps to the full Settings page.
+
+The UI has had the base polish pass plus four refinement passes (shared
 tokens/motion, calm empty/loading/error states, one-line tool cards, shared
-screen chrome, lighter surfaces, and the 0.1.2 composer/home/key/GitHub rework;
-the light+dark screenshot sweep covers every screen including GitHub, 0 render
-errors). Live Zen/Go Claude/GPT is **out of scope by owner decision** (Go
+screen chrome, lighter surfaces, the 0.1.2 composer/home/key/GitHub rework, and
+the 0.1.3 boundary/connected-run/quick-settings wave; the light+dark screenshot
+sweep covers every screen including GitHub and the quick-settings sheet — the
+last CI-verified sweep reported 0 render errors). Live Zen/Go Claude/GPT is
+**out of scope by owner decision** (Go
 subscription only, no paid API credits), not blocked pending a key. See
 `docs/HANDOFF.md` (read first), `docs/PLAN.md`, `docs/SPEC.md` and
 `docs/PARITY.md` (what we ported from opencode and what we deliberately did

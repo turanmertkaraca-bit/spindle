@@ -616,6 +616,45 @@ class ScreenshotTest {
         )
     }
 
+    /**
+     * The in-chat quick settings sheet over a populated transcript: provider,
+     * model, theme and budget chips plus the ask-before-tools switch and the
+     * key/full-settings/close footer, in both themes. Rendering the whole chat
+     * with the sheet over it is best-effort under Robolectric; `shoot` records
+     * any failure to a `.error.txt` instead of throwing.
+     */
+    private fun quickSettingsShot(name: String, colors: LumenColors) = shoot(name) {
+        LumenChatScreen(
+            steps = sample(),
+            input = "",
+            busy = false,
+            error = null,
+            colors = colors,
+            title = "make the timeline a spine",
+            onHome = {},
+            ambient = false,
+            onToggleTheme = {},
+            onEditKey = {},
+            quickSettings = true,
+            onCloseQuickSettings = {},
+            provider = "deepseek",
+            model = "deepseek/deepseek-flash",
+            theme = "dark",
+            budgetUsd = 2.0,
+            askBeforeTools = true,
+            onProvider = {},
+            onModelSelect = {},
+            onTheme = {},
+            onMaxCost = {},
+            onAskBeforeTools = {},
+            onOpenFullSettings = {},
+        )
+    }
+
+    @Test fun light_quick_settings() = quickSettingsShot("light_quick_settings.png", LumenColors.Light)
+
+    @Test fun dark_quick_settings() = quickSettingsShot("dark_quick_settings.png", LumenColors.Dark)
+
     /** A populated folder listing, plus an html file so the canvas affordance shows. */
     private fun filesSample(): FilesState = FilesState(
         dir = "",

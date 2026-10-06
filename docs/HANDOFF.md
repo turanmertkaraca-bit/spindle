@@ -1,20 +1,22 @@
 # Lumen — session handoff (read me first)
 
 Native Android agent app. `spindle` repo, branch `main`, package `dev.lumen.app`.
-`HEAD = f6b92a8` (`fix(app): make KeyScreen show/hide toggle deterministically
-clickable`) — the tip of the **0.1.2** feature wave. The wave is `3791ad2`
-(`:core` directory mentions), `cea4936` (`:tools` websearch/webfetch), and the
-`47d1ec4` app commit plus fixes `977d856`/`098a921`/`f6b92a8`. The docs-sync +
-version-bump commit rides **on top of** `f6b92a8` (nothing else is committed
-after it as of this writing). CI (`.github/workflows/ci.yml`) runs both a
-`jvm backend` job and an `android app (robolectric)` job; CI status for
-`f6b92a8` + this docs-sync commit is **not** asserted here — re-check the run.
+`HEAD = e4c1464` (`fix(app): correct assertTrue(message, block) misuse in
+question-tool test`) — the tip of the **0.1.3** UI/UX fix wave. The wave is
+`749df0d` (readable boundaries, connected tool runs, cleaner key entry, in-chat
+quick settings) plus `e4c1464` (a test-only `assertTrue` fix). It rides on the
+**0.1.2** feature wave (`3791ad2` `:core` directory mentions, `cea4936` `:tools`
+websearch/webfetch, `47d1ec4` app + fixes `977d856`/`098a921`/`f6b92a8`). The
+docs-sync + version-bump commit rides **on top of** `e4c1464` (nothing else is
+committed after it as of this writing). CI (`.github/workflows/ci.yml`) runs both
+a `jvm backend` job and an `android app (robolectric)` job; CI status for
+`e4c1464` + this docs-sync commit is **not** asserted here — re-check the run.
 `:cli` is gated in the jvm job (`:cli:classes`), so its run path compiles in CI
 even though it never spends tokens. Working tree after this session: the
 docs-sync edits + `app/build.gradle.kts` version bump only (left uncommitted, per
 instructions).
 
-**Version: `versionCode = 3`, `versionName = "0.1.2"`** — release discipline:
+**Version: `versionCode = 4`, `versionName = "0.1.3"`** — release discipline:
 never reuse a version number, every release updates in place. Bump `versionCode`
 (and `versionName`) in `app/build.gradle.kts` for every release.
 
@@ -24,50 +26,43 @@ never reuse a version number, every release updates in place. Bump `versionCode`
 ██  when dev is finished. Live tests are manual only (`live.yml`).          ██
 ```
 
-## 1. What's done (this wave — 0.1.2)
+## 1. What's done (this wave — 0.1.3)
 
-The 0.1.2 feature wave: `3791ad2` (`:core`), `cea4936` (`:tools`), and the
-`47d1ec4` app commit plus fixes `977d856`/`098a921`/`f6b92a8`.
+The 0.1.3 UI/UX fix wave: `749df0d` plus the test-only `e4c1464`.
 
-1. **Chat composer redesigned (`47d1ec4`).** One rounded input card with a
-   bottom control row — attach, vision/eye, build/plan chips, model chip,
-   key/theme, send. A compact usage line reads `≈ N new · next $X · ctx N`
-   (`UsageMeter`), and the new-content cue now reads `↓ latest` (was `↓ new`).
-2. **Mentions → files (`3791ad2`, `47d1ec4`).** File/directory mentions in
-   assistant text are tappable and open the FILE in the Files viewer at the line
-   (not just an in-chat peek). Directory mentions resolve via `:core`
-   `ReferenceResolver.resolveKinds` (`FileReference.isDir`); newly created files
-   link once the workspace revision bumps.
-3. **Files live refresh + edit highlight (`47d1ec4`).** The Files list refreshes
-   when the agent writes/edits — direct `AgentEvent.FileEdited` plus the indirect
-   `WorkspaceWatcher` path. Opening a touched file scrolls to and highlights the
-   newest edited range; highlighting is suppressed when the file was newly
-   created (`FileEdit.created`).
-4. **Home is richer (`47d1ec4`).** A status strip (provider·model, sandbox,
-   budget, GitHub) plus quick controls (ask-before-tools switch,
-   Files/Terminal).
-5. **API key screen redesigned (`47d1ec4`, `f6b92a8`).** Provider cards with the
-   default model, Show/Hide, Paste, a real "Test key" probe, inline error, and
-   non-destructive editing (viewing a key no longer deletes it). `f6b92a8` made
-   the Show/Hide toggle deterministically clickable.
-6. **GitHub support (`47d1ec4`).** `:app` `platform/GitHubClient.kt` +
-   `GitRunner.kt` connect/validate a PAT and run clone/status; the PAT is sealed
-   by `KeyStore` (`SecretCipher`, Android Keystore AES/GCM) and passed only as an
-   Authorization header / credential-helper env var — never in a URL, argv, or
-   log line. `GitHubScreen` + a Settings link + a Home status pill. **PAT only,
-   no OAuth; commit/push automation is not built.**
-7. **Internet verified live (`cea4936`).** `websearch` now does a browser-style
-   POST to DuckDuckGo with an honest blocked-vs-no-results error (plain GETs get
-   bot-walled); `webfetch` allows unresolved hosts only when a proxy will resolve
-   them and surfaces HTTP status in the output. Both returned `[tool ok]` in a
-   live OpenRouter CLI run.
-8. **Version bump (this commit).** `app/build.gradle.kts` → `versionCode 3`,
-   `versionName "0.1.2"` (only version lines changed).
-9. **Prior-session wins still in force:** Zen/Go per-model wire routing
-   (`1845a77`/`a5f36b9`; `/messages` fixture-tested, `/responses` deliberately
-   rejected, live Claude/GPT closed by owner decision), `skill` +
-   `external-directory` (`15635e8`), opt-in `json_schema` structured output
-   (`bf86874`, engine-only), the UI polish passes
+1. **Readable boundaries (`749df0d`).** A new opaque `outline` colour role and a
+   `row` shape token; every card, row and input now draws a minimal 1dp gray
+   rounded boundary, and the dark surface / light background are raised so panels
+   read as distinct layers instead of one flat field.
+2. **Connected tool runs (`749df0d`).** Tool cards and thinking rows join into
+   visual runs rather than a scatter of isolated cards: `UiStep.linkedAbove` (set
+   by `StepMapper.linkRuns`, unit-tested) plus a thin 1dp rail with tight 3dp row
+   spacing. `YOU`/`ASSISTANT`/`QUESTION` rows break the run.
+3. **No raw tool JSON (`749df0d`).** Tool detail never falls back to
+   `argumentsJson`; question/prompt/query and the other friendly keys are
+   surfaced, with summary/body falling back to plain text or the tool name.
+4. **Streaming tail pinned (`749df0d`).** The newest line stays glued to the
+   bottom when the usage meter, todo/changes/ask cards or the IME shrink the
+   viewport (a layout-keyed re-pin, not only content growth).
+5. **API-key screen redesigned (`749df0d`).** Compact provider radio rows, a
+   visible field boundary, and unified inline test feedback. (The 0.1.2
+   non-destructive editing, Show/Hide, Paste and real "Test key" probe remain.)
+6. **In-chat quick settings sheet (`749df0d`).** Provider, model, theme, budget
+   and ask-before-tools plus key/full-settings/close links, rendered over the
+   transcript, so opening settings inside a chat no longer jumps to the full
+   Settings page.
+7. **Test fix (`e4c1464`).** Corrected `assertTrue(message, block)` misuse in
+   `StepMapperToolDetailTest` so the pending-question "no raw JSON" assertion
+   checks the condition and carries its message correctly.
+8. **Version bump (this commit).** `app/build.gradle.kts` → `versionCode 4`,
+   `versionName "0.1.3"` (only version lines changed).
+9. **Prior-session wins still in force:** the 0.1.2 wave — chat composer
+   redesign, mentions → Files, files live refresh + edit highlight, richer Home,
+   API-key redesign, GitHub PAT connect/status/clone (**commit/push not built**) —
+   plus Zen/Go per-model wire routing (`1845a77`/`a5f36b9`; `/messages`
+   fixture-tested, `/responses` deliberately rejected, live Claude/GPT closed by
+   owner decision), `skill` + `external-directory` (`15635e8`), opt-in
+   `json_schema` structured output (`bf86874`, engine-only), the UI polish passes
    (`ea2e38e`/`189b695`/`fa9ff1a`/`dab4f39`/`1422eb1`/`47fd30b`), the `m15` JVM
    stress re-sweep PASS (`a4807fd`), and `SessionRetentionTest` flake hardening
    (`6e62605`).
@@ -198,6 +193,7 @@ models.dev catalogue; on-device `PerfSampler`. Also in `:tools` now: `skill`
 - `docs/CAPABILITIES.md` — capability model, parity checklist, app non-goals.
 - `docs/SPEC.md` — engine contracts (loop, events, SPIs, wire protocol).
 - `docs/PROVIDERS.md` — provider configs + Zen/Go auth surfaces.
-- `docs/UI-POLISH.md` — polish passes (base + refinement 1 & 2; all items landed).
+- `docs/UI-POLISH.md` — polish passes (base + refinements 1–4; all items landed,
+  incl. the in-chat quick-settings sheet in the sweep).
 - `docs/PERF-RE-SWEEP.md` — m15 long-session JVM stress re-sweep (PASS; off-device).
 - `docs/PARITY.md` — what was ported from opencode and what was dropped.

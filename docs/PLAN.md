@@ -220,11 +220,13 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
       **pending**; `PerfSampler` logs a `perf:` line to diagnostics per run.
 - [x] CI green gate + screenshot evidence (light+dark across every screen,
       uploaded as the `lumen-screenshots` artifact); APK update-in-place.
-- [x] UI polish landed in three passes: base (`ea2e38e` + `189b695`), refinement
+- [x] UI polish landed in four passes: base (`ea2e38e` + `189b695`), refinement
       1 (`fa9ff1a` chat timeline + `dab4f39` shared screen chrome + `1422eb1`
-      FilesScreen fix) and refinement 2 (`47fd30b` lighter/calmer), plus the 0.1.2
-      rework below. The light+dark sweep covers every screen including GitHub:
-      ~87 PNGs (61 screens + 26 animation frames), 0 render errors.
+      FilesScreen fix), refinement 2 (`47fd30b` lighter/calmer) and refinement 4,
+      plus the 0.1.2/0.1.3 reworks below. The light+dark sweep covers every screen
+      including GitHub and the in-chat quick-settings sheet: ~89 frames (63
+      screens + 26 animation frames); the last CI-verified sweep was 0 render
+      errors.
 - [x] **Composer + Home + keys + GitHub rework (`47d1ec4`, fixes
       `977d856`/`098a921`/`f6b92a8`)**: one rounded composer card with a bottom
       control row and compact usage line (`≈ N new · next $X · ctx N`, cue
@@ -235,8 +237,19 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
       clone/status (`GitRunner`), token sealed in `KeyStore` and never placed in
       a URL/argv/log, via `GitHubScreen` + Settings link + Home status pill.
       **PAT only — no OAuth; commit/push automation not built.**
-- [x] Release housekeeping: `app/build.gradle.kts` bumped to `versionCode = 3`,
-      `versionName = "0.1.2"` (bump per release; never reuse a version number).
+- [x] **UI/UX fix wave (`749df0d` + test fix `e4c1464`, 0.1.3)**: opaque
+      `outline` boundary role + `row` shape give every card/row/input a minimal
+      1dp gray rounded boundary (raised panel surfaces); tool cards/thinking rows
+      connect into runs (`UiStep.linkedAbove` + `StepMapper.linkRuns` + a thin
+      rail); raw tool JSON is never shown (friendly question/prompt/query args);
+      the streaming tail stays pinned when the usage meter/cards/IME shrink the
+      viewport; the API-key screen is redesigned (compact provider radio rows,
+      visible field boundary, unified inline test feedback); and an in-chat
+      quick-settings sheet (provider/model/theme/budget/ask + links) means
+      settings in a chat no longer jumps to the full page.
+- [x] Release housekeeping: `app/build.gradle.kts` bumped to `versionCode = 4`,
+      `versionName = "0.1.3"` (was 3 / `"0.1.2"`; bump per release; never reuse a
+      version number).
 
 ## Risks
 

@@ -92,13 +92,41 @@ The 0.1.2 app wave revisited the highest-traffic surfaces:
   status, and clone/open controls, reached from Settings and a Home status pill;
   the token is sealed on-device and never placed in a URL or log.
 
+## Refinement pass 4 (`749df0d` + `e4c1464`, 0.1.3)
+
+The UI/UX fix wave after 0.1.2:
+
+- **Readable boundaries.** Added an opaque `outline` colour role plus a `row`
+  shape token; every card, row and input now draws a minimal 1dp gray rounded
+  boundary, and the dark surface / light background are raised so panels read as
+  distinct layers instead of one flat field.
+- **Connected tool runs.** Tool cards and thinking rows are joined into visual
+  runs rather than a scatter of isolated cards: `UiStep.linkedAbove` (set by
+  `StepMapper.linkRuns`) plus a thin 1dp rail with tight 3dp row spacing.
+- **No raw tool JSON.** Tool detail never falls back to `argumentsJson`;
+  question/prompt/query and the other friendly keys are surfaced instead, with
+  summary/body falling back to plain text or the tool name.
+- **Streaming tail pinned.** The newest line stays glued to the bottom when the
+  usage meter, todo/changes/ask cards or the IME shrink the viewport (layout-
+  keyed re-pin, not just content growth).
+- **API-key screen redesigned.** Compact provider radio rows, a visible field
+  boundary, and unified inline test feedback.
+- **In-chat quick settings sheet.** Provider, model, theme, budget and
+  ask-before-tools plus key/full-settings/close links, rendered over the
+  transcript, so opening settings inside a chat no longer jumps to the full
+  Settings page.
+
 ## Verification sweep
 
 Items 3–6 above are fully landed. The Robolectric screenshot sweep renders every
-screen in light **and** dark — now including GitHub (connected, connect + status)
-— and the light+dark sweep is clean: **~87 PNGs (61 per-screen shots + 26
-animation-smoothness frames), 0 render errors** (`build/ci-shots*`, uploaded as
-the `lumen-screenshots` CI artifact).
+screen in light **and** dark — including GitHub (connected, connect + status) and,
+as of pass 4, the in-chat **quick settings sheet** (light + dark) — for a total of
+**~89 frames (63 per-screen shots + 26 animation-smoothness frames)**; each entry
+is a PNG, or a `.error.txt` if a render fails, so the sweep never fails the build
+(`build/ci-shots*`, uploaded as the `lumen-screenshots` CI artifact). The last
+CI-verified sweep for 0.1.2 reported **0 render errors**; the two new quick-settings
+frames are not re-asserted here — `:app` is CI-only (no Android SDK in the dev
+guest).
 
 ## Already addressed (for reference, do not regress)
 
