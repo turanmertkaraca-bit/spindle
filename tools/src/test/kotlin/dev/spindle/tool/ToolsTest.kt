@@ -23,6 +23,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private val json = Json { ignoreUnknownKeys = true; isLenient = true }
@@ -735,6 +736,40 @@ class ToolsTest {
             (result as FetchResult.Failure).message.contains("Refusing", ignoreCase = true),
             result.message,
         )
+    }
+
+    @Test
+    fun webfetchSurfacesHttpStatusInOutput() = runTest {
+        withTempDir { dir ->
+            val transport = object : HttpResponseTransport {
+                override suspend fun get(uri: URI, maxBytes: Int): HttpResponseData =
+                    HttpResponseData(
+                        status = 200,
+                        location = null,
+                        body = "<html><body><h1>Hello</h1></body></html>".toByteArray(),
+                        truncated = false,
+                    )
+            }
+            val outcome = WebFetchTool(transport)
+                .run(obj("""{"url":"https://8.8.8.8/page"}"""), FakeToolContext(dir))
+            assertFalse(outcome.isError, outcome.output)
+            assertTrue(outcome.output.startsWith("HTTP 200"), outcome.output)
+            assertEquals("200", outcome.metadata["status"])
+        }
+    }
+
+    @Test
+    fun blockedAddressReasonAllowsUnresolvedOnlyWhenProxyCanResolve() {
+        // Reserved .invalid TLD never resolves. A proxy-only sandbox lets the
+        // proxy do the lookup, so the guard must not veto the fetch.
+        assertNull(blockedAddressReason("does-not-exist.invalid", allowUnresolved = true))
+        assertEquals(
+            "could not resolve host",
+            blockedAddressReason("does-not-exist.invalid", allowUnresolved = false),
+        )
+        // Dangerous hosts stay blocked even with a proxy in play.
+        assertEquals("loopback host", blockedAddressReason("localhost", allowUnresolved = true))
+        assertNotNull(blockedAddressReason("127.0.0.1", allowUnresolved = true))
     }
 
     @Test

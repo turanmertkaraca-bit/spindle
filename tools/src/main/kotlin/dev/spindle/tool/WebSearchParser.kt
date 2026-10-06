@@ -80,6 +80,24 @@ internal object WebSearchParser {
         return hits
     }
 
+    /**
+     * True when [html] is DuckDuckGo's "anomaly" bot challenge rather than a
+     * results page. Both are HTTP 2xx, so the only way to tell a block from a
+     * genuinely empty query is to look for the challenge's own markers. The
+     * scan is bounded so an adversarial body cannot make it pathological.
+     */
+    fun isChallengePage(html: String): Boolean {
+        val sample = if (html.length > CHALLENGE_SCAN_CHARS) {
+            html.substring(0, CHALLENGE_SCAN_CHARS)
+        } else {
+            html
+        }
+        return sample.contains("anomaly-modal", ignoreCase = true) ||
+            sample.contains("assets/anomaly/", ignoreCase = true) ||
+            sample.contains("challenge-form", ignoreCase = true) ||
+            sample.contains("bots use DuckDuckGo too", ignoreCase = true)
+    }
+
     private fun attribute(attrs: String, name: String): String? {
         val quoted = Regex("(?i)\\b$name\\s*=\\s*\"([^\"]*)\"").find(attrs)
             ?: Regex("(?i)\\b$name\\s*=\\s*'([^']*)'").find(attrs)
@@ -118,4 +136,6 @@ internal object WebSearchParser {
             ""
         }
     }
+
+    private const val CHALLENGE_SCAN_CHARS = 200_000
 }

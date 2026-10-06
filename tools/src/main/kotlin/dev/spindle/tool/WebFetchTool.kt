@@ -117,17 +117,29 @@ internal suspend fun fetchFollowingRedirects(
     }
 }
 
-/** Null when [host] resolves only to public addresses, otherwise a rejection reason. */
-internal fun blockedAddressReason(host: String?): String? {
+/**
+ * Null when [host] resolves only to public addresses, otherwise a rejection
+ * reason. Literal IPs and loopback names are judged without any lookup, so the
+ * SSRF gate never depends on DNS for the common dangerous cases.
+ *
+ * [allowUnresolved] covers proxy-only sandboxes (Android, CI, this guest):
+ * there is no local resolver, but the HTTP proxy resolves the name for the real
+ * connection, so a failed local lookup is not by itself a reason to refuse.
+ * Without a proxy an unresolvable host stays a hard failure.
+ */
+internal fun blockedAddressReason(
+    host: String?,
+    allowUnresolved: Boolean = proxyFromEnvironment() != null,
+): String? {
     if (host.isNullOrBlank()) return "missing host"
     val lower = host.lowercase().removeSurrounding("[", "]")
     if (lower == "localhost" || lower.endsWith(".localhost")) return "loopback host"
     val addresses = try {
         InetAddress.getAllByName(lower)
     } catch (e: Exception) {
-        return "could not resolve host"
+        return if (allowUnresolved) null else "could not resolve host"
     }
-    if (addresses.isEmpty()) return "could not resolve host"
+    if (addresses.isEmpty()) return if (allowUnresolved) null else "could not resolve host"
     for (address in addresses) {
         if (isBlockedAddress(address)) {
             return "address resolves to a non-public range (${address.hostAddress})"
@@ -204,9 +216,12 @@ internal class WebFetchTool(
         val shown = if (charTruncated) converted.substring(0, Limits.WEB_MAX_CHARS) else converted
         val truncated = charTruncated || result.truncated
         val note = if (charTruncated) charCapNote("webfetch", Limits.WEB_MAX_CHARS) else ""
+        // Surface the status in the text body: only `output` reaches the model,
+        // so keeping it solely in metadata left the model unable to report it.
+        val header = "HTTP ${result.status}\n\n"
 
         return ToolOutcome(
-            output = shown + note,
+            output = header + shown + note,
             isError = result.status >= 400,
             metadata = mapOf(
                 "url" to raw,

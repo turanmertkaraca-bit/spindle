@@ -153,6 +153,25 @@ class WebSearchToolTest {
             .run(searchObj("""{"query":"x"}"""), SearchContext())
         assertTrue(outcome.isError)
         assertTrue(outcome.output.contains("No results", ignoreCase = true), outcome.output)
+        assertEquals("false", outcome.metadata["blocked"])
+    }
+
+    @Test
+    fun challengePageIsReportedAsBlockedNotNoResults() = runTest {
+        val challenge = """
+            <html><body>
+              <div class="anomaly-modal__box" data-testid="anomaly-modal">
+                Unfortunately, bots use DuckDuckGo too.
+              </div>
+              <form id="challenge-form" action="//duckduckgo.com/anomaly.js"></form>
+            </body></html>
+        """.trimIndent()
+        val outcome = WebSearchTool { challenge }
+            .run(searchObj("""{"query":"kotlin"}"""), SearchContext())
+        assertTrue(outcome.isError)
+        assertTrue(outcome.output.contains("blocked", ignoreCase = true), outcome.output)
+        assertTrue(!outcome.output.contains("No results", ignoreCase = true), outcome.output)
+        assertEquals("true", outcome.metadata["blocked"])
     }
 
     private companion object {

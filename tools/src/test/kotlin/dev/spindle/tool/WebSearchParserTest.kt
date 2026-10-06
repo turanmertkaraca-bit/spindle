@@ -92,6 +92,26 @@ class WebSearchParserTest {
     }
 
     @Test
+    fun isChallengePageDetectsAnomalyMarkup() {
+        val challenge = """
+            <html><body>
+              <div class="anomaly-modal__box" data-testid="anomaly-modal">
+                Unfortunately, bots use DuckDuckGo too.
+              </div>
+              <form id="challenge-form" action="//duckduckgo.com/anomaly.js"></form>
+            </body></html>
+        """.trimIndent()
+        assertTrue(WebSearchParser.isChallengePage(challenge))
+        assertTrue(WebSearchParser.isChallengePage("<img src=\"../assets/anomaly/images/challenge/x.jpg\">"))
+    }
+
+    @Test
+    fun isChallengePageIsFalseForRealResultsAndNoResultPages() {
+        assertTrue(!WebSearchParser.isChallengePage(SAMPLE_HTML))
+        assertTrue(!WebSearchParser.isChallengePage("""<div class="no-results">No results found.</div>"""))
+    }
+
+    @Test
     fun unwrapUrlHandlesProtocolRelativeDirectAndRedirect() {
         assertEquals("https://x.com/", WebSearchParser.unwrapUrl("//x.com/"))
         assertEquals(
