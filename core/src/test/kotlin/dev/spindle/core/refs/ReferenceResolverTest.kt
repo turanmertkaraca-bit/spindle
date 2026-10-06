@@ -1,5 +1,6 @@
 package dev.spindle.core.refs
 
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -127,11 +128,90 @@ class ReferenceResolverTest {
     }
 
     @Test
-    fun `bare directory stub and windows drive are rejected`() {
-        assertTrue(ReferenceResolver.resolve("open foo/ now", "/p") { true }.isEmpty())
+    fun `missing directory stub and windows drive are rejected`() {
+        assertTrue(ReferenceResolver.resolve("open foo/ now", "/p") { false }.isEmpty())
         assertTrue(
             ReferenceResolver.resolve("see C:\\Users\\x\\App.kt", "/p") { true }.isEmpty(),
         )
+    }
+
+    @Test
+    fun `directory token resolves with isDir true`() {
+        val ref = ReferenceResolver.resolveKinds("see `src/` now", "/p") { FileKind.DIRECTORY }.single()
+        assertEquals("src/", ref.raw)
+        assertEquals("src", ref.path)
+        assertTrue(ref.isDir)
+        assertEquals("src/", "see `src/` now".substring(ref.start, ref.end))
+    }
+
+    @Test
+    fun `directory without trailing slash resolves with isDir true`() {
+        val gate: (String) -> FileKind? = { if (it == "core/src") FileKind.DIRECTORY else null }
+        val ref = ReferenceResolver.resolveKinds("open core/src now", "/p", gate).single()
+        assertEquals("core/src", ref.path)
+        assertTrue(ref.isDir)
+    }
+
+    @Test
+    fun `file token stays a file`() {
+        val ref = ReferenceResolver.resolveKinds("`src/App.kt`", "/p") { FileKind.FILE }.single()
+        assertEquals("src/App.kt", ref.path)
+        assertFalse(ref.isDir)
+        assertEquals(42, ReferenceResolver.resolveKinds("src/App.kt:42", "/p") { FileKind.FILE }.single().line)
+    }
+
+    @Test
+    fun `directory with a line form parses without dropping the directory`() {
+        val ref = ReferenceResolver.resolveKinds("src/:42", "/p") { FileKind.DIRECTORY }.single()
+        assertEquals("src", ref.path)
+        assertEquals(42, ref.line)
+        assertTrue(ref.isDir)
+    }
+
+    @Test
+    fun `directory traversal and absolute escapes are rejected without an existence check`() {
+        var checks = 0
+        val gate: (String) -> FileKind? = { checks++; FileKind.DIRECTORY }
+        assertTrue(ReferenceResolver.resolveKinds("../src/", "/p", gate).isEmpty())
+        assertTrue(ReferenceResolver.resolveKinds("src/../../other/", "/p", gate).isEmpty())
+        assertTrue(ReferenceResolver.resolveKinds("/etc/", "/p", gate).isEmpty())
+        assertEquals(0, checks)
+    }
+
+    @Test
+    fun `directory symlink that escapes cwd is refused by the real-path gate`() {
+        val cwd = Files.createTempDirectory("refs-cwd")
+        val outside = Files.createTempDirectory("refs-outside")
+        try {
+            val link = cwd.resolve("link")
+            try {
+                Files.createSymbolicLink(link, outside)
+            } catch (e: Exception) {
+                return
+            }
+            val realBase = cwd.toRealPath()
+            val gate: (String) -> FileKind? = { rel ->
+                val target = cwd.resolve(rel).normalize()
+                val real = runCatching { target.toRealPath() }.getOrNull()
+                when {
+                    real == null || !real.startsWith(realBase) -> null
+                    Files.isDirectory(real) -> FileKind.DIRECTORY
+                    else -> FileKind.FILE
+                }
+            }
+            assertTrue(ReferenceResolver.resolveKinds("link/secret/", cwd.toString(), gate).isEmpty())
+        } finally {
+            cwd.toFile().deleteRecursively()
+            outside.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `fenced directory mentions stay inert`() {
+        val text = "see src/\n```\nsrc/inside/\n```\nsrc/after/"
+        val refs = ReferenceResolver.resolveKinds(text, "/p") { FileKind.DIRECTORY }
+        assertEquals(listOf("src", "src/after"), refs.map { it.path })
+        assertTrue(refs.all { it.isDir })
     }
 
     @Test

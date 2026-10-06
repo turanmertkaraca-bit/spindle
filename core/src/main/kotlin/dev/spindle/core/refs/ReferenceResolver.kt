@@ -1,14 +1,23 @@
 package dev.spindle.core.refs
 
 /**
- * One file reference found in assistant text.
+ * What the caller's existence gate found at a candidate path: a regular file or
+ * a directory. Returning `null` from a gate means "nothing there", so the
+ * mention stays inert.
+ */
+enum class FileKind { FILE, DIRECTORY }
+
+/**
+ * One file or directory reference found in assistant text.
  *
  * [raw] is the target exactly as written (`src/App.kt:42`, `x.kt#L10-L20`),
  * [path] is the cwd-relative path after normalization, and [start]/[end] are
  * character offsets into the ORIGINAL text so the UI can style that range.
  * [line]/[endLine]/[column] carry the typed range when the model wrote one.
- * [touched] is set later by [tag]: a file changed this run opens a diff, an
- * untouched mention opens the file.
+ * [isDir] is true when the gate reported a directory (a trailing `/` mention
+ * like `core/` or a plain `core/src` that resolves to one). [touched] is set
+ * later by [tag]: a file changed this run opens a diff, an untouched mention
+ * opens the file.
  */
 data class FileReference(
     val raw: String,
@@ -19,6 +28,7 @@ data class FileReference(
     val endLine: Int? = null,
     val column: Int? = null,
     val touched: Boolean = false,
+    val isDir: Boolean = false,
 )
 
 /**
@@ -36,12 +46,32 @@ object ReferenceResolver {
     private val WINDOWS_DRIVE = Regex("""^[A-Za-z]:""")
 
     /**
-     * Resolve every linkable reference in [text]. [cwd] anchors absolute
-     * candidates to the project; [exists] is given a cwd-relative path and
-     * decides whether it is a real file. Results are in text order and never
-     * overlap (the longest candidate at a position wins).
+     * Resolve every linkable reference in [text], treating a gate hit as a real
+     * file. Signature and behavior are unchanged from the original boolean
+     * gate, so existing callers (including trailing-lambda ones) keep working:
+     * directory mentions are simply never produced. Use [resolveKinds] when the
+     * gate can also report directories.
      */
     fun resolve(text: String, cwd: String, exists: (String) -> Boolean): List<FileReference> {
+        val kindGate: (String) -> FileKind? = { rel -> if (exists(rel)) FileKind.FILE else null }
+        return resolveKinds(text, cwd, kindGate)
+    }
+
+    /**
+     * Resolve every linkable reference in [text], with the gate reporting what
+     * the target is. [exists] is given a cwd-relative path and returns
+     * [FileKind.FILE], [FileKind.DIRECTORY], or `null` when nothing is there;
+     * a directory puts a trailing `/` mention (or a separator-bearing path that
+     * resolves to a directory) on the result with [FileReference.isDir] set.
+     * The gate is the sole authority on symlinks: a path whose real target
+     * escapes [cwd] must be refused by it.
+     *
+     * Named [resolveKinds] rather than an overload of [resolve]: Kotlin resolves
+     * by the lambda's arity, not its return type, so two `resolve` overloads
+     * differing only in `Boolean` vs `FileKind?` would make existing trailing
+     * lambdas ambiguous.
+     */
+    fun resolveKinds(text: String, cwd: String, exists: (String) -> FileKind?): List<FileReference> {
         if (text.isEmpty()) return emptyList()
         val inert = inertMap(text)
         val out = ArrayList<FileReference>()
@@ -68,7 +98,7 @@ object ReferenceResolver {
         start: Int,
         end: Int,
         cwd: String,
-        exists: (String) -> Boolean,
+        exists: (String) -> FileKind?,
     ): FileReference? {
         var pathText = token
         var line: Int? = null
@@ -95,14 +125,25 @@ object ReferenceResolver {
 
         if (!plausible(pathText)) return null
         val rel = resolveRelative(pathText, cwd) ?: return null
-        if (!exists(rel)) return null
-        return FileReference(token, rel, start, end, line, endLine, column)
+        val kind = exists(rel) ?: return null
+        return FileReference(
+            raw = token,
+            path = rel,
+            start = start,
+            end = end,
+            line = line,
+            endLine = endLine,
+            column = column,
+            isDir = kind == FileKind.DIRECTORY,
+        )
     }
 
     /**
      * Shape filter run BEFORE the existence gate. A token must contain a path
      * separator or a dot-extension, carry no whitespace, and not be a URL,
-     * protocol-relative, Windows-drive or directory-stub (`foo/`) candidate.
+     * protocol-relative, Windows-drive or all-dots/stubs candidate. A trailing
+     * `/` is allowed: directory-shaped mentions are candidates and the caller's
+     * gate decides whether the target really is a directory.
      */
     private fun plausible(p: String): Boolean {
         if (p.length < 3 || p.length > 300) return false
@@ -110,7 +151,6 @@ object ReferenceResolver {
         if (p.startsWith("//") || p.contains("://")) return false
         if (WINDOWS_DRIVE.containsMatchIn(p)) return false
         if (p.startsWith("/") && p.indexOf('/', 1) < 0) return false
-        if (p.endsWith("/")) return false
         if (p.all { it == '.' || it == '/' }) return false
         if (!p.contains('/')) {
             val dot = p.lastIndexOf('.')
