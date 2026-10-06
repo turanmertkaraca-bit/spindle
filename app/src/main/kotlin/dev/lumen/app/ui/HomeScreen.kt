@@ -30,6 +30,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -253,6 +255,26 @@ fun HomeScreen(
     onAddTag: (String, String) -> Unit = { _, _ -> },
     /** Remove a tag from a session. */
     onRemoveTag: (String, String) -> Unit = { _, _ -> },
+    /** Active provider id, shown in the home status strip. */
+    provider: String = "",
+    /** Active model id, shown in the home status strip. */
+    model: String = "",
+    /** Spend cap in USD; <= 0 means the cap is off. */
+    maxCostUsd: Double = 0.0,
+    /** A quiet label for the sandbox environment. */
+    sandboxLabel: String = "",
+    /** Connected GitHub login, when there is one. */
+    githubLogin: String = "",
+    /** Whether tools ask for confirmation before running. */
+    askBeforeTools: Boolean = false,
+    /** Toggle the ask-before-tools preference. */
+    onAskBeforeTools: (Boolean) -> Unit = {},
+    /** Open diagnostics, when the host wires it. */
+    onDiagnostics: (() -> Unit)? = null,
+    /** Open storage management, when the host wires it. */
+    onStorage: (() -> Unit)? = null,
+    /** Open GitHub settings, when the host wires it. */
+    onGitHub: (() -> Unit)? = null,
 ) {
     // Destructive delete needs a confirmation; holds the id pending deletion.
     var deleteTarget by remember { mutableStateOf<String?>(null) }
@@ -267,11 +289,9 @@ fun HomeScreen(
     )
 
     // Secondary destinations tuck into one quiet menu so the header stays calm.
-    val menuItems = buildList {
-        onFiles?.let { add(TopMenuAction("Files", "files", it)) }
-        onTerminal?.let { add(TopMenuAction("Terminal", "terminal", it)) }
-        add(TopMenuAction("Settings", "settings", onSettings))
-    }
+    // Files and Terminal are promoted to the quick-controls row; Settings stays
+    // here as the one rarer verb.
+    val menuItems = listOf(TopMenuAction("Settings", "settings", onSettings))
 
     Column(
         modifier.fillMaxSize().background(colors.bg).imePadding()
@@ -294,7 +314,19 @@ fun HomeScreen(
                 )
             },
         )
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(12.dp))
+        StatusStrip(
+            colors = colors,
+            provider = provider,
+            model = model,
+            maxCostUsd = maxCostUsd,
+            sandboxLabel = sandboxLabel,
+            githubLogin = githubLogin,
+            onSettings = onSettings,
+            onDiagnostics = onDiagnostics,
+            onGitHub = onGitHub,
+        )
+        Spacer(Modifier.height(16.dp))
 
         // The one obvious thing to do on this screen.
         Box(
@@ -337,6 +369,34 @@ fun HomeScreen(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 modifier = Modifier.fillMaxWidth().testTag("search"),
             )
+        }
+
+        // Quick controls: the one toggle worth surfacing plus the two cockpits,
+        // kept to a single quiet line right under the search.
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("ask before tools", color = colors.dim, fontFamily = Mono, fontSize = 11.sp)
+            Spacer(Modifier.width(8.dp))
+            Switch(
+                checked = askBeforeTools,
+                onCheckedChange = onAskBeforeTools,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = colors.bg,
+                    checkedTrackColor = colors.water,
+                    uncheckedThumbColor = colors.dim,
+                    uncheckedTrackColor = colors.surface,
+                    uncheckedBorderColor = colors.rule,
+                ),
+                modifier = Modifier.testTag("home-ask-before-tools"),
+            )
+            Spacer(Modifier.weight(1f))
+            onFiles?.let { open ->
+                RowAction(colors, "files", "files", onClick = open)
+            }
+            if (onFiles != null && onTerminal != null) Spacer(Modifier.width(6.dp))
+            onTerminal?.let { open ->
+                RowAction(colors, "terminal", "terminal", onClick = open)
+            }
         }
 
         // Tag filter bar: every known tag is a toggle chip; a selected chip shows
@@ -683,6 +743,75 @@ private fun TagChip(
             .padding(horizontal = 6.dp, vertical = 2.dp)
             .testTag(tag),
     )
+}
+
+/**
+ * A compact, horizontally-scrollable strip of quiet status pills so the home
+ * screen reports the current provider/model, sandbox, budget and GitHub state
+ * without becoming a second Settings page.
+ */
+@Composable
+private fun StatusStrip(
+    colors: LumenColors,
+    provider: String,
+    model: String,
+    maxCostUsd: Double,
+    sandboxLabel: String,
+    githubLogin: String,
+    onSettings: () -> Unit,
+    onDiagnostics: (() -> Unit)?,
+    onGitHub: (() -> Unit)?,
+) {
+    val modelLabel = listOf(provider, model).filter { it.isNotBlank() }
+        .joinToString(" \u00b7 ")
+        .ifBlank { "no model" }
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        StatusPill(colors, modelLabel, "status-provider", onSettings)
+        StatusPill(colors, sandboxLabel.ifBlank { "sandbox" }, "status-sandbox", onDiagnostics)
+        StatusPill(colors, budgetLabel(maxCostUsd), "status-budget", onSettings)
+        StatusPill(
+            colors,
+            if (githubLogin.isNotBlank()) "@$githubLogin" else "connect github",
+            "status-github",
+            onGitHub,
+        )
+    }
+}
+
+/** A tiny status pill. Tapping it is a no-op when [onClick] is null. */
+@Composable
+private fun StatusPill(
+    colors: LumenColors,
+    text: String,
+    tag: String,
+    onClick: (() -> Unit)?,
+) {
+    val shell = Modifier
+        .clip(LumenShapes.pill)
+        .background(colors.surface)
+        .border(1.dp, colors.rule.copy(alpha = 0.6f), LumenShapes.pill)
+    val interactive = if (onClick != null) shell.clickable { onClick() } else shell
+    Text(
+        text,
+        color = colors.dim, fontFamily = Mono, fontSize = 10.5.sp,
+        maxLines = 1,
+        modifier = interactive.padding(horizontal = 9.dp, vertical = 5.dp).testTag(tag),
+    )
+}
+
+/** "budget off" when the cap is disabled, otherwise a compact "$N cap". */
+private fun budgetLabel(maxCostUsd: Double): String {
+    if (maxCostUsd <= 0.0) return "budget off"
+    val amount = if (maxCostUsd == maxCostUsd.toLong().toDouble()) {
+        maxCostUsd.toLong().toString()
+    } else {
+        String.format(java.util.Locale.US, "%.2f", maxCostUsd)
+    }
+    return "\$$amount cap"
 }
 
 private fun ago(ts: Long): String {

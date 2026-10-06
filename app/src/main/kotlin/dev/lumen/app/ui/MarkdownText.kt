@@ -45,6 +45,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import dev.spindle.core.refs.FileKind
 import dev.spindle.core.refs.ReferenceResolver
 import dev.spindle.core.refs.tag
 import dev.spindle.core.text.Markdown
@@ -103,6 +104,12 @@ internal fun textChunks(text: String, size: Int): List<String> {
  * [onOpenFile]. Fenced code blocks stay inert (they are rendered raw, never
  * scanned). [exists] gates candidates (no dead taps); [touchedPaths] marks
  * references to files changed this run with a subtly stronger weight.
+ *
+ * [fileRevision] is the workspace revision: because existence is not part of the
+ * memo key (the [exists] lambda is unstable), a bump forces the annotations to
+ * re-resolve, so a file the agent creates after the first render becomes
+ * tappable. When [fileKind] is supplied the resolver can also report
+ * directories, which then link exactly like files.
  */
 @Composable
 fun MarkdownBody(
@@ -114,6 +121,8 @@ fun MarkdownBody(
     exists: (String) -> Boolean = { false },
     touchedPaths: Set<String> = emptySet(),
     onOpenFile: (String, Int?) -> Unit = { _, _ -> },
+    fileRevision: Int = 0,
+    fileKind: ((String) -> FileKind?)? = null,
 ) {
     // The parse is memoised on whatever string is actually laid out, never on
     // the unbounded source. While streaming we window to the tail so the newest
@@ -126,7 +135,7 @@ fun MarkdownBody(
         markdown.length <= cap -> {
             val blocks = remember(markdown) { Markdown.parse(markdown) }
             Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile)
+                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, fileRevision, fileKind)
             }
         }
 
@@ -134,7 +143,7 @@ fun MarkdownBody(
             val shown = "\u2026\n" + markdown.takeLast(cap)
             val blocks = remember(shown) { Markdown.parse(shown) }
             Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile)
+                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, fileRevision, fileKind)
             }
         }
 
@@ -175,7 +184,7 @@ fun MarkdownBody(
             val shown = markdown.take(cap)
             val blocks = remember(shown) { Markdown.parse(shown) }
             Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile)
+                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, fileRevision, fileKind)
                 Text(
                     "\u2026[${markdown.length - cap} chars hidden] \u00b7 show full",
                     color = colors.accent, fontFamily = MdMono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
@@ -200,13 +209,15 @@ private fun MarkdownBlocks(
     exists: (String) -> Boolean,
     touchedPaths: Set<String>,
     onOpenFile: (String, Int?) -> Unit,
+    fileRevision: Int,
+    fileKind: ((String) -> FileKind?)?,
 ) {
     for (block in blocks) {
         when (block) {
             is MdBlock.Heading -> MarkdownHeading(block, colors)
-            is MdBlock.Paragraph -> MarkdownParagraph(block.spans, colors, cwd, exists, touchedPaths, onOpenFile)
-            is MdBlock.Bullet -> MarkdownList(block.items, colors, ordered = false, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile)
-            is MdBlock.Ordered -> MarkdownList(block.items, colors, ordered = true, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile)
+            is MdBlock.Paragraph -> MarkdownParagraph(block.spans, colors, cwd, exists, touchedPaths, onOpenFile, fileRevision, fileKind)
+            is MdBlock.Bullet -> MarkdownList(block.items, colors, ordered = false, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile, fileRevision = fileRevision, fileKind = fileKind)
+            is MdBlock.Ordered -> MarkdownList(block.items, colors, ordered = true, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile, fileRevision = fileRevision, fileKind = fileKind)
             is MdBlock.Code -> MarkdownCode(block, colors)
         }
     }
@@ -241,14 +252,20 @@ private fun MarkdownParagraph(
     exists: (String) -> Boolean,
     touchedPaths: Set<String>,
     onOpenFile: (String, Int?) -> Unit,
+    fileRevision: Int,
+    fileKind: ((String) -> FileKind?)?,
 ) {
     // Resolving references stats the filesystem, so memoise the annotated run on
-    // everything that can change its result — NOT on the (unstable) `exists`
-    // lambda, which is re-created on every parent recomposition. `rememberUpdated`
-    // keeps the latest gate without invalidating the memo.
+    // everything that can change its result — the workspace revision included,
+    // so a file the agent creates after first render becomes tappable. NOT on
+    // the (unstable) `exists`/`fileKind` lambdas, which are re-created on every
+    // parent recomposition; `rememberUpdated` keeps the latest gates without
+    // invalidating the memo.
     val gate by rememberUpdatedState(exists)
-    val annotated = remember(spans, colors, cwd, touchedPaths) {
-        markdownAnnotated(spans, colors, cwd, gate, touchedPaths)
+    val kindGate by rememberUpdatedState(fileKind)
+    val hasKind = fileKind != null
+    val annotated = remember(spans, colors, cwd, touchedPaths, fileRevision, hasKind) {
+        markdownAnnotated(spans, colors, cwd, gate, touchedPaths, kindGate)
     }
     LinkedText(
         text = annotated,
@@ -268,12 +285,16 @@ private fun MarkdownList(
     exists: (String) -> Boolean,
     touchedPaths: Set<String>,
     onOpenFile: (String, Int?) -> Unit,
+    fileRevision: Int,
+    fileKind: ((String) -> FileKind?)?,
 ) {
     val gate by rememberUpdatedState(exists)
+    val kindGate by rememberUpdatedState(fileKind)
+    val hasKind = fileKind != null
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         for ((index, item) in items.withIndex()) {
-            val annotated = remember(item, colors, cwd, touchedPaths) {
-                markdownAnnotated(item, colors, cwd, gate, touchedPaths)
+            val annotated = remember(item, colors, cwd, touchedPaths, fileRevision, hasKind) {
+                markdownAnnotated(item, colors, cwd, gate, touchedPaths, kindGate)
             }
             Row(Modifier.fillMaxWidth()) {
                 Text(
@@ -397,6 +418,10 @@ private fun LinkedText(
  * is scanned independently for file references (so offsets stay local), then
  * the matches are underlined, annotated with their cwd-relative path + line,
  * and — for files touched this run — given a slightly heavier weight.
+ *
+ * When [fileKind] is supplied the scan uses [ReferenceResolver.resolveKinds], so
+ * directory mentions (`core/`, `core/src`) link too; otherwise the boolean
+ * [exists] path is unchanged and only regular files link.
  */
 private fun markdownAnnotated(
     spans: List<MdSpan>,
@@ -404,6 +429,7 @@ private fun markdownAnnotated(
     cwd: String,
     exists: (String) -> Boolean,
     touchedPaths: Set<String>,
+    fileKind: ((String) -> FileKind?)? = null,
 ): AnnotatedString = buildAnnotatedString {
     for (span in spans) {
         val spanStart = length
@@ -423,7 +449,12 @@ private fun markdownAnnotated(
         withStyle(style) { append(span.text) }
 
         if (cwd.isEmpty() || span.text.isEmpty()) continue
-        val refs = tag(ReferenceResolver.resolve(span.text, cwd, exists), touchedPaths)
+        val kind = fileKind
+        val refs = if (kind != null) {
+            tag(ReferenceResolver.resolveKinds(span.text, cwd) { kind(it) }, touchedPaths)
+        } else {
+            tag(ReferenceResolver.resolve(span.text, cwd, exists), touchedPaths)
+        }
         for (ref in refs) {
             val from = spanStart + ref.start
             val to = spanStart + ref.end

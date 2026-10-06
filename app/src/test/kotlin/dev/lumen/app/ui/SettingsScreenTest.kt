@@ -14,6 +14,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * The budget control is a pure hoisted setting: tapping a chip reports the
@@ -57,5 +58,31 @@ class SettingsScreenTest {
         assertEquals(0.0, picked)
 
         compose.onNodeWithText("budget").assertExists()
+    }
+
+    @Test
+    fun `the github link reports when tapped`() {
+        var tapped = false
+        compose.setContent {
+            SettingsScreen(
+                colors = LumenColors.Dark,
+                provider = "opencode-go",
+                model = "opencode-go/deepseek-v4.1-flash",
+                theme = "system",
+                onProvider = {},
+                onModel = {},
+                onTheme = {},
+                onEditKey = {},
+                onBack = {},
+                modifier = viewport,
+                onGitHub = { tapped = true },
+                githubLogin = "octocat",
+            )
+        }
+
+        compose.onNodeWithText("connected as octocat").assertExists()
+        compose.onNodeWithTag("settings-github").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        assertTrue(tapped)
     }
 }

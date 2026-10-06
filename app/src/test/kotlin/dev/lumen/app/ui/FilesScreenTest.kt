@@ -95,4 +95,33 @@ class FilesScreenTest {
         compose.onNodeWithTag("editor-body").assertIsDisplayed()
         compose.onNodeWithTag("editor-truncated").assertIsDisplayed()
     }
+
+    @Test
+    fun `an edited line range shows a highlight chip`() {
+        compose.setContent {
+            screen(
+                FilesState(dir = "", entries = entries),
+                editor = EditorState(
+                    path = "readme.txt",
+                    lines = listOf("alpha", "beta", "gamma"),
+                    highlight = 2..3,
+                ),
+            )
+        }
+
+        compose.onNodeWithTag("editor-highlight").assertIsDisplayed()
+        compose.onNodeWithText("edited L2\u2013L3").assertIsDisplayed()
+    }
+
+    @Test
+    fun `an untouched editor shows no highlight chip`() {
+        compose.setContent {
+            screen(
+                FilesState(dir = "", entries = entries),
+                editor = EditorState(path = "readme.txt", lines = listOf("alpha", "beta")),
+            )
+        }
+
+        compose.onNodeWithTag("editor-highlight").assertDoesNotExist()
+    }
 }

@@ -45,6 +45,7 @@ import dev.spindle.core.model.SessionId
 import dev.spindle.core.model.SessionState
 import dev.spindle.core.model.TodoItem
 import dev.spindle.core.provider.SimpleProviderRegistry
+import dev.spindle.core.refs.FileKind
 import dev.spindle.core.refs.ReferenceResolver
 import dev.spindle.core.store.SearchHit
 import dev.spindle.core.store.SessionSearch
@@ -142,6 +143,8 @@ data class EditorState(
     val lines: List<String>,
     val truncated: Boolean = false,
     val error: String? = null,
+    /** 1-based inclusive line range to highlight when the editor opens, if any. */
+    val highlight: IntRange? = null,
 )
 
 /**
@@ -274,6 +277,16 @@ data class ChatState(
     val diag: List<DiagLine> = emptyList(),
     /** Alpine/Debian readiness and the Debian install progress. */
     val linux: LinuxEnvironmentState = LinuxEnvironmentState(),
+    /** Monotonic counter bumped on any workspace file change. */
+    val fileRevision: Int = 0,
+    /** Context window of the selected model, in tokens (0 when unknown). */
+    val contextWindow: Int = 0,
+    /** Best-effort estimate of the next request's cost in USD; <0 when unknown. */
+    val nextCostUsd: Double = -1.0,
+    /** Tokens produced by the latest response (0 before the first one). */
+    val newTokens: Int = 0,
+    /** Non-secret GitHub login, refreshed from [KeyStore.githubLogin]. */
+    val githubLogin: String = "",
 )
 
 /**
@@ -329,6 +342,9 @@ class ChatViewModel(
             askBeforeTools = keys.askBeforeTools,
             agentMode = keys.agentMode,
             maxCostUsd = keys.maxCostUsd,
+            githubLogin = keys.githubLogin,
+            contextWindow = ProviderCatalogue.defaultModels(keys.provider)
+                .firstOrNull { it.id == keys.model.substringAfter('/') }?.contextWindow ?: 0,
         ),
     )
     val state: StateFlow<ChatState> = _state.asStateFlow()
@@ -445,6 +461,9 @@ class ChatViewModel(
 
     /** Record externally-changed paths as change rows the user can see and open. */
     private fun absorbIndirect(paths: Set<String>) {
+        // The Files viewer/editor must reflect indirect writes even when no run
+        // is live (e.g. a leftover script finishing after stop()).
+        scheduleSurfaceRefresh(paths)
         val current = _state.value
         val sid = current.currentSessionId?.let { SessionId(it) } ?: return
         if (!current.busy) return
@@ -896,6 +915,15 @@ class ChatViewModel(
             provider = keys.provider,
             error = null,
         )
+        refreshModelMetrics()
+    }
+
+    /** The stored provider key, for prefilling the key screen non-destructively. */
+    fun currentApiKey(): String = keys.apiKey.orEmpty()
+
+    /** Re-read the non-secret GitHub login after the GitHub screen updated it. */
+    fun refreshGithubLogin() {
+        _state.value = _state.value.copy(githubLogin = keys.githubLogin)
     }
 
     fun clearKey() {
@@ -908,11 +936,53 @@ class ChatViewModel(
         keys.provider = provider
         keys.model = KeyStore.defaultModel(provider)
         _state.value = _state.value.copy(provider = provider, model = keys.model)
+        refreshModelMetrics()
     }
 
     fun setModel(model: String) {
         keys.model = model
         _state.value = _state.value.copy(model = model)
+        refreshModelMetrics()
+    }
+
+    /** Session token total already reflected in [ChatState.newTokens]. */
+    private var lastUsageTokens = 0
+
+    /**
+     * Best-effort model-derived metrics: the selected model's context window
+     * from [ProviderCatalogue] and a rough next-request cost estimate from
+     * [Usage]. Unknowns stay at defaults. Does not touch [ChatState.newTokens].
+     */
+    private fun refreshModelMetrics() {
+        val usage = _state.value.usage
+        val info = ProviderCatalogue.defaultModels(keys.provider)
+            .firstOrNull { it.id == keys.model.substringAfter('/') }
+        val nextCostUsd = if (info != null && info.maxOutputTokens > 0) {
+            val input = usage.totalTokens / 1_000_000.0 * info.inputCostPerM
+            val output = info.maxOutputTokens / 1_000_000.0 * info.outputCostPerM
+            (input + output).takeIf { it > 0.0 } ?: -1.0
+        } else {
+            -1.0
+        }
+        _state.value = _state.value.copy(
+            contextWindow = info?.contextWindow ?: 0,
+            nextCostUsd = nextCostUsd,
+        )
+    }
+
+    /** Fold in a usage roll-up, exposing the tokens added since the previous one. */
+    private fun applyUsage(usage: Usage) {
+        val delta = (usage.totalTokens - lastUsageTokens).coerceAtLeast(0)
+        lastUsageTokens = usage.totalTokens
+        _state.value = _state.value.copy(usage = usage, newTokens = delta)
+        refreshModelMetrics()
+    }
+
+    /** Rebase the usage baseline after a session switch, so the meter starts fresh. */
+    private fun resetUsage() {
+        lastUsageTokens = _state.value.usage.totalTokens
+        _state.value = _state.value.copy(newTokens = 0)
+        refreshModelMetrics()
     }
 
     fun setTheme(theme: String) {
@@ -960,6 +1030,7 @@ class ChatViewModel(
                 changes = RunChanges.EMPTY,
                 todos = emptyList(),
             )
+            resetUsage()
             refreshSessions()
         }
     }
@@ -990,6 +1061,7 @@ class ChatViewModel(
                 // Restore a gate prompt that was hidden by navigating away mid-run.
                 ask = activeAsk?.ask,
             )
+            resetUsage()
         }
     }
 
@@ -1017,6 +1089,7 @@ class ChatViewModel(
             peek = null,
             ask = null,
         )
+        resetUsage()
     }
 
     fun deleteSession(id: String) {
@@ -1143,6 +1216,7 @@ class ChatViewModel(
                 changes = RunChanges.EMPTY,
                 error = null,
             )
+            resetUsage()
             val todos = loadTodos(sid)
             _state.value = _state.value.copy(todos = todos)
         }
@@ -1224,6 +1298,25 @@ class ChatViewModel(
     fun fileExists(rel: String): Boolean {
         val target = inWorkspace(rel) ?: return false
         return Files.isRegularFile(target)
+    }
+
+    /**
+     * What [path] is inside the workspace: [FileKind.FILE], [FileKind.DIRECTORY]
+     * or null when nothing linkable is there. The real path is resolved and
+     * re-checked against the real workspace root, so a symlink cannot point at
+     * a target outside the project. This is the gate for directory mentions.
+     */
+    fun fileKind(path: String): FileKind? {
+        val target = inWorkspace(path) ?: return null
+        val real = runCatching { target.toRealPath() }.getOrNull() ?: return null
+        val base = runCatching { workspace.toRealPath() }.getOrNull()
+            ?: workspace.toAbsolutePath().normalize()
+        if (!real.startsWith(base)) return null
+        return when {
+            Files.isRegularFile(real) -> FileKind.FILE
+            Files.isDirectory(real) -> FileKind.DIRECTORY
+            else -> null
+        }
     }
 
     /**
@@ -1494,6 +1587,7 @@ class ChatViewModel(
             target.parent?.let { Files.createDirectories(it) }
             Files.write(target, content.toByteArray(StandardCharsets.UTF_8))
             openFiles(_state.value.files?.dir.orEmpty())
+            bumpFileRevision()
         } catch (t: Throwable) {
             surfaceFilesError(t.message ?: "cannot write $path")
         }
@@ -1509,6 +1603,7 @@ class ChatViewModel(
             target.parent?.let { Files.createDirectories(it) }
             Files.createFile(target)
             openFiles(dir)
+            bumpFileRevision()
         } catch (t: Throwable) {
             surfaceFilesError(t.message ?: "cannot create $trimmed")
         }
@@ -1524,6 +1619,7 @@ class ChatViewModel(
             target.parent?.let { Files.createDirectories(it) }
             Files.createDirectory(target)
             openFiles(dir)
+            bumpFileRevision()
         } catch (t: Throwable) {
             surfaceFilesError(t.message ?: "cannot create $trimmed")
         }
@@ -1546,6 +1642,7 @@ class ChatViewModel(
                 Files.delete(target)
             }
             openFiles(_state.value.files?.dir.orEmpty())
+            bumpFileRevision()
         } catch (t: Throwable) {
             surfaceFilesError(t.message ?: "cannot delete $path")
         }
@@ -1562,16 +1659,36 @@ class ChatViewModel(
         try {
             Files.move(source, dest)
             openFiles(_state.value.files?.dir.orEmpty())
+            bumpFileRevision()
         } catch (t: Throwable) {
             surfaceFilesError(t.message ?: "cannot rename $path")
         }
     }
 
     /**
-     * Load [path] into the editor, capped at [MAX_PEEK_LINES] with a truncation
-     * flag (the screen disables Save when set). Escapes are refused.
+     * Open [path] in the Files editor after switching the browser to its parent
+     * folder. Chat mention taps land here so the user sees the real file rather
+     * than the in-chat peek; [line] highlights a 1-based line when supplied.
      */
-    fun editFile(path: String) {
+    fun openFileInFiles(path: String, line: Int? = null) {
+        val rel = inWorkspace(path)?.let { relativeToWorkspace(it) }?.takeIf { it.isNotEmpty() }
+            ?: normalizeRel(path)
+        // A directory mention opens that folder; a file opens its parent listing.
+        if (fileKind(rel) == FileKind.DIRECTORY) {
+            openFiles(rel)
+            return
+        }
+        openFiles(rel.substringBeforeLast('/', ""))
+        editFile(rel, line)
+    }
+
+    /**
+     * Load [path] into the editor, capped at [MAX_PEEK_LINES] with a truncation
+     * flag (the screen disables Save when set). Escapes are refused. [line], or
+     * else the file's last recorded change range, is highlighted when it is
+     * inside the read window.
+     */
+    fun editFile(path: String, line: Int? = null) {
         val target = inWorkspace(path)
         if (target == null || !Files.isRegularFile(target)) {
             _state.value = _state.value.copy(editor = EditorState(path, emptyList(), error = "cannot open $path"))
@@ -1590,12 +1707,108 @@ class ChatViewModel(
                     lines.add(l)
                 }
             }
+            val rel = relativeToWorkspace(target)
             _state.value = _state.value.copy(
-                editor = EditorState(relativeToWorkspace(target), lines, truncated = truncated),
+                editor = EditorState(
+                    path = rel,
+                    lines = lines,
+                    truncated = truncated,
+                    highlight = highlightForEditor(rel, line, lines, truncated),
+                ),
             )
         } catch (t: Throwable) {
             _state.value = _state.value.copy(editor = EditorState(path, emptyList(), error = t.message ?: "cannot open $path"))
         }
+    }
+
+    /**
+     * The highlight for the editor: an explicit 1-based [line] wins, otherwise
+     * the last recorded change range for [rel]. Null when the read was
+     * truncated, empty, or the file has no locate-worthy change.
+     */
+    private fun highlightForEditor(rel: String, line: Int?, lines: List<String>, truncated: Boolean): IntRange? {
+        if (truncated || lines.isEmpty()) return null
+        if (line != null && line > 0) {
+            val at = line.coerceIn(1, lines.size)
+            return at..at
+        }
+        val range = highlightRangeFor(_state.value.changes.byFile()[rel] ?: emptyList()) ?: return null
+        val lo = range.first.coerceIn(1, lines.size)
+        val hi = range.last.coerceIn(1, lines.size)
+        return if (lo <= hi) lo..hi else hi..lo
+    }
+
+    /**
+     * The line range an editor should highlight for a file's edits: the last
+     * edit's `startLine..endLine`. Null when there are no edits, the file was
+     * created this run (the whole file is new), or no start line was recorded.
+     */
+    internal fun highlightRangeFor(edits: List<FileEdit>): IntRange? {
+        if (edits.isEmpty()) return null
+        if (edits.first().created) return null
+        val last = edits.last()
+        val start = last.startLine ?: return null
+        if (start <= 0) return null
+        val end = last.endLine ?: start
+        return if (end >= start) start..end else end..start
+    }
+
+    // ---- surface refresh (agent writes -> Files + chat) ----
+
+    /** Paths accumulated between debounced surface refreshes. */
+    private val surfacePending: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /** The in-flight debounced surface refresh, replaced on a newer change. */
+    private var surfaceRefreshJob: Job? = null
+
+    /**
+     * Coalesce a burst of file changes for [SURFACE_REFRESH_MS] on [io], then
+     * re-read the open Files folder/editor and bump [ChatState.fileRevision] so
+     * the chat invalidates mention resolution. A no-op for an empty set.
+     */
+    internal fun scheduleSurfaceRefresh(paths: Set<String>) {
+        if (paths.isEmpty()) return
+        surfacePending.addAll(paths)
+        surfaceRefreshJob?.cancel()
+        surfaceRefreshJob = viewModelScope.launch(io) {
+            delay(SURFACE_REFRESH_MS)
+            val pending = ArrayList(surfacePending).toSet()
+            surfacePending.clear()
+            applySurfaceRefresh(pending)
+        }
+    }
+
+    /** True when any changed [paths] entry is a direct child of workspace-relative [dir]. */
+    internal fun filesDirAffectedBy(dir: String, paths: Set<String>): Boolean {
+        val target = normalizeRel(dir)
+        return paths.any { raw ->
+            val p = normalizeRel(raw)
+            p.isNotEmpty() && p.substringBeforeLast('/', "") == target
+        }
+    }
+
+    /**
+     * Apply a coalesced surface refresh: re-list the open folder when one of
+     * [paths] is its direct child, re-read the open editor when its file changed,
+     * then bump [ChatState.fileRevision] and the model metrics.
+     */
+    internal fun applySurfaceRefresh(paths: Set<String>) {
+        if (paths.isEmpty()) return
+        val current = _state.value
+        current.files?.dir?.let { dir ->
+            if (filesDirAffectedBy(dir, paths)) openFiles(dir)
+        }
+        val editor = current.editor
+        if (editor != null && paths.any { normalizeRel(it) == normalizeRel(editor.path) }) {
+            editFile(editor.path, editor.highlight?.first)
+        }
+        bumpFileRevision()
+        refreshModelMetrics()
+    }
+
+    /** Bump the monotonic file-change counter the chat keys mention resolution on. */
+    private fun bumpFileRevision() {
+        _state.value = _state.value.copy(fileRevision = _state.value.fileRevision + 1)
     }
 
     /** Dismiss the files editor. */
@@ -1737,10 +1950,13 @@ class ChatViewModel(
         viewModelScope.launch {
             val session = _state.value.currentSessionId ?: edit.sessionId.value
             when (val result = Reverter.revertLatest(snapshots, SessionId(session), edit.path, workspace)) {
-                is RevertResult.Restored -> _state.value = _state.value.copy(
-                    changes = RunChanges(edits = _state.value.changes.edits.filterNot { it.path == edit.path }),
-                    error = null,
-                )
+                is RevertResult.Restored -> {
+                    _state.value = _state.value.copy(
+                        changes = RunChanges(edits = _state.value.changes.edits.filterNot { it.path == edit.path }),
+                        error = null,
+                    )
+                    scheduleSurfaceRefresh(setOf(edit.path))
+                }
                 is RevertResult.Failed -> _state.value =
                     _state.value.copy(error = "revert failed: ${result.reason}")
             }
@@ -1802,13 +2018,16 @@ class ChatViewModel(
                     // Keep the ongoing notification's progress line in step.
                     context?.let { ctx -> runCatching { RunService.update(ctx, e.message) } }
                 }
-                is AgentEvent.UsageUpdated -> _state.value = _state.value.copy(usage = e.usage)
+                is AgentEvent.UsageUpdated -> applyUsage(e.usage)
                 is AgentEvent.BudgetWarning -> {
                     val pct = (e.fraction * 100).toInt()
                     diag("budget: $pct% used")
                     _state.value = _state.value.copy(hint = "cost budget ${pct}% used")
                 }
-                is AgentEvent.FileEdited -> addChange(e.edit)
+                is AgentEvent.FileEdited -> {
+                    addChange(e.edit)
+                    scheduleSurfaceRefresh(setOf(e.edit.path))
+                }
                 is AgentEvent.StateChanged -> {
                     val busy = e.state == dev.spindle.core.model.SessionState.RUNNING
                     // A state change is authoritative: flush whatever streamed
@@ -1820,6 +2039,11 @@ class ChatViewModel(
                         // (the common case after a stop) with what was saved.
                         requestRebuild(SessionId(current))
                         refreshSessions()
+                        // A run may have written files through paths the watcher
+                        // missed; re-list the open folder and invalidate mentions.
+                        _state.value.files?.let { openFiles(it.dir) }
+                        bumpFileRevision()
+                        refreshModelMetrics()
                     }
                 }
                 is AgentEvent.Error -> {
@@ -2230,6 +2454,9 @@ class ChatViewModel(
 
         /** Quiet period before a session search query is actually executed. */
         internal const val SEARCH_DEBOUNCE_MS = 150L
+
+        /** Quiet period that coalesces a burst of file changes into one refresh. */
+        internal const val SURFACE_REFRESH_MS = 60L
 
         /**
          * How long a burst of token deltas accumulates before one state publish.

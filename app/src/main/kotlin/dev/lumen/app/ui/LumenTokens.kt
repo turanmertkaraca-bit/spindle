@@ -41,6 +41,9 @@ object LumenShapes {
     /** The composer's capsule input field. */
     val field = RoundedCornerShape(50)
 
+    /** The single rounded composer card holding the input and its control row. */
+    val composer = RoundedCornerShape(26.dp)
+
     /** A message bubble with one corner tucked toward its author. */
     val bubbleYou = RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp)
     val bubbleAgent = RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp)

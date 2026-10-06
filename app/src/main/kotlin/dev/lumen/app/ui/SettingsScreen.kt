@@ -57,6 +57,10 @@ fun SettingsScreen(
     onStorage: () -> Unit = {},
     /** Open the diagnostics screen (Linux environment + event log). */
     onDiagnostics: () -> Unit = {},
+    /** Open the GitHub token + repository screen, when supplied. */
+    onGitHub: (() -> Unit)? = null,
+    /** Non-secret GitHub login shown on the GitHub link's status line. */
+    githubLogin: String = "",
 ) {
     Column(
         modifier.fillMaxSize().background(colors.bg).imePadding()
@@ -173,6 +177,23 @@ fun SettingsScreen(
                     uncheckedBorderColor = colors.rule,
                 ),
                 modifier = Modifier.testTag("ask-before-tools"),
+            )
+        }
+
+        if (onGitHub != null) {
+            Spacer(Modifier.height(24.dp))
+            Text("integrations", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
+            Spacer(Modifier.height(8.dp))
+            SettingsLink(
+                colors = colors,
+                label = "github",
+                subtitle = if (githubLogin.isBlank()) {
+                    "connect a personal access token"
+                } else {
+                    "connected as $githubLogin"
+                },
+                tag = "settings-github",
+                onClick = onGitHub,
             )
         }
 

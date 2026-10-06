@@ -26,6 +26,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.lumen.app.ui.CanvasScreen
 import dev.lumen.app.ui.DiagnosticsScreen
 import dev.lumen.app.ui.FilesScreen
+import dev.lumen.app.ui.GitHubScreen
 import dev.lumen.app.ui.HomeScreen
 import dev.lumen.app.ui.KeyScreen
 import dev.lumen.app.ui.LumenChatScreen
@@ -94,6 +95,11 @@ class MainActivity : ComponentActivity() {
                         route = terminalReturn
                     }
                     route == "storage" || route == "diagnostics" -> route = "settings"
+                    route == "github" -> {
+                        viewModel.refreshGithubLogin()
+                        route = "settings"
+                    }
+                    route == "key" -> route = "settings"
                     route == "settings" -> route = "home"
                     route == "chat" -> {
                         viewModel.closeChat()
@@ -114,6 +120,7 @@ class MainActivity : ComponentActivity() {
                     modifier = modifier,
                     onToggleTheme = toggleTheme,
                     initialProvider = state.provider,
+                    initialKey = viewModel.currentApiKey(),
                 )
             } else when {
                 onChat -> LumenChatScreen(
@@ -123,6 +130,18 @@ class MainActivity : ComponentActivity() {
                     error = state.error,
                     colors = colors,
                     modifier = modifier,
+                    model = state.model,
+                    onModel = { route = "settings" },
+                    onOpenMention = { p, l ->
+                        viewModel.openFileInFiles(p, l)
+                        filesReturn = "chat"
+                        route = "files"
+                    },
+                    fileRevision = state.fileRevision,
+                    fileKind = viewModel::fileKind,
+                    contextWindow = state.contextWindow,
+                    nextCostUsd = state.nextCostUsd,
+                    newTokens = state.newTokens,
                     title = state.sessions.firstOrNull { it.id == state.currentSessionId }?.title ?: "",
                     onHome = {
                         viewModel.closeChat()
@@ -170,7 +189,8 @@ class MainActivity : ComponentActivity() {
                     onAttachImage = viewModel::attachImage,
                 )
                 route == "files" -> {
-                    LaunchedEffect(Unit) { if (state.files == null) viewModel.openFiles() }
+                    // Always re-list on entry so external/agent changes show.
+                    LaunchedEffect(Unit) { viewModel.openFiles(state.files?.dir) }
                     FilesScreen(
                         colors = colors,
                         files = state.files,
@@ -261,10 +281,7 @@ class MainActivity : ComponentActivity() {
                     onProvider = viewModel::setProvider,
                     onModel = viewModel::setModel,
                     onTheme = viewModel::setTheme,
-                    onEditKey = {
-                        viewModel.clearKey()
-                        route = "home"
-                    },
+                    onEditKey = { route = "key" },
                     onBack = { route = "home" },
                     modifier = modifier,
                     askBeforeTools = state.askBeforeTools,
@@ -273,6 +290,27 @@ class MainActivity : ComponentActivity() {
                     onMaxCost = viewModel::setMaxCost,
                     onStorage = { route = "storage" },
                     onDiagnostics = { route = "diagnostics" },
+                    onGitHub = { route = "github" },
+                    githubLogin = state.githubLogin,
+                )
+                route == "key" -> KeyScreen(
+                    colors = colors,
+                    onSubmit = { provider, key ->
+                        viewModel.saveKey(provider, key)
+                        route = "settings"
+                    },
+                    modifier = modifier,
+                    onToggleTheme = toggleTheme,
+                    initialProvider = state.provider,
+                    initialKey = viewModel.currentApiKey(),
+                )
+                route == "github" -> GitHubScreen(
+                    colors = colors,
+                    onBack = {
+                        viewModel.refreshGithubLogin()
+                        route = "settings"
+                    },
+                    modifier = modifier,
                 )
                 else -> HomeScreen(
                     colors = colors,
@@ -312,6 +350,21 @@ class MainActivity : ComponentActivity() {
                         terminalReturn = "home"
                         route = "terminal"
                     },
+                    provider = state.provider,
+                    model = state.model,
+                    maxCostUsd = state.maxCostUsd,
+                    sandboxLabel = when {
+                        state.linux.installing -> "installing"
+                        state.linux.debianActive -> "debian"
+                        state.linux.alpineReady -> "alpine"
+                        else -> "system"
+                    },
+                    githubLogin = state.githubLogin,
+                    askBeforeTools = state.askBeforeTools,
+                    onAskBeforeTools = viewModel::setAskBeforeTools,
+                    onDiagnostics = { route = "diagnostics" },
+                    onStorage = { route = "storage" },
+                    onGitHub = { route = "github" },
                 )
             }
         }

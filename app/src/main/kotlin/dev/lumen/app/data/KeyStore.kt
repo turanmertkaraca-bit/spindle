@@ -1,54 +1,81 @@
 package dev.lumen.app.data
 
 import android.content.Context
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Tiny key store on private SharedPreferences. The API key is sealed with
- * [SecretCipher] (Android Keystore AES/GCM) before it is persisted, so it is
- * never cleartext at rest; the manifest disables backup so it cannot be
- * cloud-backed-up either.
+ * Tiny key store on private SharedPreferences. Secrets (the provider API key
+ * and the GitHub token) are sealed with [SecretCipher] (Android Keystore
+ * AES/GCM) before they are persisted, so they are never cleartext at rest; the
+ * manifest disables backup so they cannot be cloud-backed-up either.
  */
 class KeyStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("lumen.keys", Context.MODE_PRIVATE)
     private val cipher = SecretCipher(context)
 
     /**
-     * Last-resort, process-lifetime holder used only when even the software AES
-     * fallback cannot seal the key. It is never written to disk, so a failure to
-     * encrypt can never silently downgrade the key to cleartext at rest.
+     * Last-resort, process-lifetime holders used only when even the software AES
+     * fallback cannot seal a secret. They are never written to disk, so a
+     * failure to encrypt can never silently downgrade a secret to cleartext at
+     * rest. Keyed by secret name so the provider key and the GitHub token stay
+     * independent.
      */
     @Volatile
-    private var transientKey: String? = null
+    private val transient = ConcurrentHashMap<String, String>()
+
+    /** Read [name], migrating a legacy cleartext [legacyKey] on first read. */
+    private fun readSecret(name: String, encKey: String, legacyKey: String): String? {
+        prefs.getString(encKey, null)?.let { sealed ->
+            cipher.decrypt(sealed)?.let { return it }
+        }
+        transient[name]?.let { return it }
+        val legacy = prefs.getString(legacyKey, null) ?: return null
+        writeSecret(name, encKey, legacyKey, legacy)
+        return legacy
+    }
+
+    /** Seal [value] at rest, or hold it in memory only. Never persists cleartext. */
+    private fun writeSecret(name: String, encKey: String, legacyKey: String, value: String?) {
+        if (value.isNullOrBlank()) {
+            transient.remove(name)
+            prefs.edit().remove(encKey).remove(legacyKey).apply()
+            return
+        }
+        val clean = value.trim()
+        val sealed = cipher.encrypt(clean)
+        if (sealed != null) {
+            transient.remove(name)
+            prefs.edit().putString(encKey, sealed).remove(legacyKey).apply()
+        } else {
+            // Encryption is unavailable (Keystore broken and no AES):
+            // hold the key in memory only. Never persist cleartext.
+            transient[name] = clean
+            prefs.edit().remove(encKey).remove(legacyKey).apply()
+        }
+    }
 
     var apiKey: String?
-        get() {
-            prefs.getString("apiKeyEnc", null)?.let { sealed ->
-                cipher.decrypt(sealed)?.let { return it }
-            }
-            transientKey?.let { return it }
-            // Migrate a legacy cleartext key to the encrypted form on first read.
-            val legacy = prefs.getString("apiKey", null) ?: return null
-            apiKey = legacy
-            return legacy
-        }
-        set(value) {
-            if (value.isNullOrBlank()) {
-                transientKey = null
-                prefs.edit().remove("apiKeyEnc").remove("apiKey").apply()
-                return
-            }
-            val clean = value.trim()
-            val sealed = cipher.encrypt(clean)
-            if (sealed != null) {
-                transientKey = null
-                prefs.edit().putString("apiKeyEnc", sealed).remove("apiKey").apply()
-            } else {
-                // Encryption is unavailable (Keystore broken and no AES):
-                // hold the key in memory only. Never persist cleartext.
-                transientKey = clean
-                prefs.edit().remove("apiKeyEnc").remove("apiKey").apply()
-            }
-        }
+        get() = readSecret("apiKey", "apiKeyEnc", "apiKey")
+        set(value) = writeSecret("apiKey", "apiKeyEnc", "apiKey", value)
+
+    /**
+     * GitHub personal access token, sealed with the same [SecretCipher] as
+     * [apiKey] and migrated from a legacy cleartext `githubToken` pref. Never
+     * logged, echoed or embedded in a remote URL.
+     */
+    var githubToken: String?
+        get() = readSecret("githubToken", "githubTokenEnc", "githubToken")
+        set(value) = writeSecret("githubToken", "githubTokenEnc", "githubToken", value)
+
+    /** The authenticated GitHub login (non-secret; shown on the status card). */
+    var githubLogin: String
+        get() = prefs.getString("githubLogin", "") ?: ""
+        set(value) = prefs.edit().putString("githubLogin", value).apply()
+
+    /** The chosen GitHub repository as `owner/name` (non-secret). */
+    var githubRepo: String
+        get() = prefs.getString("githubRepo", "") ?: ""
+        set(value) = prefs.edit().putString("githubRepo", value).apply()
 
     /**
      * Which provider the key belongs to. Switching providers resets [model] to
@@ -127,6 +154,9 @@ class KeyStore(context: Context) {
         }
 
     val hasKey: Boolean get() = !apiKey.isNullOrBlank()
+
+    /** True when a GitHub token has been stored (and can be decrypted). */
+    val hasGithubToken: Boolean get() = !githubToken.isNullOrBlank()
 
     companion object {
         private const val DEFAULT_PROVIDER = "opencode-go"

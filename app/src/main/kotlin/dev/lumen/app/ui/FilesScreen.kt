@@ -34,8 +34,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -379,6 +383,23 @@ private fun EditorOverlay(
         if (!dirty) draft = editor.lines.joinToString("\n")
     }
 
+    // The highlighted (agent-edited) line band. Purely visual: the field keeps
+    // its own scroll state, and the band is drawn in content coordinates so it
+    // travels with the text instead of floating over it.
+    val scroll = rememberScrollState()
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val highlight = editor.highlight
+
+    // Bring the first edited line into view whenever the target changes or the
+    // text is (re)measured. Purely a convenience; it never mutates the draft.
+    LaunchedEffect(highlight, layout) {
+        val h = highlight ?: return@LaunchedEffect
+        val l = layout ?: return@LaunchedEffect
+        if (l.lineCount == 0) return@LaunchedEffect
+        val line = (h.first - 1).coerceIn(0, l.lineCount - 1)
+        scroll.scrollTo(l.getLineTop(line).toInt())
+    }
+
     Column(Modifier.fillMaxSize().background(colors.bg)) {
         LumenTopBar(
             colors = colors,
@@ -399,6 +420,23 @@ private fun EditorOverlay(
             },
         )
 
+        // A quiet, testable confirmation that something pointed us at a line
+        // range. Absent for a freshly created or untouched file.
+        highlight?.let { h ->
+            val first = h.first.coerceAtLeast(1)
+            val last = h.last.coerceAtLeast(first)
+            Text(
+                "edited L$first\u2013L$last",
+                color = colors.water, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.4.sp,
+                modifier = Modifier
+                    .padding(start = 16.dp, end = 16.dp, top = 6.dp)
+                    .clip(LumenShapes.small)
+                    .background(colors.water.copy(alpha = 0.12f))
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                    .testTag("editor-highlight"),
+            )
+        }
+
         if (failed) {
             Text(
                 editor.error.orEmpty(), color = LumenAlert, fontFamily = Mono, fontSize = 12.sp,
@@ -415,7 +453,7 @@ private fun EditorOverlay(
         }
         Box(
             Modifier.weight(1f).fillMaxWidth()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scroll)
                 .padding(horizontal = 16.dp, vertical = 10.dp),
         ) {
             BasicTextField(
@@ -426,7 +464,25 @@ private fun EditorOverlay(
                 },
                 textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp),
                 cursorBrush = SolidColor(colors.water),
-                modifier = Modifier.fillMaxWidth().testTag("editor-body"),
+                onTextLayout = { layout = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .drawBehind {
+                        val l = layout ?: return@drawBehind
+                        val h = highlight ?: return@drawBehind
+                        if (l.lineCount == 0) return@drawBehind
+                        val start = (h.first - 1).coerceIn(0, l.lineCount - 1)
+                        val end = (h.last - 1).coerceIn(0, l.lineCount - 1)
+                        if (end < start) return@drawBehind
+                        val top = l.getLineTop(start)
+                        val bottom = l.getLineBottom(end)
+                        drawRect(
+                            color = colors.water.copy(alpha = 0.14f),
+                            topLeft = Offset(0f, top),
+                            size = Size(size.width, bottom - top),
+                        )
+                    }
+                    .testTag("editor-body"),
             )
         }
     }

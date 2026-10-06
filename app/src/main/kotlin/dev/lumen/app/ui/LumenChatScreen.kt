@@ -117,6 +117,7 @@ import dev.spindle.core.model.RunChanges
 import dev.spindle.core.model.TodoItem
 import dev.spindle.core.model.TodoStatus
 import dev.spindle.core.model.Usage
+import dev.spindle.core.refs.FileKind
 import java.util.Locale
 import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
@@ -253,6 +254,10 @@ fun LumenChatScreen(
     agentMode: String = "build",
     /** Switch the primary agent. */
     onAgentMode: (String) -> Unit = {},
+    /** Active model id; its basename shows in the composer's model chip. */
+    model: String = "",
+    /** Open/cycle the model picker; null hides the model chip. */
+    onModel: (() -> Unit)? = null,
     onInput: (String) -> Unit = {},
     onSend: () -> Unit = {},
     onStop: () -> Unit = {},
@@ -264,6 +269,12 @@ fun LumenChatScreen(
     usage: Usage = Usage(),
     /** Per-session cost ceiling in USD; 0 means no limit (meter shows spend only). */
     budgetUsd: Double = 0.0,
+    /** The model's context window in tokens; 0 keeps the classic usage line. */
+    contextWindow: Int = 0,
+    /** Estimated cost of the next turn in USD; negative hides it. */
+    nextCostUsd: Double = -1.0,
+    /** Tokens added since the last usage roll-up, for the compact meter. */
+    newTokens: Int = 0,
     /** Structured file changes for this run; the card hides when empty. */
     changes: RunChanges = RunChanges.EMPTY,
     /** Live todo list for the current session; the board hides when empty. */
@@ -274,6 +285,8 @@ fun LumenChatScreen(
     onClosePeek: () -> Unit = {},
     /** Open a referenced file in the peek sheet, optionally at a 1-based line. */
     onOpenFile: (String, Int?) -> Unit = { _, _ -> },
+    /** Route assistant mention taps here when supplied (e.g. the Files cockpit). */
+    onOpenMention: ((String, Int?) -> Unit)? = null,
     /** Revert a changed file to its pre-edit snapshot. */
     onRevert: (FileEdit) -> Unit = {},
     /** Workspace root handed to the pure [dev.spindle.core.refs.ReferenceResolver]. */
@@ -282,6 +295,10 @@ fun LumenChatScreen(
     exists: (String) -> Boolean = { false },
     /** Paths changed this run; references to them get a stronger style. */
     touchedPaths: Set<String> = emptySet(),
+    /** Workspace revision; a bump re-resolves mentions so new files become tappable. */
+    fileRevision: Int = 0,
+    /** Kind gate: when supplied, directory mentions link too; null keeps files only. */
+    fileKind: ((String) -> FileKind?)? = null,
     /** Steps in the current session that reference the peeked file. */
     onBacklinks: (String) -> List<Backlink> = { emptyList() },
     /** Best-effort jump of the timeline to a step index (a backlink was tapped). */
@@ -497,6 +514,9 @@ fun LumenChatScreen(
                                         exists = exists,
                                         touchedPaths = touchedPaths,
                                         onOpenFile = onOpenFile,
+                                        onOpenMention = onOpenMention,
+                                        fileRevision = fileRevision,
+                                        fileKind = fileKind,
                                         onRewind = onRewind,
                                         onOpenCanvas = onOpenCanvas,
                                         modifier = Modifier.animateItem(),
@@ -532,12 +552,14 @@ fun LumenChatScreen(
                 ChangesCard(changes, colors, onRevert, onOpenFile)
             }
             TodoBoard(todos, colors, pulse)
-            UsageMeter(usage, budgetUsd, colors)
+            UsageMeter(usage, budgetUsd, colors, contextWindow, nextCostUsd, newTokens)
             ask?.let {
                 AskCard(it, colors, onAnswerPermission, onAnswerQuestion, onSkipQuestion)
             }
             Composer(
                 input, busy, colors, onInput, onSend, onStop, onToggleTheme, onEditKey, agentMode, onAgentMode,
+                model = model,
+                onModel = onModel,
                 attachments = attachments,
                 onRemoveAttachment = onRemoveAttachment,
                 onAttach = onAttachImage?.let { { pickImage.launch("image/*") } },
@@ -611,7 +633,7 @@ private fun NewCue(colors: LumenColors, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            "\u2193 new",
+            "\u2193 latest",
             color = colors.water, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.6.sp,
         )
     }
@@ -665,6 +687,9 @@ private fun MessageRow(
     exists: (String) -> Boolean = { false },
     touchedPaths: Set<String> = emptySet(),
     onOpenFile: (String, Int?) -> Unit = { _, _ -> },
+    onOpenMention: ((String, Int?) -> Unit)? = null,
+    fileRevision: Int = 0,
+    fileKind: ((String) -> FileKind?)? = null,
     onRewind: (String) -> Unit = {},
     onOpenCanvas: (String) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -780,7 +805,9 @@ private fun MessageRow(
                             cwd = cwd,
                             exists = exists,
                             touchedPaths = touchedPaths,
-                            onOpenFile = onOpenFile,
+                            onOpenFile = onOpenMention ?: onOpenFile,
+                            fileRevision = fileRevision,
+                            fileKind = fileKind,
                         )
                     } else {
                         WindowedText(body, colors)
@@ -1982,24 +2009,43 @@ private fun ChangesCard(
 }
 
 /**
- * A thin usage footer: rolled-up context tokens, cost, and — when a budget is
+ * A thin usage footer. With a known context window it reads forward: tokens the
+ * last turn added, the estimated cost of the next one, and the window size.
+ * Otherwise it falls back to the rolled-up tokens/cost and — when a budget is
  * set — spend against the ceiling. Hidden entirely until the session has spent
  * tokens, so an idle chat stays clean.
  */
 @Composable
-private fun UsageMeter(usage: Usage, budgetUsd: Double, colors: LumenColors) {
+private fun UsageMeter(
+    usage: Usage,
+    budgetUsd: Double,
+    colors: LumenColors,
+    contextWindow: Int = 0,
+    nextCostUsd: Double = -1.0,
+    newTokens: Int = 0,
+) {
     if (usage.totalTokens <= 0) return
-    val tokens = String.format(Locale.US, "%.1fk tok", usage.totalTokens / 1000.0)
-    val cost = if (usage.costUsd > 0.0) String.format(Locale.US, " · \$%.4f", usage.costUsd) else ""
-    val cap = if (budgetUsd > 0.0) {
-        val pct = (usage.costUsd / budgetUsd * 100).coerceIn(0.0, 999.0)
-        String.format(Locale.US, " / \$%.2f (%.0f%%)", budgetUsd, pct)
+    // With a live context window the meter is compact and forward-looking: how
+    // much this turn added, what the next turn should cost, and the ceiling.
+    // Otherwise it keeps the classic rolled-up token/cost/budget line.
+    val label = if (contextWindow > 0) {
+        val next = if (nextCostUsd >= 0.0) String.format(Locale.US, " \u00b7 next \$%.4f", nextCostUsd) else ""
+        String.format(Locale.US, "\u2248 %d new", newTokens) + next +
+            String.format(Locale.US, " \u00b7 ctx %d", contextWindow)
     } else {
-        ""
+        val tokens = String.format(Locale.US, "%.1fk tok", usage.totalTokens / 1000.0)
+        val cost = if (usage.costUsd > 0.0) String.format(Locale.US, " \u00b7 \$%.4f", usage.costUsd) else ""
+        val cap = if (budgetUsd > 0.0) {
+            val pct = (usage.costUsd / budgetUsd * 100).coerceIn(0.0, 999.0)
+            String.format(Locale.US, " / \$%.2f (%.0f%%)", budgetUsd, pct)
+        } else {
+            ""
+        }
+        tokens + cost + cap
     }
     val over = budgetUsd > 0.0 && usage.costUsd >= budgetUsd
     Text(
-        tokens + cost + cap,
+        label,
         color = if (over) colors.accent else colors.faint,
         fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.5.sp,
         modifier = Modifier
@@ -2146,6 +2192,8 @@ private fun Composer(
     onEditKey: (() -> Unit)?,
     agentMode: String,
     onAgentMode: (String) -> Unit,
+    model: String = "",
+    onModel: (() -> Unit)? = null,
     attachments: List<PendingImage> = emptyList(),
     onRemoveAttachment: (Int) -> Unit = {},
     onAttach: (() -> Unit)? = null,
@@ -2194,64 +2242,27 @@ private fun Composer(
                 }
             }
         }
-        Row(
-            Modifier.fillMaxWidth().background(colors.bg)
-                .padding(start = 16.dp, end = 14.dp, top = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            AgentModeChip("build", "agent-build", agentMode == "build", colors.water, colors, onAgentMode)
-            Spacer(Modifier.width(6.dp))
-            AgentModeChip("plan", "agent-plan", agentMode == "plan", colors.accent, colors, onAgentMode)
-            if (agentMode == "plan") {
-                Spacer(Modifier.width(8.dp))
-                Text("read-only plan", color = colors.accent.copy(alpha = 0.75f), fontFamily = Mono, fontSize = 10.sp)
-            }
-        }
-        Box(
-            Modifier.fillMaxWidth().height(1.dp).drawBehind {
-                drawRect(
-                    brush = Brush.horizontalGradient(
-                        listOf(Color.Transparent, colors.bloomA.copy(alpha = 0.5f), colors.bloomB.copy(alpha = 0.5f), Color.Transparent),
-                    ),
-                )
-            },
-        )
         FileSuggestions(suggestions, colors, pickSuggestion)
-        Row(
-            Modifier.fillMaxWidth().background(colors.bg)
-                .padding(start = 16.dp, end = 14.dp, top = 8.dp, bottom = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        // One calm rounded card: the input on top, its small controls beneath.
+        // The focus hairline lives on the card, so the whole composer reads as a
+        // single active surface rather than a field plus a toolbar.
+        val cardShape = LumenShapes.composer
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 8.dp)
+                .clip(cardShape)
+                .background(colors.surface)
+                .border(1.dp, if (inputFocused) colors.water else colors.rule, cardShape)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            if (onAttach != null) {
-                // Secondary affordance: a dim label by design so the send control
-                // is unmistakably the bar's one action.
-                Text(
-                    "image",
-                    color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
-                    modifier = Modifier
-                        .clip(LumenShapes.small)
-                        .clickable { onAttach() }
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                        .testTag("attach-image"),
-                )
-                Spacer(Modifier.width(4.dp))
-            }
-            val fieldShape = LumenShapes.pill
-            Box(
-                Modifier.weight(1f)
-                    .clip(fieldShape)
-                    .background(colors.surface)
-                    // Focus ring: the rule hairline warms to the water accent the
-                    // moment the field takes focus, so the active input is obvious.
-                    .border(1.dp, if (inputFocused) colors.water else colors.rule, fieldShape)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-            ) {
+            Box(Modifier.fillMaxWidth()) {
                 // A real placeholder: shown only while empty and unfocused, at the
                 // exact content origin of the field, so it never overlaps the caret.
                 if (input.isEmpty() && !inputFocused) {
                     Text(
                         "ask the agent…", color = colors.faint, fontFamily = Mono, fontSize = 14.sp,
-                        modifier = Modifier.testTag("composer-hint"),
+                        modifier = Modifier.padding(vertical = 6.dp).testTag("composer-hint"),
                     )
                 }
                 BasicTextField(
@@ -2265,56 +2276,125 @@ private fun Composer(
                     // then, and the IME action must not race it into a double-send.
                     keyboardActions = KeyboardActions(onSend = { if (canSend && !busy) onSend() }),
                     interactionSource = fieldInteraction,
-                    modifier = Modifier.fillMaxWidth().testTag("composer"),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp).testTag("composer"),
                 )
             }
-            Spacer(Modifier.width(8.dp))
-            if (onEditKey != null) {
-                Text(
-                    "key", color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp,
-                    modifier = Modifier.clickable { onEditKey() }.padding(horizontal = 4.dp).testTag("key"),
-                )
-            }
-            if (onToggleTheme != null) {
-                Text(
-                    "◐", color = colors.faint, fontFamily = Mono, fontSize = 13.sp,
-                    modifier = Modifier.clickable { onToggleTheme() }.padding(horizontal = 4.dp).testTag("theme"),
-                )
-            }
-            // The primary action: a filled 44dp target. Idle-with-text is a bright
-            // spectral send; busy is a solid danger stop; blank-and-idle is a dim,
-            // bordered, disabled send so the control never disappears or shifts.
-            val actionShape = LumenShapes.pill
-            Box(
-                Modifier
-                    .graphicsLayer { scaleX = scale; scaleY = scale }
-                    .size(44.dp)
-                    .clip(actionShape)
-                    .background(
-                        when {
-                            busy -> SolidColor(colors.danger())
-                            canSend -> Brush.linearGradient(listOf(colors.bloomA, colors.bloomB, colors.bloomC))
-                            else -> SolidColor(colors.surface)
-                        },
+            Spacer(Modifier.height(6.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                if (onAttach != null) {
+                    // Secondary affordances, dim by design, so the send control is
+                    // unmistakably the card's one primary action. The eye reuses
+                    // the same picker: an attached image IS the vision path.
+                    ComposerControl("+", "attach-image", colors.dim, onAttach)
+                    Spacer(Modifier.width(2.dp))
+                    ComposerControl("\u25c9", "attach-vision", colors.faint, onAttach)
+                    Spacer(Modifier.width(6.dp))
+                }
+                AgentModeChip("build", "agent-build", agentMode == "build", colors.water, colors, onAgentMode)
+                Spacer(Modifier.width(5.dp))
+                AgentModeChip("plan", "agent-plan", agentMode == "plan", colors.accent, colors, onAgentMode)
+                val modelLabel = model.substringAfterLast('/')
+                if (onModel != null && modelLabel.isNotBlank()) {
+                    Spacer(Modifier.width(5.dp))
+                    ModelChip(modelLabel, colors, onModel)
+                }
+                Spacer(Modifier.weight(1f))
+                if (onEditKey != null) {
+                    Text(
+                        "key", color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp,
+                        modifier = Modifier
+                            .clip(LumenShapes.small)
+                            .clickable { onEditKey() }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .testTag("key"),
                     )
-                    .then(if (!busy && !canSend) Modifier.border(1.dp, colors.rule, actionShape) else Modifier)
-                    .clickable(
-                        enabled = busy || canSend,
-                        interactionSource = interaction,
-                        indication = LocalIndication.current,
-                        onClick = { if (busy) onStop() else onSend() },
+                }
+                if (onToggleTheme != null) {
+                    Text(
+                        "◐", color = colors.faint, fontFamily = Mono, fontSize = 13.sp,
+                        modifier = Modifier
+                            .clip(LumenShapes.small)
+                            .clickable { onToggleTheme() }
+                            .padding(horizontal = 4.dp)
+                            .testTag("theme"),
                     )
-                    .testTag(if (busy) "stop" else "send"),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    if (busy) "■" else "↑",
-                    color = if (busy || canSend) colors.bg else colors.faint,
-                    fontFamily = Mono, fontSize = if (busy) 13.sp else 18.sp, fontWeight = FontWeight.Bold,
-                )
+                }
+                Spacer(Modifier.width(4.dp))
+                // The primary action: a filled circular target. Idle-with-text is
+                // a bright spectral send; busy is a solid danger stop; blank-and-idle
+                // is a dim, bordered, disabled send so the control never shifts.
+                val actionShape = LumenShapes.pill
+                Box(
+                    Modifier
+                        .graphicsLayer { scaleX = scale; scaleY = scale }
+                        .size(40.dp)
+                        .clip(actionShape)
+                        .background(
+                            when {
+                                busy -> SolidColor(colors.danger())
+                                canSend -> Brush.linearGradient(listOf(colors.bloomA, colors.bloomB, colors.bloomC))
+                                else -> SolidColor(colors.surface)
+                            },
+                        )
+                        .then(if (!busy && !canSend) Modifier.border(1.dp, colors.rule, actionShape) else Modifier)
+                        .clickable(
+                            enabled = busy || canSend,
+                            interactionSource = interaction,
+                            indication = LocalIndication.current,
+                            onClick = { if (busy) onStop() else onSend() },
+                        )
+                        .testTag(if (busy) "stop" else "send"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        if (busy) "■" else "↑",
+                        color = if (busy || canSend) colors.bg else colors.faint,
+                        fontFamily = Mono, fontSize = if (busy) 12.sp else 17.sp, fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
     }
+}
+
+/** A tiny monospace glyph control for the composer card's bottom row. */
+@Composable
+private fun ComposerControl(
+    glyph: String,
+    tag: String,
+    tint: Color,
+    onClick: () -> Unit,
+) {
+    Text(
+        glyph,
+        color = tint, fontFamily = Mono, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+        modifier = Modifier
+            .clip(LumenShapes.small)
+            .clickable { onClick() }
+            .padding(horizontal = 5.dp, vertical = 2.dp)
+            .testTag(tag),
+    )
+}
+
+/**
+ * The active model's basename as a small chip; tapping invokes [onClick] (the
+ * picker). Kept dim so the send circle stays the loudest control in the row.
+ */
+@Composable
+private fun ModelChip(label: String, colors: LumenColors, onClick: () -> Unit) {
+    Text(
+        label,
+        color = colors.dim, fontFamily = Mono, fontSize = 9.5.sp, fontWeight = FontWeight.Medium,
+        maxLines = 1, overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .widthIn(max = 96.dp)
+            .clip(LumenShapes.pill)
+            .background(colors.water.copy(alpha = 0.10f))
+            .border(1.dp, colors.water.copy(alpha = 0.30f), LumenShapes.pill)
+            .clickable { onClick() }
+            .padding(horizontal = 7.dp, vertical = 2.dp)
+            .testTag("model-chip"),
+    )
 }
 
 /** The trailing `@path` token the composer completes, if any. */
