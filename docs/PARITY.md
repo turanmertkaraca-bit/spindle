@@ -104,7 +104,16 @@ deferred.
 
 ✅ `bash` runs through a `ShellExecutor`: host `/bin/sh` on dev/CI, the ported
 Debian proot sandbox + PTY on Android. The tool boundary is unchanged — only the
-executor swaps.
+executor swaps. On device the guest starts in the **bound session workspace**
+(`prootArgv --cwd=<session cwd>`; `/root` only when no cwd is supplied), so a
+relative path in an agent command resolves to the same file the app's tools and
+the Files view see (`7208586`) — matching opencode's `cwd`-relative `bash`.
+
+✅ **Actionable mentions** (app-level, beyond opencode's plain links): a tapped
+file reference dispatches by extension — file/dir → Files viewer at the line,
+`.html`/`.htm` → Canvas, image → external viewer, `.apk` → system installer via a
+workspace-scoped `FileProvider` (`platform/WorkspaceActions.kt`). External URLs
+are not yet tappable (the `:core` resolver rejects `://`).
 
 ## Gaps ranked by when they will bite
 

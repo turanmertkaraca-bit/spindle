@@ -86,6 +86,26 @@ interchangeable:
   custom `User-Agent` on every request (see the Go section above); a
   missing/changing session id can drop affinity.
 
+## Live model catalogue (app)
+
+The app keeps a live catalogue per provider, layered over the embedded
+`ProviderCatalogue` snapshot:
+
+- On app start and on provider switch/refresh, `data/ModelCatalogue.kt` fetches
+  the provider's live `/models`, **merges** it over the embedded snapshot, and
+  **caches** it on-device in SharedPreferences (`lumen.models`) so it survives a
+  restart. The embedded snapshot is always the floor, so an offline cold start
+  (or a corrupt cache) behaves as before.
+- OpenRouter's catalogue is public but fetched lazily when it is selected; a
+  keyed provider with a blank key skips the request. A failed refresh keeps the
+  current list and records an error rather than emptying the UI.
+- `ChatState.models` / `modelsRefreshing` / `modelsError` drive the full-screen
+  `ModelPickerScreen` (route `"models"`), reachable from the composer model chip
+  and Settings → "Browse all models".
+- Reminder: `/models` is public (no auth), so a 200 is **not** proof a key is
+  valid — verify with an inference call. The headless `:cli` path instead uses
+  `SimpleProviderRegistry`, which caches `models()` once behind a mutex.
+
 ## Environment variables
 
 | variable | used by |

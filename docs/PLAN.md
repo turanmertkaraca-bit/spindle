@@ -165,7 +165,10 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
 ### m13 — Android platform adapters
 
 - [x] `ShellExecutor`: host `/bin/sh` (dev) + Debian proot + PTY (device);
-      port `Debian.java` / `Sandbox.java`.
+      port `Debian.java` / `Sandbox.java`. The guest starts in the bound session
+      workspace (`prootArgv --cwd=<session cwd>`, `/root` only when no cwd is
+      supplied) so relative command paths resolve to the app's workspace files
+      (`7208586`).
 - [x] External-change watcher (port `DirWatcher`); files cockpit covers
       list/stat/read/write/save.
 - [x] `EnvironmentManager`: rootfs install/curate/prune, apt, storage report.
@@ -173,18 +176,24 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
       the Application-scoped `LumenApp.applicationScope`, so a run survives
       backgrounding and only an explicit stop cancels it (`87ebe96`; see HANDOFF).
 - [x] SQLite FTS index on the app store (`message_fts`, FTS5 with scan
-      fallback); key store ported; models.dev live catalogue enrichment merged
-      over the embedded snapshot.
+      fallback); key store ported; models.dev catalogue **live-fetched** on app
+      start + provider switch, merged over the embedded snapshot, cached in
+      SharedPreferences (`lumen.models`), with a full-screen `ModelPickerScreen`
+      (route `"models"`) from the composer chip and Settings (`4a2f248`).
 
 ### m14 — Feature verticals — `[x]` DONE
 
 - [x] **Changes**: `RunChanges` aggregate, diff card, per-file revert (rework of
       `EditPulse`).
-- [x] **References** (`3791ad2`, `47d1ec4`): typed resolver (`path:line`/ranges)
-      with directory support (`ReferenceResolver.resolveKinds`,
-      `FileReference.isDir`), touched-vs-mentioned, and tappable mentions that
-      open the file in the Files viewer at the line (newly created files link on
-      a workspace revision bump).
+- [x] **References** (`3791ad2`, `47d1ec4`, `7e31db6`, `7208586`): typed
+      resolver (`path:line`/ranges) with directory support
+      (`ReferenceResolver.resolveKinds`, `FileReference.isDir`),
+      touched-vs-mentioned, and tappable mentions resolved by containment
+      (`7208586`). A tapped mention now dispatches by extension: file/dir → Files
+      viewer at the line, `.html`/`.htm` → Canvas, image → external viewer,
+      `.apk` → system installer via a workspace-scoped FileProvider
+      (`platform/WorkspaceActions.kt`); newly created files link on a workspace
+      revision bump. External URLs (`://`) are still not tappable.
 - [x] **Files live refresh + edit highlight** (`47d1ec4`): the list refreshes on
       agent writes/edits (direct `FileEdited` + indirect `WorkspaceWatcher`);
       opening a touched file scrolls to and highlights the newest edited range
@@ -247,6 +256,13 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
       visible field boundary, unified inline test feedback); and an in-chat
       quick-settings sheet (provider/model/theme/budget/ask + links) means
       settings in a chat no longer jumps to the full page.
+- [x] **0.1.3 native wave (`baac664` → `7208586`)**: non-chat UI rework
+      (`LumenType`/`LumenSize`/`LumenSpacing.page`, larger `StateHint`, gradient
+      New-chat button, card session rows); composer send target restored to its
+      full 40dp via a weighted scrollable secondary track (single attach
+      control); live model catalogue + `ModelPickerScreen` (`4a2f248`); actionable
+      file mentions (`7e31db6`); and the Debian guest cwd fix so agent `bash`
+      relative paths match the app workspace (`7208586`).
 - [x] Release housekeeping: `app/build.gradle.kts` bumped to `versionCode = 4`,
       `versionName = "0.1.3"` (was 3 / `"0.1.2"`; bump per release; never reuse a
       version number).

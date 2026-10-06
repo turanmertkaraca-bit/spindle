@@ -108,6 +108,11 @@ from `Debian.java` (`prootArgv`, `guestProcess`, `runGuest`, rootfs
 install/curate) and `Sandbox.java` (wrapper generation). This is the single
 biggest parity win and the reason targetSdk stays 28.
 
+The guest starts in the **bound session workspace** (`prootArgv --cwd=<session
+cwd>`, falling back to `/root` only when no cwd is supplied), so a relative path
+in an agent `bash` command resolves to the same file the app's own tools and the
+Files view see.
+
 ### 1.5 Workspace / files
 
 New SPI — **`FileSystemService`**: list/stat/read/write/search, project-scoped
@@ -129,7 +134,7 @@ canonical-path clamp (port `FilesActivity` clamp rules), snapshots, save-from-UI
 | DeepSeek, OpenRouter, Zen, Go configs | ✅ |
 | Zen/Go per-model routing (`/messages` for Claude/Qwen, `/chat/completions` otherwise) | ✅ (`/messages` wired + **fixture-tested**; `/responses` for GPT/Grok is **intentionally dropped** — an explicit terminal `Failure`, not a mis-route) |
 | Zen/Go live Claude/GPT streams | ❌ **out of scope by owner decision** (OpenCode Go subscription only, no paid API credits; free tier 403s `/messages`, `/responses` and `/chat/completions` for Claude/GPT) — not blocked-pending-a-key |
-| models.dev catalogue (ported snapshot + live enrichment) | ✅ |
+| models.dev catalogue (provider's live `/models` fetched on start + on provider switch, merged over the embedded snapshot, cached on-device in SharedPreferences `lumen.models`, offline fallback) | ✅ (`data/ModelCatalogue.kt`; full-screen `ModelPickerScreen` route `"models"` from the composer chip and Settings) |
 | Key store (port `AuthStore`, `KeysActivity`) | ✅ (encrypted `KeyStore` + redesigned key screen: provider cards with default model, Show/Hide, Paste, a real "Test key" probe, inline error, non-destructive editing) |
 | OAuth providers | ❌ |
 | Free tier without a key | ❌ (no keyless path; a free-tier key serves only free `/chat/completions` models) |
@@ -183,10 +188,15 @@ Built on the domains above, before any UI.
   `path:line:col`, `path#Lx-Ly`, inline-code and bare tokens — fenced code is
   inert (port the `Mentions` shape filter + existence gate). Directory mentions
   resolve via `ReferenceResolver.resolveKinds` / `FileReference.isDir`.
-- Each target tagged **touched** (changed this run → open diff) vs **mentioned**
-  (→ open the file in the Files viewer at the line, not just an in-chat peek;
-  newly created files link once the workspace revision bumps). Backlinks: file →
-  messages/tool calls referencing it.
+- Each target tagged **touched** (changed this run → open diff) vs **mentioned**,
+  which now dispatches a **typed action by extension**: file/dir → open in the
+  Files viewer at the line (not just an in-chat peek; newly created files link
+  once the workspace revision bumps), `.html`/`.htm` → Canvas, image → external
+  viewer, `.apk` → system package installer (via a workspace-scoped
+  `FileProvider`; routes to the install-unknown-apps setting on first use).
+  Backlinks: file → messages/tool calls referencing it.
+- **Not yet tappable:** external URLs (`https://…`) — the `:core` resolver
+  rejects any token containing `://`.
 - Composer `@`-completion over project files, inserted as context chips.
 
 ### 2.3 Transparency

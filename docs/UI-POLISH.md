@@ -116,17 +116,37 @@ The UI/UX fix wave after 0.1.2:
   transcript, so opening settings inside a chat no longer jumps to the full
   Settings page.
 
+## Refinement pass 5 (`baac664` + `4a2f248` + `6ae8bdd`, 0.1.3)
+
+The non-chat rework plus the live model picker:
+
+- **Non-chat UI rework (`baac664`).** New shared tokens: a compact type scale
+  (`LumenType`), touch/icon sizes (`LumenSize`), and a page inset
+  (`LumenSpacing.page`). `StateHint` is larger with a nested droplet. A gradient
+  New-chat button and card-style session rows on Home; cleaner status pills,
+  search field and touch targets. Friendlier Key header, clearer provider cards,
+  more prominent field. Files breadcrumb/rows/editor tidied. Settings/GitHub/
+  Storage/Diagnostics use grouped cards and consistent captions; Terminal/Canvas
+  get a status dot and consistent chrome. **Every pre-existing test tag is
+  preserved.**
+- **Full-screen model picker (`4a2f248` + `6ae8bdd`).** `ModelPickerScreen`
+  (route `"models"`) lists the live catalogue with provider chips, context/cost
+  badges, a selected check, an in-flight spinner and Refresh; reachable from the
+  composer model chip and Settings ("Browse all models"). Screenshot frames
+  `models_light`/`models_dark` were added.
+
 ## Verification sweep
 
 Items 3–6 above are fully landed. The Robolectric screenshot sweep renders every
-screen in light **and** dark — including GitHub (connected, connect + status) and,
-as of pass 4, the in-chat **quick settings sheet** (light + dark) — for a total of
-**~89 frames (63 per-screen shots + 26 animation-smoothness frames)**; each entry
-is a PNG, or a `.error.txt` if a render fails, so the sweep never fails the build
-(`build/ci-shots*`, uploaded as the `lumen-screenshots` CI artifact). The last
-CI-verified sweep for 0.1.2 reported **0 render errors**; the two new quick-settings
-frames are not re-asserted here — `:app` is CI-only (no Android SDK in the dev
-guest).
+screen in light **and** dark — including GitHub (connected, connect + status), the
+in-chat **quick settings sheet** (pass 4) and, as of pass 5, the full-screen
+**model picker** (`models_light`/`models_dark`) — for a total of **~91 frames
+(65 per-screen shots + 26 animation-smoothness frames)**; each entry is a PNG, or
+a `.error.txt` if a render fails, so the sweep never fails the build
+(`build/screenshots`, uploaded as the `lumen-screenshots` CI artifact). The last
+CI-verified sweep for 0.1.2 reported **0 render errors**; the newer frames
+(quick settings, model picker) are re-verified in CI — `:app` is CI-only (no
+Android SDK in the dev guest).
 
 ## Already addressed (for reference, do not regress)
 
