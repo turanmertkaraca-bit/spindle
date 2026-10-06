@@ -20,7 +20,6 @@ class KeyStore(context: Context) {
      * rest. Keyed by secret name so the provider key and the GitHub token stay
      * independent.
      */
-    @Volatile
     private val transient = ConcurrentHashMap<String, String>()
 
     /** Read [name], migrating a legacy cleartext [legacyKey] on first read. */
