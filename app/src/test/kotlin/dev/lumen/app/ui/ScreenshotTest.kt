@@ -22,6 +22,7 @@ import dev.spindle.core.model.SessionId
 import dev.spindle.core.model.TodoItem
 import dev.spindle.core.model.TodoStatus
 import dev.spindle.core.model.Usage
+import dev.spindle.core.provider.ModelInfo
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -615,6 +616,34 @@ class ScreenshotTest {
             onProvider = {}, onModel = {}, onTheme = {}, onEditKey = {}, onBack = {},
         )
     }
+
+    private fun modelPickerShot(name: String, colors: LumenColors) = shoot(name) {
+        ModelPickerScreen(
+            colors = colors,
+            provider = "deepseek",
+            models = listOf(
+                ModelInfo(
+                    "deepseek", "deepseek-flash", label = "DeepSeek Flash",
+                    contextWindow = 1_000_000, supportsReasoning = true,
+                    inputCostPerM = 0.28, outputCostPerM = 0.42,
+                ),
+                ModelInfo(
+                    "deepseek", "deepseek-v4-pro", label = "DeepSeek V4 Pro",
+                    contextWindow = 1_000_000, supportsReasoning = true,
+                    inputCostPerM = 0.55, outputCostPerM = 2.19,
+                ),
+                ModelInfo("deepseek", "deepseek-future", label = "DeepSeek Future", contextWindow = 500_000),
+            ),
+            selected = "deepseek/deepseek-flash",
+            refreshing = false,
+            error = null,
+            onProvider = {}, onSelect = {}, onRefresh = {}, onBack = {},
+        )
+    }
+
+    @Test fun models_light() = modelPickerShot("models_light.png", LumenColors.Light)
+
+    @Test fun models_dark() = modelPickerShot("models_dark.png", LumenColors.Dark)
 
     /**
      * The in-chat quick settings sheet over a populated transcript: provider,

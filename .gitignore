@@ -33,3 +33,6 @@ fixtures/live/
 
 # read-only parity reference clone (opencode-android)
 .ref/
+
+# Local screenshot review artifacts
+.screenshots/
