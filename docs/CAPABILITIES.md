@@ -116,9 +116,10 @@ canonical-path clamp (port `FilesActivity` clamp rules), snapshots, save-from-UI
 | capability | status |
 |---|---|
 | read/write/list/stat/search | ✅ (files cockpit) |
-| External-change watcher (event-driven, port `DirWatcher`) | ✅ (`WorkspaceWatcher`) |
+| External-change watcher (event-driven, port `DirWatcher`) | ✅ (`WorkspaceWatcher`; Files refresh on direct `FileEdited` + indirect watcher) |
 | Snapshot before write + revert | ✅ (`SnapshotStore`; pinned pre-images) |
-| Git-lite status / diff | ➕ (defer commit UI) |
+| Open a touched file scrolled to / highlighting the newest edited range | ✅ (`FileEdit.created` suppresses the highlight for newly created files) |
+| GitHub connect + status + clone/open (PAT only) | ✅ (`GitHubClient`/`GitRunner`; token sealed in `KeyStore`, never in a URL/argv/log; `GitHubScreen` + Settings link + Home pill. **No OAuth; commit/push automation not built.**) |
 
 ### 1.6 Provider / auth / cost
 
@@ -129,7 +130,7 @@ canonical-path clamp (port `FilesActivity` clamp rules), snapshots, save-from-UI
 | Zen/Go per-model routing (`/messages` for Claude/Qwen, `/chat/completions` otherwise) | ✅ (`/messages` wired + **fixture-tested**; `/responses` for GPT/Grok is **intentionally dropped** — an explicit terminal `Failure`, not a mis-route) |
 | Zen/Go live Claude/GPT streams | ❌ **out of scope by owner decision** (OpenCode Go subscription only, no paid API credits; free tier 403s `/messages`, `/responses` and `/chat/completions` for Claude/GPT) — not blocked-pending-a-key |
 | models.dev catalogue (ported snapshot + live enrichment) | ✅ |
-| Key store (port `AuthStore`, `KeysActivity`) | ✅ (encrypted `KeyStore` + key screen) |
+| Key store (port `AuthStore`, `KeysActivity`) | ✅ (encrypted `KeyStore` + redesigned key screen: provider cards with default model, Show/Hide, Paste, a real "Test key" probe, inline error, non-destructive editing) |
 | OAuth providers | ❌ |
 | Free tier without a key | ❌ (no keyless path; a free-tier key serves only free `/chat/completions` models) |
 
@@ -180,9 +181,12 @@ Built on the domains above, before any UI.
 
 - Resolver turns assistant text into typed targets: `path`, `path:line`,
   `path:line:col`, `path#Lx-Ly`, inline-code and bare tokens — fenced code is
-  inert (port the `Mentions` shape filter + existence gate).
+  inert (port the `Mentions` shape filter + existence gate). Directory mentions
+  resolve via `ReferenceResolver.resolveKinds` / `FileReference.isDir`.
 - Each target tagged **touched** (changed this run → open diff) vs **mentioned**
-  (→ open file). Backlinks: file → messages/tool calls referencing it.
+  (→ open the file in the Files viewer at the line, not just an in-chat peek;
+  newly created files link once the workspace revision bumps). Backlinks: file →
+  messages/tool calls referencing it.
 - Composer `@`-completion over project files, inserted as context chips.
 
 ### 2.3 Transparency
@@ -206,7 +210,8 @@ Built on the domains above, before any UI.
 ### 2.5 Search & navigation
 
 - Full-text search across sessions and files; jump-to-message.
-- File nav back/forward history; deep links to a file at a line.
+- File nav back/forward history; deep links to a file at a line (file/dir
+  mentions open the Files viewer at the line).
 
 ---
 
@@ -231,7 +236,7 @@ Built on the domains above, before any UI.
 | OAuth providers | API keys only; the connect screen writes the key form. |
 | Free keyless tier | native third-party clients are rejected; the user does not need it. |
 | HTTP server / OpenAPI / SSE-over-HTTP | the win: no server, no bridge, no parallel state. |
-| Git commit UI (v1) | defer; keep status/diff only. |
+| Git commit/push automation | GitHub **token connect + status + clone/open** is now in scope (PAT only, no OAuth); automatic commit/push from the app stays deferred. |
 | Local models (v1) | defer; revisit once the on-device runtime is stable. |
 
 ---
@@ -244,6 +249,6 @@ Built on the domains above, before any UI.
 3. Every feature lands with its function test **before** its UI.
 4. No UI/functional regressions; the old app is the parity baseline.
 5. Never reuse a version number; every release updates in place (persistent
-   debug keystore). **Release discipline:** bump `versionCode` (currently `2`)
+   debug keystore). **Release discipline:** bump `versionCode` (currently `3`)
    in `app/build.gradle.kts` for every release — the in-place update path keys on
-   it, so a reuse would silently block an install. `versionName` is `0.1.1`.
+   it, so a reuse would silently block an install. `versionName` is `0.1.2`.

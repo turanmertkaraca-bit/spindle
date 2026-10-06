@@ -30,16 +30,43 @@ JVM (including GitHub Actions).
 
 ## Status
 
-**`0.1.1`** (`versionCode 2`). Backend is feature-complete, and the native
+**`0.1.2`** (`versionCode 3`). Backend is feature-complete, and the native
 Android/Compose app (`:app`, `dev.lumen.app`) is built on it: streaming providers
 with per-model Zen/Go routing (`/messages` for Claude/Qwen, **fixture-tested**;
 GPT/Grok `/responses` deliberately rejected), durable sessions, 14 tools (incl.
 `skill` + read-only `external-directory`), opt-in `json_schema` structured output
 (engine-only; no host opts in yet), subagent delegation, retries, cancellation,
-per-session prompt serialization, and context compaction. The UI has had the base
-polish pass plus two refinement passes (shared tokens/motion, calm
-empty/loading/error states, one-line tool cards, shared screen chrome, lighter
-surfaces; light+dark screenshot sweep over every screen, ~85 PNGs, 0 render
+per-session prompt serialization, and context compaction.
+
+The 0.1.2 wave adds:
+
+- **Composer** — one rounded input card with a bottom control row (attach,
+  vision/eye, build/plan chips, model chip, key/theme, send), a compact usage
+  line (`≈ N new · next $X · ctx N`); the new-content cue now reads `↓ latest`.
+- **Mentions → files** — file/directory mentions in assistant text are tappable
+  and open the file in the Files viewer at the line (not just an in-chat peek);
+  directories resolve via `:core` `ReferenceResolver.resolveKinds`, and newly
+  created files link once the workspace revision bumps.
+- **Files live refresh** — the list refreshes when the agent writes/edits
+  (direct `FileEdited` + the indirect watcher); opening a touched file scrolls to
+  and highlights the newest edited range (suppressed for newly created files).
+- **Home** — a status strip (provider·model, sandbox, budget, GitHub) plus quick
+  controls (ask-before-tools switch, Files/Terminal).
+- **API keys** — provider cards with default model, Show/Hide, Paste, a real
+  "Test key" probe, inline error, and non-destructive editing.
+- **GitHub** — PAT connect/validate (`GitHubClient`), clone/status (`GitRunner`)
+  with the token sealed in `KeyStore` and never placed in a URL or log;
+  `GitHubScreen` + a Settings link + a Home status pill. **PAT only, no OAuth;
+  commit/push automation is not built.**
+- **Internet verified** — `websearch` (browser-style POST to DuckDuckGo, honest
+  blocked-vs-no-results) and `webfetch` (unresolved hosts allowed only when a
+  proxy resolves them, HTTP status surfaced) both returned `[tool ok]` in a live
+  OpenRouter CLI run.
+
+The UI has had the base polish pass plus three refinement passes (shared
+tokens/motion, calm empty/loading/error states, one-line tool cards, shared
+screen chrome, lighter surfaces, and the 0.1.2 composer/home/key/GitHub rework;
+the light+dark screenshot sweep covers every screen including GitHub, 0 render
 errors). Live Zen/Go Claude/GPT is **out of scope by owner decision** (Go
 subscription only, no paid API credits), not blocked pending a key. See
 `docs/HANDOFF.md` (read first), `docs/PLAN.md`, `docs/SPEC.md` and

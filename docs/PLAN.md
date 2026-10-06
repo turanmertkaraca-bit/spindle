@@ -180,11 +180,20 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
 
 - [x] **Changes**: `RunChanges` aggregate, diff card, per-file revert (rework of
       `EditPulse`).
-- [x] **References**: typed resolver (`path:line`/ranges), touched-vs-mentioned,
-      tap-to-peek in chat.
+- [x] **References** (`3791ad2`, `47d1ec4`): typed resolver (`path:line`/ranges)
+      with directory support (`ReferenceResolver.resolveKinds`,
+      `FileReference.isDir`), touched-vs-mentioned, and tappable mentions that
+      open the file in the Files viewer at the line (newly created files link on
+      a workspace revision bump).
+- [x] **Files live refresh + edit highlight** (`47d1ec4`): the list refreshes on
+      agent writes/edits (direct `FileEdited` + indirect `WorkspaceWatcher`);
+      opening a touched file scrolls to and highlights the newest edited range
+      (suppressed for newly created files, `FileEdit.created`).
 - [x] Canvas viewer (sandboxed WebView) + Vision (image parts, `supportsVision`,
       composer attachment).
-- [x] `websearch` tool (keyless DuckDuckGo HTML, pure parser, permission-gated).
+- [x] `websearch` tool (`cea4936`: browser-style POST to DuckDuckGo with an
+      honest blocked-vs-no-results error) and `webfetch` (unresolved hosts only
+      when a proxy resolves them; HTTP status surfaced).
 - [x] Session full-text search + fork/rewind surfaces.
 - [x] Interactive permission/question cards; ask-before-tools setting.
 - [x] Backlinks panel + `@`-completion in the composer (port `Mentions` extras).
@@ -213,11 +222,21 @@ reference; its platform code is ported, not rewritten. See `CAPABILITIES.md`.
       uploaded as the `lumen-screenshots` artifact); APK update-in-place.
 - [x] UI polish landed in three passes: base (`ea2e38e` + `189b695`), refinement
       1 (`fa9ff1a` chat timeline + `dab4f39` shared screen chrome + `1422eb1`
-      FilesScreen fix) and refinement 2 (`47fd30b` lighter/calmer). The light+dark
-      sweep covers every screen: ~85 PNGs (59 screens + 26 animation frames),
-      0 render errors.
-- [x] Release housekeeping: `app/build.gradle.kts` bumped to `versionCode = 2`,
-      `versionName = "0.1.1"` (bump per release; never reuse a version number).
+      FilesScreen fix) and refinement 2 (`47fd30b` lighter/calmer), plus the 0.1.2
+      rework below. The light+dark sweep covers every screen including GitHub:
+      ~87 PNGs (61 screens + 26 animation frames), 0 render errors.
+- [x] **Composer + Home + keys + GitHub rework (`47d1ec4`, fixes
+      `977d856`/`098a921`/`f6b92a8`)**: one rounded composer card with a bottom
+      control row and compact usage line (`≈ N new · next $X · ctx N`, cue
+      `↓ latest`); Home status strip (provider·model, sandbox, budget, GitHub) +
+      ask-before-tools / Files / Terminal controls; API-key screen with provider
+      cards, Show/Hide, Paste, a real "Test key" probe, inline error and
+      non-destructive editing; GitHub PAT connect/validate (`GitHubClient`) +
+      clone/status (`GitRunner`), token sealed in `KeyStore` and never placed in
+      a URL/argv/log, via `GitHubScreen` + Settings link + Home status pill.
+      **PAT only — no OAuth; commit/push automation not built.**
+- [x] Release housekeeping: `app/build.gradle.kts` bumped to `versionCode = 3`,
+      `versionName = "0.1.2"` (bump per release; never reuse a version number).
 
 ## Risks
 

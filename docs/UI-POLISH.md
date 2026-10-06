@@ -76,12 +76,29 @@ Two follow-up passes tightened the earlier polish. Pass 1:
 - Low-key composer secondary controls with **send as the sole primary**; subtle
   press feedback on New chat.
 
+## Refinement pass 3 (`47d1ec4` + fixes, 0.1.2)
+
+The 0.1.2 app wave revisited the highest-traffic surfaces:
+
+- **Composer.** One rounded input card with a bottom control row (attach,
+  vision/eye, build/plan chips, model chip, key/theme, send), a compact usage
+  line (`≈ N new · next $X · ctx N`), and the new-content cue now reads
+  `↓ latest`.
+- **Home.** A status strip (provider·model, sandbox, budget, GitHub) plus quick
+  controls (ask-before-tools switch, Files/Terminal).
+- **Key screen.** Provider cards with the default model, Show/Hide, Paste, a real
+  "Test key" probe, inline error, and non-destructive editing.
+- **GitHub.** A new PAT-connect screen (`GitHubScreen`) with connect/validate,
+  status, and clone/open controls, reached from Settings and a Home status pill;
+  the token is sealed on-device and never placed in a URL or log.
+
 ## Verification sweep
 
 Items 3–6 above are fully landed. The Robolectric screenshot sweep renders every
-screen in light **and** dark, and the light+dark sweep is clean: **~85 PNGs
-(59 per-screen shots + 26 animation-smoothness frames), 0 render errors**
-(`build/ci-shots*`, uploaded as the `lumen-screenshots` CI artifact).
+screen in light **and** dark — now including GitHub (connected, connect + status)
+— and the light+dark sweep is clean: **~87 PNGs (61 per-screen shots + 26
+animation-smoothness frames), 0 render errors** (`build/ci-shots*`, uploaded as
+the `lumen-screenshots` CI artifact).
 
 ## Already addressed (for reference, do not regress)
 

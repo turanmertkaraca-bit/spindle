@@ -805,5 +805,8 @@ These are explicit non-goals. They are not bugs; do not build them now.
   (OpenCode Go subscription only, no paid API credits; the free tier 403s
   `messages`/`responses`/`chat/completions` for Claude/GPT) — deliberately closed,
   not blocked-pending-a-key.
+- **Git commit/push automation** — GitHub **token connect + status +
+  clone/open** (PAT only, no OAuth) is in scope; the app does not automatically
+  commit or push, and there is no git-commit UI.
 - **Parallel tool execution** — tools run sequentially in call order.
 - **ULID ids / cross-process uniqueness** — `Ids.new` is process-monotonic only.

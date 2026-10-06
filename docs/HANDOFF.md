@@ -1,17 +1,20 @@
 # Lumen — session handoff (read me first)
 
 Native Android agent app. `spindle` repo, branch `main`, package `dev.lumen.app`.
-`HEAD = 47fd30b` (`refactor(app): lighter, calmer transcript and controls`). The
-docs-sync + version-bump commit rides **on top of** `47fd30b` (nothing else is
-committed after it as of this writing). CI (`.github/workflows/ci.yml`) runs both
-a `jvm backend` job and an `android app (robolectric)` job; CI status for
-`47fd30b` + the docs-sync commit is **not** asserted here — re-check the run.
+`HEAD = f6b92a8` (`fix(app): make KeyScreen show/hide toggle deterministically
+clickable`) — the tip of the **0.1.2** feature wave. The wave is `3791ad2`
+(`:core` directory mentions), `cea4936` (`:tools` websearch/webfetch), and the
+`47d1ec4` app commit plus fixes `977d856`/`098a921`/`f6b92a8`. The docs-sync +
+version-bump commit rides **on top of** `f6b92a8` (nothing else is committed
+after it as of this writing). CI (`.github/workflows/ci.yml`) runs both a
+`jvm backend` job and an `android app (robolectric)` job; CI status for
+`f6b92a8` + this docs-sync commit is **not** asserted here — re-check the run.
 `:cli` is gated in the jvm job (`:cli:classes`), so its run path compiles in CI
 even though it never spends tokens. Working tree after this session: the
 docs-sync edits + `app/build.gradle.kts` version bump only (left uncommitted, per
 instructions).
 
-**Version: `versionCode = 2`, `versionName = "0.1.1"`** — release discipline:
+**Version: `versionCode = 3`, `versionName = "0.1.2"`** — release discipline:
 never reuse a version number, every release updates in place. Bump `versionCode`
 (and `versionName`) in `app/build.gradle.kts` for every release.
 
@@ -21,76 +24,60 @@ never reuse a version number, every release updates in place. Bump `versionCode`
 ██  when dev is finished. Live tests are manual only (`live.yml`).          ██
 ```
 
-## 1. What's done (this session)
+## 1. What's done (this wave — 0.1.2)
 
-1. **Zen/Go per-model wire routing (`1845a77`, refined `a5f36b9`).** Pure routing
-   table (`provider-openai/OpenCodeRoutes.kt`) + a `:cli` composite
-   (`OpenCodeRoutingProvider`): Claude-family/Qwen → `/messages` via the existing
-   Anthropic adapter (`x-api-key` + `anthropic-version`; Go also threads
-   `x-opencode-session` + a custom `User-Agent`). GPT/Grok `/responses` targets
-   return an explicit terminal `Failure` — `/responses` is **deliberately not
-   implemented** rather than silently mis-routed. Committed fixtures
-   (`opencode_go_claude.sse`) + routing/header assertions. `/messages` is
-   **fixture-tested**; live Claude/GPT is **out of scope by owner decision** (see
-   §2 — no paid API access).
-2. **`skill` + `external-directory` tools (`15635e8`), in `:tools`.** `skill` is
-   a closed local `SKILL.md` discovery/loader clamped under the session cwd;
-   `external-directory` is read-only over an explicit user-granted allow-list
-   (canonicalized + containment-checked) and denies everything when the list is
-   empty. Both registered in `DefaultTools` with source-compatible defaulted
-   params (`skillsRoot`, `externalRoots`).
-3. **Opt-in structured output (`bf86874`).** `ResponseFormat(name, schemaJson,
-   strict)` + defaulted `ChatRequest.responseFormat` and
-   `AgentConfig.responseFormat`, threaded `AgentConfig → Wire → request`. The
-   OpenAI-compatible adapter emits `response_format:json_schema` only when set
-   (malformed schema JSON omits the key); Anthropic ignores it. **No host opts
-   in**, so it is unreachable from `:cli`/`:app`/`:server` today.
-4. **UI polish — three passes.**
-   - `ea2e38e` + `189b695`: shared `LumenTokens` (`LumenShapes`/`LumenElevation`),
-     `LumenMotion`, `LumenState`; calm empty/loading/error states across Home,
-     Files, Terminal, Canvas, Settings, Diagnostics, Storage; unified motion
-     without `animateContentSize`; Robolectric screenshot sweep extended to every
-     screen in light **and** dark (CI artifact `lumen-screenshots`). `189b695`
-     was the follow-up Canvas import compile fix.
-   - `fa9ff1a` + `dab4f39` + `1422eb1`: chat timeline (one-line tool cards with
-     plain-language failures, subtle thinking line, agent-name label instead of
-     hash, prose off monospace) and shared screen chrome (`LumenTopBar`/ops
-     overflow, 44dp targets, centered empty states, destructive wording);
-     `1422eb1` restored the FilesScreen new-file/folder actions.
-   - `47fd30b`: lighter/calmer pass — quiet surface fills instead of borders,
-     slimmer status spine, fainter pills/tags, low-key composer secondary
-     controls with send as the sole primary, press feedback.
-   - Light+dark sweep is clean: **~85 PNGs (59 screens + 26 animation frames),
-     0 render errors** (`docs/UI-POLISH.md`).
-5. **`m15` long-session stress re-sweep PASS (`a4807fd`).**
-   `docs/PERF-RE-SWEEP.md`: 25 live OpenRouter turns, retained heap flat ~6 MB
-   (0.00 MB/turn), fds 38→39, DB+WAL ≤192 KB, 0 errors. This is the **JVM**
-   harness; the on-device re-sweep is still pending.
-6. **Flaky-test hardening (`6e62605`).** `SessionRetentionTest` teardown now
-   tracks the test-owned run scopes, cancels + joins them before `resetMain()`,
-   then drains the Robolectric main looper — removing the intermittent
-   `Dispatchers.Main is used concurrently with setting it` failure without
-   weakening any assertion. Fix is committed; the other sampler test was not
-   known to flake.
-7. **Version bump (this commit).** `app/build.gradle.kts` → `versionCode 2`,
-   `versionName "0.1.1"` (only version lines changed).
-8. **Prior-session wins still in force:** background-run fix (`87ebe96`),
-   core-engine correctness, provider streaming hardening, long-session
-   stability, retry `PartReset` (`e1d773f`), per-session prompt serialization
-   (`06b113c`), and the M9 live smoke — OpenRouter (paid) real text/reasoning/
-   usage + multi-step tool loop, and OpenCode Go (free key, `space-bunny-free`)
-   real write→read loop. Committed fixtures under
-   `provider-openai/src/test/resources/openrouter_recorded_{text,tool}.sse`.
+The 0.1.2 feature wave: `3791ad2` (`:core`), `cea4936` (`:tools`), and the
+`47d1ec4` app commit plus fixes `977d856`/`098a921`/`f6b92a8`.
+
+1. **Chat composer redesigned (`47d1ec4`).** One rounded input card with a
+   bottom control row — attach, vision/eye, build/plan chips, model chip,
+   key/theme, send. A compact usage line reads `≈ N new · next $X · ctx N`
+   (`UsageMeter`), and the new-content cue now reads `↓ latest` (was `↓ new`).
+2. **Mentions → files (`3791ad2`, `47d1ec4`).** File/directory mentions in
+   assistant text are tappable and open the FILE in the Files viewer at the line
+   (not just an in-chat peek). Directory mentions resolve via `:core`
+   `ReferenceResolver.resolveKinds` (`FileReference.isDir`); newly created files
+   link once the workspace revision bumps.
+3. **Files live refresh + edit highlight (`47d1ec4`).** The Files list refreshes
+   when the agent writes/edits — direct `AgentEvent.FileEdited` plus the indirect
+   `WorkspaceWatcher` path. Opening a touched file scrolls to and highlights the
+   newest edited range; highlighting is suppressed when the file was newly
+   created (`FileEdit.created`).
+4. **Home is richer (`47d1ec4`).** A status strip (provider·model, sandbox,
+   budget, GitHub) plus quick controls (ask-before-tools switch,
+   Files/Terminal).
+5. **API key screen redesigned (`47d1ec4`, `f6b92a8`).** Provider cards with the
+   default model, Show/Hide, Paste, a real "Test key" probe, inline error, and
+   non-destructive editing (viewing a key no longer deletes it). `f6b92a8` made
+   the Show/Hide toggle deterministically clickable.
+6. **GitHub support (`47d1ec4`).** `:app` `platform/GitHubClient.kt` +
+   `GitRunner.kt` connect/validate a PAT and run clone/status; the PAT is sealed
+   by `KeyStore` (`SecretCipher`, Android Keystore AES/GCM) and passed only as an
+   Authorization header / credential-helper env var — never in a URL, argv, or
+   log line. `GitHubScreen` + a Settings link + a Home status pill. **PAT only,
+   no OAuth; commit/push automation is not built.**
+7. **Internet verified live (`cea4936`).** `websearch` now does a browser-style
+   POST to DuckDuckGo with an honest blocked-vs-no-results error (plain GETs get
+   bot-walled); `webfetch` allows unresolved hosts only when a proxy will resolve
+   them and surfaces HTTP status in the output. Both returned `[tool ok]` in a
+   live OpenRouter CLI run.
+8. **Version bump (this commit).** `app/build.gradle.kts` → `versionCode 3`,
+   `versionName "0.1.2"` (only version lines changed).
+9. **Prior-session wins still in force:** Zen/Go per-model wire routing
+   (`1845a77`/`a5f36b9`; `/messages` fixture-tested, `/responses` deliberately
+   rejected, live Claude/GPT closed by owner decision), `skill` +
+   `external-directory` (`15635e8`), opt-in `json_schema` structured output
+   (`bf86874`, engine-only), the UI polish passes
+   (`ea2e38e`/`189b695`/`fa9ff1a`/`dab4f39`/`1422eb1`/`47fd30b`), the `m15` JVM
+   stress re-sweep PASS (`a4807fd`), and `SessionRetentionTest` flake hardening
+   (`6e62605`).
 
 ## 2. What's left (honest)
 
-- **Zen/Go live Claude/GPT parity — deliberately closed / deprioritized, NOT
-  blocked pending a paid key.** The owner only has an OpenCode Go subscription
-  and will **not** add API credits. `/messages` routing is implemented and
-  fixture-tested; the free tier 403s Claude/GPT on every surface. This is a
-  **product/owner decision to not pursue paid live Claude/GPT**, so future
-  sessions should **not** chase a paid key or re-open it as a dangling task.
-  `/responses` likewise stays intentionally dropped.
+- **`m15` on-device perf/ANR re-sweep** — the JVM stress re-sweep is PASS
+  (`a4807fd`); the **on-device** sweep (ART/ANR/frame timing, battery/thermal,
+  long-session heap/fd/DB/WAL) is still pending and **unverified**. Do not claim
+  on-device perf.
 - **Host opt-in for structured output** — the engine supports
   `ResponseFormat`/`responseFormat`, but no host (`:cli`, `:app`, `:server`)
   constructs one, so `json_schema` output is unreachable from any entry point.
@@ -98,14 +85,19 @@ never reuse a version number, every release updates in place. Bump `versionCode`
   host supplies granted roots via `DefaultTools.registry(externalRoots = ...)`;
   no host does yet. `skill` defaults to `.opencode/skills` under the session cwd.
   Neither is reachable from a host today.
-- **`m15` on-device perf/ANR re-sweep** — the JVM stress re-sweep is PASS
-  (`a4807fd`); the **on-device** sweep (ART/ANR/frame timing, battery/thermal,
-  long-session heap/fd/DB/WAL) is still pending and **unverified**. Do not claim
-  on-device perf.
 - **Multi-session concurrency from the UI** — the engine allows it (per-session
   locks); the UI does not drive N chats at once yet.
+- **Git push/commit automation is not built.** GitHub support is PAT connect +
+  status + clone/open only; there is no automatic commit or push, and no OAuth.
+- **Zen/Go live Claude/GPT parity — deliberately closed / deprioritized, NOT
+  blocked pending a paid key.** The owner only has an OpenCode Go subscription
+  and will **not** add API credits. `/messages` routing is implemented and
+  fixture-tested; the free tier 403s Claude/GPT on every surface. `/responses`
+  likewise stays intentionally dropped. This is a **product/owner decision**, so
+  future sessions should **not** chase a paid key or re-open it as a dangling
+  task.
 - Explicit non-goals: OAuth, local models, MCP, LSP, plugins, marketplace
-  skills, git-commit UI.
+  skills.
 
 ## 3. Keys / credentials — the traps
 

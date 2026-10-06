@@ -87,11 +87,16 @@ Legend: ✅ ported · 🟡 partial · ❌ not ported (by choice unless noted)
 | Retention / prune | `SessionStore.prune` | ✅ |
 | Cross-process/multi-client store | — | ❌ (single process, intentionally) |
 
-## Platform / ecosystem (all intentionally dropped)
+## Platform / ecosystem (intentionally dropped, except GitHub)
 
-❌ MCP · plugins + hooks · ACP · worktrees · git integration · LSP servers ·
-formatters · background jobs · config layers (`opencode.json`) · custom commands ·
-keybinds · themes engine.
+❌ MCP · plugins + hooks · ACP · worktrees · LSP servers · formatters ·
+background jobs · config layers (`opencode.json`) · custom commands · keybinds ·
+themes engine.
+
+🟡 **GitHub** — **token connect + status + clone/open** are now in scope by owner
+request (PAT only, **no OAuth**; the token is sealed in `KeyStore` and never
+placed in a URL/argv/log). Git **commit/push automation** remains dropped /
+deferred.
 
 ❌ HTTP server + OpenAPI + SSE-over-HTTP — **this is the win**: no server, no bridge.
 

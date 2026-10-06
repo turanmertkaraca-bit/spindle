@@ -12,6 +12,7 @@ import dev.lumen.app.FilesState
 import dev.lumen.app.LinuxEnvironmentState
 import dev.lumen.app.StorageCategory
 import dev.lumen.app.StorageReport
+import dev.lumen.app.data.KeyStore
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.UiImage
 import dev.lumen.app.ui.model.UiStep
@@ -341,6 +342,11 @@ class ScreenshotTest {
     @Test fun key_screen_dark() = shoot("key_dark.png") {
         KeyScreen(colors = LumenColors.Dark, onSubmit = { _, _ -> }, onToggleTheme = {})
     }
+
+    /** GitHub connected (a saved login + repo seeded into the store), both themes. */
+    @Test fun github_light() = githubShot("github_light.png", LumenColors.Light)
+
+    @Test fun github_dark() = githubShot("github_dark.png", LumenColors.Dark)
 
     @Test fun light_focus_top_tugs_down() = chat(LumenColors.Light, "light_focus_top.png", 0)
 
@@ -673,6 +679,19 @@ class ScreenshotTest {
             colors = colors, storage = storage,
             onRescan = {}, onClear = {}, onClearAll = {}, onBack = {},
         )
+    }
+
+    /**
+     * The GitHub screen owns its [KeyStore], so seed a (non-secret) login + repo
+     * before rendering to show the connected status card. The screen reads only
+     * `colors`/`onBack`, per its real signature. Seeding runs inside `shoot`, so
+     * any failure is recorded as `.error.txt` and never fails the build.
+     */
+    private fun githubShot(name: String, colors: LumenColors) = shoot(name) {
+        val store = KeyStore(compose.activity)
+        store.githubLogin = "octocat"
+        store.githubRepo = "octocat/Hello-World"
+        GitHubScreen(colors = colors, onBack = {})
     }
 
     private val canvasHtml = """
