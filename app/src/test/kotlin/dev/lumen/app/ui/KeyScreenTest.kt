@@ -2,11 +2,14 @@ package dev.lumen.app.ui
 
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.dp
 import org.junit.Rule
 import org.junit.Test
@@ -44,9 +47,13 @@ class KeyScreenTest {
         compose.setContent {
             KeyScreen(colors = LumenColors.Dark, onSubmit = { _, _ -> }, modifier = viewport)
         }
+        compose.onNodeWithTag("key-visibility").assertContentDescriptionEquals("show key")
         compose.onNodeWithText("Show").assertExists()
-        compose.onNodeWithTag("key-visibility").performClick()
+        // Invoke the click semantics directly: this is the exact onClick the
+        // control exposes, independent of hit-test coordinates/clipping.
+        compose.onNodeWithTag("key-visibility").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
+        compose.onNodeWithTag("key-visibility").assertContentDescriptionEquals("hide key")
         compose.onNodeWithText("Hide").assertExists()
     }
 
@@ -69,7 +76,7 @@ class KeyScreenTest {
                 initialKey = "abc",
             )
         }
-        compose.onNodeWithTag("provider-deepseek").performClick()
+        compose.onNodeWithTag("provider-deepseek").performScrollTo().performClick()
         compose.waitForIdle()
         compose.onNodeWithTag("continue").performScrollTo().performClick()
         compose.waitForIdle()

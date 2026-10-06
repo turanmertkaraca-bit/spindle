@@ -363,11 +363,9 @@ private fun ActionPill(
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
-    Text(
-        label,
-        color = if (enabled) colors.dim else colors.faint,
-        fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-        maxLines = 1,
+    // The tag lives on the clickable Box, with the label as a child, so the
+    // tagged semantics node is exactly the hit target (robust under tests).
+    Box(
         modifier = Modifier
             .clip(LumenShapes.pill)
             .background(colors.surface)
@@ -375,7 +373,14 @@ private fun ActionPill(
             .clickable(enabled = enabled) { onClick() }
             .padding(horizontal = LumenSpacing.lg, vertical = 9.dp)
             .testTag(tag),
-    )
+    ) {
+        Text(
+            label,
+            color = if (enabled) colors.dim else colors.faint,
+            fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+            maxLines = 1,
+        )
+    }
 }
 
 @Composable

@@ -266,16 +266,19 @@ fun KeyScreen(
                     }
                 },
             )
-            Text(
-                if (visible) "Hide" else "Show",
-                color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
+            Box(
                 modifier = Modifier
                     .clip(LumenShapes.small)
                     .clickable(enabled = !busy) { visible = !visible }
                     .padding(horizontal = LumenSpacing.sm, vertical = LumenSpacing.sm)
                     .testTag("key-visibility")
                     .semantics { contentDescription = if (visible) "hide key" else "show key" },
-            )
+            ) {
+                Text(
+                    if (visible) "Hide" else "Show",
+                    color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
+                )
+            }
         }
         Spacer(Modifier.height(LumenSpacing.sm))
         Text(
@@ -405,10 +408,9 @@ private fun SecondaryAction(
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
-    Text(
-        label,
-        color = if (enabled) colors.dim else colors.faint,
-        fontFamily = Mono, fontSize = 12.sp,
+    // The tag lives on the clickable Box, with the label as a child, so the
+    // tagged semantics node is exactly the hit target (robust under tests).
+    Box(
         modifier = Modifier
             .clip(LumenShapes.pill)
             .background(colors.surface)
@@ -416,7 +418,13 @@ private fun SecondaryAction(
             .clickable(enabled = enabled) { onClick() }
             .padding(horizontal = LumenSpacing.lg, vertical = 9.dp)
             .testTag(tag),
-    )
+    ) {
+        Text(
+            label,
+            color = if (enabled) colors.dim else colors.faint,
+            fontFamily = Mono, fontSize = 12.sp,
+        )
+    }
 }
 
 @Composable
