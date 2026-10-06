@@ -26,6 +26,9 @@ object LumenShapes {
     /** A row or inset block that sits inside a card. */
     val inset = RoundedCornerShape(8.dp)
 
+    /** A compact structured tool row inside an expanded card. */
+    val row = RoundedCornerShape(10.dp)
+
     /** A small chip or inline action. */
     val small = RoundedCornerShape(6.dp)
 

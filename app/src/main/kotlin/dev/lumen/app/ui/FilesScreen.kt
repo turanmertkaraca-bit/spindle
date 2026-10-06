@@ -293,7 +293,9 @@ private fun EntryRow(
     Row(
         Modifier.fillMaxWidth()
             .padding(horizontal = 4.dp)
-            .clip(LumenShapes.inset)
+            .clip(LumenShapes.row)
+            .background(colors.surface)
+            .border(1.dp, colors.outline, LumenShapes.row)
             .clickable { onEnter(entry) }
             .padding(start = 12.dp, end = 6.dp, top = 11.dp, bottom = 11.dp)
             .testTag("entry-${entry.path}"),
@@ -323,6 +325,7 @@ private fun EntryRow(
                     modifier = Modifier
                         .clip(LumenShapes.small)
                         .background(colors.surface)
+                        .border(1.dp, colors.outline, LumenShapes.small)
                         .clickable { onOpenCanvas(entry.path) }
                         .padding(horizontal = 7.dp, vertical = 3.dp)
                         .testTag("view-${entry.path}"),
@@ -432,6 +435,7 @@ private fun EditorOverlay(
                     .padding(start = 16.dp, end = 16.dp, top = 6.dp)
                     .clip(LumenShapes.small)
                     .background(colors.water.copy(alpha = 0.12f))
+                    .border(1.dp, colors.outline, LumenShapes.small)
                     .padding(horizontal = 8.dp, vertical = 3.dp)
                     .testTag("editor-highlight"),
             )

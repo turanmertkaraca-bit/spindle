@@ -81,7 +81,7 @@ internal fun LumenBackButton(colors: LumenColors, tag: String, onClick: () -> Un
             .size(44.dp)
             .clip(LumenShapes.control)
             .background(colors.surface)
-            .border(1.dp, colors.rule, LumenShapes.control)
+            .border(1.dp, colors.outline, LumenShapes.control)
             .clickable { onClick() }
             .semantics { contentDescription = "back" }
             .testTag(tag),
@@ -111,7 +111,7 @@ internal fun LumenBarAction(
     val surface = if (filled) {
         base.background(colors.water)
     } else {
-        base.background(colors.surface).border(1.dp, colors.rule, shape)
+        base.background(colors.surface).border(1.dp, colors.outline, shape)
     }
     var m = surface.clickable(enabled = enabled) { onClick() }.padding(horizontal = 14.dp)
     if (contentDescription != null) m = m.semantics { this.contentDescription = contentDescription }
@@ -355,6 +355,7 @@ fun HomeScreen(
             Modifier.fillMaxWidth()
                 .clip(LumenShapes.pill)
                 .background(colors.surface)
+                .border(1.dp, colors.outline, LumenShapes.pill)
                 .padding(horizontal = 16.dp, vertical = 11.dp),
         ) {
             if (searchQuery.isEmpty()) {
@@ -385,7 +386,7 @@ fun HomeScreen(
                     checkedTrackColor = colors.water,
                     uncheckedThumbColor = colors.dim,
                     uncheckedTrackColor = colors.surface,
-                    uncheckedBorderColor = colors.rule,
+                    uncheckedBorderColor = colors.outline,
                 ),
                 modifier = Modifier.testTag("home-ask-before-tools"),
             )
@@ -464,7 +465,9 @@ fun HomeScreen(
                         Column(
                             Modifier.fillMaxWidth()
                                 .padding(vertical = 2.dp)
-                                .clip(LumenShapes.card)
+                                .clip(LumenShapes.row)
+                                .background(colors.surface)
+                                .border(1.dp, colors.outline, LumenShapes.row)
                                 .clickable { onOpen(hit.sessionId.value) }
                                 .padding(horizontal = 12.dp, vertical = 10.dp)
                                 .testTag("search-hit-${hit.messageId}"),
@@ -503,7 +506,9 @@ fun HomeScreen(
                         Row(
                             Modifier.fillMaxWidth()
                                 .padding(vertical = 2.dp)
-                                .clip(LumenShapes.card)
+                                .clip(LumenShapes.row)
+                                .background(colors.surface)
+                                .border(1.dp, colors.outline, LumenShapes.row)
                                 .clickable { onOpen(s.id) }
                                 .padding(horizontal = 12.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -564,6 +569,7 @@ fun HomeScreen(
                                         Modifier.weight(1f)
                                             .clip(LumenShapes.inset)
                                             .background(colors.surface)
+                                            .border(1.dp, colors.outline, LumenShapes.inset)
                                             .padding(horizontal = 10.dp, vertical = 8.dp),
                                     ) {
                                         BasicTextField(
@@ -606,6 +612,7 @@ fun HomeScreen(
                                             Modifier.weight(1f)
                                                 .clip(LumenShapes.inset)
                                                 .background(colors.surface)
+                                                .border(1.dp, colors.outline, LumenShapes.inset)
                                                 .padding(horizontal = 10.dp, vertical = 8.dp),
                                         ) {
                                             if (tagDraft.isEmpty()) {
@@ -736,7 +743,7 @@ private fun TagChip(
             .background(if (selected) colors.water.copy(alpha = 0.12f) else Color.Transparent)
             .border(
                 1.dp,
-                if (selected) colors.water.copy(alpha = 0.45f) else colors.rule.copy(alpha = 0.6f),
+                if (selected) colors.water.copy(alpha = 0.45f) else colors.outline,
                 LumenShapes.small,
             )
             .clickable { onClick() }
@@ -793,7 +800,7 @@ private fun StatusPill(
     val shell = Modifier
         .clip(LumenShapes.pill)
         .background(colors.surface)
-        .border(1.dp, colors.rule.copy(alpha = 0.6f), LumenShapes.pill)
+        .border(1.dp, colors.outline, LumenShapes.pill)
     val interactive = if (onClick != null) shell.clickable { onClick() } else shell
     Text(
         text,

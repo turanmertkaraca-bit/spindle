@@ -102,7 +102,8 @@ fun SettingsScreen(
                 Modifier.fillMaxWidth()
                     .padding(vertical = 2.dp)
                     .clip(LumenShapes.panel)
-                    .background(if (selected) colors.surface else Color.Transparent)
+                    .background(if (selected) colors.surface else colors.bg)
+                    .border(1.dp, colors.outline, LumenShapes.panel)
                     .clickable { onModel(ref) }
                     .padding(horizontal = 12.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -174,7 +175,7 @@ fun SettingsScreen(
                     checkedTrackColor = colors.water,
                     uncheckedThumbColor = colors.dim,
                     uncheckedTrackColor = colors.surface,
-                    uncheckedBorderColor = colors.rule,
+                    uncheckedBorderColor = colors.outline,
                 ),
                 modifier = Modifier.testTag("ask-before-tools"),
             )
@@ -209,7 +210,7 @@ fun SettingsScreen(
             Modifier.fillMaxWidth()
                 .clip(LumenShapes.pill)
                 .background(colors.surface)
-                .border(1.dp, colors.rule, LumenShapes.pill)
+                .border(1.dp, colors.outline, LumenShapes.pill)
                 .clickable { onEditKey() }
                 .padding(vertical = 14.dp)
                 .testTag("edit-key"),
@@ -232,6 +233,7 @@ private fun SettingsLink(
         Modifier.fillMaxWidth()
             .clip(LumenShapes.card)
             .background(colors.surface)
+            .border(1.dp, colors.outline, LumenShapes.card)
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 13.dp)
             .testTag(tag),
@@ -262,7 +264,7 @@ private fun chip(
         modifier = Modifier
             .clip(LumenShapes.inset)
             .background(if (selected) colors.surface else Color.Transparent)
-            .border(1.dp, if (selected) colors.water else colors.rule, LumenShapes.inset)
+            .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.inset)
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 9.dp)
             .testTag(tag),

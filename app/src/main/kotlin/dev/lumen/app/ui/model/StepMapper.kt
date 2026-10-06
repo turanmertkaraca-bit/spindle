@@ -67,8 +67,12 @@ object StepMapper {
                                     // where a dump of stderr did not. Failures get a
                                     // plain-language line drawn beside it (see
                                     // [failureLine]).
+                                    // Never fall back to the raw argument JSON: a
+                                    // question tool's `{"question":…}` must read as
+                                    // the human question, not a brace-laden blob.
                                     summary = toolArg(call.argumentsJson)
-                                        ?: oneLine(p.result?.output ?: call.argumentsJson),
+                                        ?: p.result?.output?.let { oneLine(it) }
+                                        ?: call.name,
                                     body = toolBody(p),
                                     // Structured sub-rows were parsed from the raw
                                     // output and duplicated the inspector and the body
@@ -114,6 +118,30 @@ object StepMapper {
 
     private fun isMergeable(kind: StepKind): Boolean =
         kind == StepKind.TOOL || kind == StepKind.SUBAGENT
+
+    /**
+     * Mark each row that continues a run of tool-ish rows, so the timeline can
+     * draw consecutive tools/reasoning as one connected strand instead of a
+     * scatter of floating cards. A row is linked when it AND the row immediately
+     * above it are both tool-ish ([TOOL], [SUBAGENT] or [THINKING]); `YOU`,
+     * `ASSISTANT` and `QUESTION` break the run. Pure and order-preserving, so it
+     * is unit-tested and safe to run on the grouped/deduped render list.
+     */
+    fun linkRuns(steps: List<UiStep>): List<UiStep> {
+        if (steps.size < 2) return steps
+        return steps.mapIndexed { index, step ->
+            val prev = steps.getOrNull(index - 1)
+            if (prev != null && isToolish(prev.kind) && isToolish(step.kind)) {
+                step.copy(linkedAbove = true)
+            } else {
+                step
+            }
+        }
+    }
+
+    /** Rows that belong to a connected run: tools, subagents and folded reasoning. */
+    private fun isToolish(kind: StepKind): Boolean =
+        kind == StepKind.TOOL || kind == StepKind.SUBAGENT || kind == StepKind.THINKING
 
     /**
      * Fold a reasoning row into the step that follows it in the same assistant
@@ -179,7 +207,9 @@ object StepMapper {
         val result = p.result
         return cleanToolOutput(
             when {
-                result == null -> p.call.argumentsJson
+                // A pending tool has no result yet; surface its friendliest
+                // argument (never the raw JSON) so no braces ever leak.
+                result == null -> toolArg(p.call.argumentsJson).orEmpty()
                 else -> result.output
             },
         )
@@ -191,7 +221,7 @@ object StepMapper {
      * was actually about.
      */
     private val FRIENDLY_ARG_KEYS = listOf(
-        "command", "pattern", "path", "url", "description", "prompt", "query", "glob",
+        "command", "pattern", "path", "url", "description", "question", "prompt", "query", "glob",
     )
 
     /** Matches a JSON string field (`"key": "value"`), tolerant of escapes. */

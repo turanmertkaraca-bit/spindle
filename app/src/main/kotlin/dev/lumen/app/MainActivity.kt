@@ -64,6 +64,8 @@ class MainActivity : ComponentActivity() {
             }
 
             var route by rememberSaveable { mutableStateOf("home") }
+            // The lightweight in-chat settings sheet; never a route on its own.
+            var quickSettings by rememberSaveable { mutableStateOf(false) }
             // The route to return to when leaving the files cockpit.
             var filesReturn by rememberSaveable { mutableStateOf("home") }
             // The route to return to when leaving the terminal.
@@ -83,6 +85,7 @@ class MainActivity : ComponentActivity() {
 
             BackHandler(enabled = route != "home" || state.currentSessionId != null) {
                 when {
+                    quickSettings -> quickSettings = false
                     state.peek != null -> viewModel.closePeek()
                     state.editor != null -> viewModel.closeEditor()
                     route == "canvas" -> {
@@ -131,7 +134,7 @@ class MainActivity : ComponentActivity() {
                     colors = colors,
                     modifier = modifier,
                     model = state.model,
-                    onModel = { route = "settings" },
+                    onModel = { quickSettings = true },
                     onOpenMention = { p, l ->
                         viewModel.openFileInFiles(p, l)
                         filesReturn = "chat"
@@ -144,6 +147,7 @@ class MainActivity : ComponentActivity() {
                     newTokens = state.newTokens,
                     title = state.sessions.firstOrNull { it.id == state.currentSessionId }?.title ?: "",
                     onHome = {
+                        quickSettings = false
                         viewModel.closeChat()
                         route = "home"
                     },
@@ -155,12 +159,17 @@ class MainActivity : ComponentActivity() {
                     onFork = { state.currentSessionId?.let(viewModel::forkSession) },
                     onRewind = viewModel::rewindTo,
                     onToggleTheme = toggleTheme,
-                    onEditKey = { route = "settings" },
+                    onEditKey = {
+                        quickSettings = false
+                        route = "key"
+                    },
                     onFiles = {
+                        quickSettings = false
                         filesReturn = "chat"
                         route = "files"
                     },
                     onTerminal = {
+                        quickSettings = false
                         terminalReturn = "chat"
                         route = "terminal"
                     },
@@ -187,6 +196,21 @@ class MainActivity : ComponentActivity() {
                     hint = state.hint,
                     onOpenCanvas = openCanvas,
                     onAttachImage = viewModel::attachImage,
+                    quickSettings = quickSettings,
+                    onQuickSettings = { quickSettings = true },
+                    onCloseQuickSettings = { quickSettings = false },
+                    provider = state.provider,
+                    onProvider = viewModel::setProvider,
+                    theme = state.theme,
+                    onTheme = viewModel::setTheme,
+                    askBeforeTools = state.askBeforeTools,
+                    onAskBeforeTools = viewModel::setAskBeforeTools,
+                    onMaxCost = viewModel::setMaxCost,
+                    onOpenFullSettings = {
+                        quickSettings = false
+                        route = "settings"
+                    },
+                    onModelSelect = viewModel::setModel,
                 )
                 route == "files" -> {
                     // Always re-list on entry so external/agent changes show.
@@ -383,6 +407,7 @@ private fun animatedColors(dark: Boolean): LumenColors {
         dim = animateColorAsState(target.dim, spec, label = "dim").value,
         faint = animateColorAsState(target.faint, spec, label = "faint").value,
         rule = animateColorAsState(target.rule, spec, label = "rule").value,
+        outline = animateColorAsState(target.outline, spec, label = "outline").value,
         accent = animateColorAsState(target.accent, spec, label = "accent").value,
         water = animateColorAsState(target.water, spec, label = "water").value,
         spectrum = target.spectrum.mapIndexed { i, c ->

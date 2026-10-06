@@ -179,7 +179,9 @@ private fun CategoryRow(
     Row(
         Modifier.fillMaxWidth()
             .padding(horizontal = 4.dp, vertical = 2.dp)
-            .clip(LumenShapes.inset)
+            .clip(LumenShapes.row)
+            .background(colors.surface)
+            .border(1.dp, colors.outline, LumenShapes.row)
             .padding(horizontal = 12.dp, vertical = 12.dp)
             .testTag("storage-row-${category.name}"),
         verticalAlignment = Alignment.CenterVertically,
@@ -205,6 +207,7 @@ private fun CategoryRow(
                 modifier = Modifier
                     .clip(LumenShapes.small)
                     .background(colors.surface)
+                    .border(1.dp, colors.outline, LumenShapes.small)
                     .clickable { onClear() }
                     .padding(horizontal = 10.dp, vertical = 6.dp)
                     .testTag("storage-clear-${category.name}"),

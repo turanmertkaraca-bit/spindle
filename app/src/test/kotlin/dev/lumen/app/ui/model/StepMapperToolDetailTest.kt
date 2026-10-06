@@ -92,4 +92,51 @@ class StepMapperToolDetailTest {
         assertEquals("1.2s", StepMapper.humanMillis(1200))
         assertEquals("30s", StepMapper.humanMillis(30_000))
     }
+
+    private fun questionMessage(id: String, arguments: String, state: ToolState, output: String?) = Message(
+        id = MessageId(id), sessionId = SessionId("s"), role = Role.ASSISTANT,
+        parts = listOf(
+            Part.Tool(
+                PartId("p$id"),
+                ToolCall("c$id", "question", arguments),
+                state,
+                output?.let { ToolResult("c$id", it) },
+            ),
+        ),
+        createdAt = 0,
+    )
+
+    @Test
+    fun `a pending question tool shows the question, never the raw JSON`() {
+        val step = StepMapper.fromMessages(
+            listOf(
+                questionMessage(
+                    "m1",
+                    "{\"question\":\"What file should I edit?\"}",
+                    ToolState.PENDING,
+                    output = null,
+                ),
+            ),
+        ).single()
+        assertTrue(step.summary.contains("What file should I edit?"), "summary was: ${step.summary}")
+        assertTrue(!step.body.contains("{") && !step.body.contains("\"question\"")) {
+            "a pending question body must never show raw JSON, was: ${step.body}"
+        }
+    }
+
+    @Test
+    fun `a done question tool shows the question header and the answer body`() {
+        val step = StepMapper.fromMessages(
+            listOf(
+                questionMessage(
+                    "m2",
+                    "{\"question\":\"Which module should change?\"}",
+                    ToolState.DONE,
+                    output = "the auth module",
+                ),
+            ),
+        ).single()
+        assertEquals("Which module should change?", step.summary)
+        assertEquals("the auth module", step.body)
+    }
 }

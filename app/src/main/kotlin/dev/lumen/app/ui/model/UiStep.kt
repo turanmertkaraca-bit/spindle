@@ -65,4 +65,10 @@ data class UiStep(
      * counts…), shown in the expanded card's inspector. Empty for non-tool rows.
      */
     val toolMetadata: Map<String, String> = emptyMap(),
+    /**
+     * True when this row continues a run of tool-ish rows (the previous row was
+     * also [TOOL]/[SUBAGENT]/[THINKING]). The timeline then draws it joined to
+     * the row above rather than as an isolated card. Set by [StepMapper.linkRuns].
+     */
+    val linkedAbove: Boolean = false,
 )

@@ -130,7 +130,7 @@ fun GitHubScreen(
             Modifier.fillMaxWidth()
                 .clip(LumenShapes.panel)
                 .background(colors.surface)
-                .border(1.dp, colors.rule, LumenShapes.panel)
+                .border(1.dp, colors.outline, LumenShapes.panel)
                 .padding(start = LumenSpacing.md, end = LumenSpacing.xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -215,6 +215,7 @@ fun GitHubScreen(
             Modifier.fillMaxWidth()
                 .clip(LumenShapes.card)
                 .background(colors.surface)
+                .border(1.dp, colors.outline, LumenShapes.card)
                 .padding(horizontal = LumenSpacing.lg, vertical = LumenSpacing.md)
                 .testTag("github-connected"),
             verticalArrangement = Arrangement.spacedBy(LumenSpacing.sm),
@@ -263,7 +264,7 @@ fun GitHubScreen(
             Modifier.fillMaxWidth()
                 .clip(LumenShapes.panel)
                 .background(colors.surface)
-                .border(1.dp, colors.rule, LumenShapes.panel)
+                .border(1.dp, colors.outline, LumenShapes.panel)
                 .padding(horizontal = LumenSpacing.md, vertical = 12.dp),
         ) {
             if (repo.isEmpty()) {
@@ -369,7 +370,7 @@ private fun ActionPill(
         modifier = Modifier
             .clip(LumenShapes.pill)
             .background(colors.surface)
-            .border(1.dp, colors.rule, LumenShapes.pill)
+            .border(1.dp, colors.outline, LumenShapes.pill)
             .clickable(enabled = enabled) { onClick() }
             .padding(horizontal = LumenSpacing.lg, vertical = 9.dp)
             .testTag(tag),
@@ -405,6 +406,7 @@ private fun StatusLine(colors: LumenColors, message: String, isError: Boolean) {
         Modifier.fillMaxWidth()
             .clip(LumenShapes.panel)
             .background(colors.surface)
+            .border(1.dp, colors.outline, LumenShapes.panel)
             .padding(horizontal = LumenSpacing.md, vertical = LumenSpacing.md)
             .testTag("github-status-line")
             .semantics { contentDescription = message },

@@ -57,6 +57,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -108,6 +110,7 @@ import dev.lumen.app.Backlink
 import dev.lumen.app.FilePeek
 import dev.lumen.app.PendingAsk
 import dev.lumen.app.PendingImage
+import dev.lumen.app.data.ProviderCatalogue
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiImage
@@ -182,6 +185,8 @@ data class LumenColors(
     val dim: Color,
     val faint: Color,
     val rule: Color,
+    /** Opaque element boundary: the clean hairline drawn on cards and chips. */
+    val outline: Color,
     val accent: Color,
     /** Primary spectral hue (cyan); used for cursor, marks and focus glow. */
     val water: Color,
@@ -196,8 +201,9 @@ data class LumenColors(
 
     companion object {
         val Light = LumenColors(
-            bg = Color(0xFFF7F6FB), surface = Color(0xFFFFFFFF), fg = Color(0xFF1A1730),
+            bg = Color(0xFFF1F1F4), surface = Color(0xFFFFFFFF), fg = Color(0xFF1A1730),
             dim = Color(0xFF6B6588), faint = Color(0xFFA9A4C0), rule = Color(0x1A140A32),
+            outline = Color(0xFFD5D5DC),
             accent = Color(0xFF6D3FC9),
             water = Color(0xFF16708A),
             spectrum = listOf(
@@ -206,8 +212,9 @@ data class LumenColors(
             dark = false,
         )
         val Dark = LumenColors(
-            bg = Color(0xFF000000), surface = Color(0xFF0A0A0C), fg = Color(0xFFF2EFFB),
+            bg = Color(0xFF000000), surface = Color(0xFF141418), fg = Color(0xFFF2EFFB),
             dim = Color(0xFFA49FC4), faint = Color(0xFF5B5675), rule = Color(0x17FFFFFF),
+            outline = Color(0xFF2E2E36),
             accent = Color(0xFFB9A6F5),
             water = Color(0xFF7FD8E8),
             spectrum = listOf(
@@ -325,6 +332,30 @@ fun LumenChatScreen(
     onAttachImage: ((String, String, String) -> Unit)? = null,
     /** Off in tests/CI so the "answer landed" haptic never fires there. */
     haptics: Boolean = true,
+    /** Show the lightweight in-chat quick settings sheet over the transcript. */
+    quickSettings: Boolean = false,
+    /** Open the quick settings sheet (composer / top-bar affordances). */
+    onQuickSettings: (() -> Unit)? = null,
+    /** Dismiss the quick settings sheet (scrim tap or close). */
+    onCloseQuickSettings: () -> Unit = {},
+    /** Active provider id, shown as chips in the quick settings sheet. */
+    provider: String = "",
+    /** Switch provider from the quick settings sheet. */
+    onProvider: ((String) -> Unit)? = null,
+    /** Active theme: "system" | "light" | "dark". */
+    theme: String = "system",
+    /** Switch theme from the quick settings sheet. */
+    onTheme: ((String) -> Unit)? = null,
+    /** Whether every tool asks for confirmation first. */
+    askBeforeTools: Boolean = false,
+    /** Toggle ask-before-tools from the quick settings sheet. */
+    onAskBeforeTools: ((Boolean) -> Unit)? = null,
+    /** Set the per-session cost ceiling from the quick settings sheet. */
+    onMaxCost: ((Double) -> Unit)? = null,
+    /** Open the full Settings screen from the quick settings footer. */
+    onOpenFullSettings: (() -> Unit)? = null,
+    /** Select a model ref (`provider/id`) from the quick settings sheet. */
+    onModelSelect: ((String) -> Unit)? = null,
 ) {
     val listState = rememberLazyListState()
     val flingBehavior = remember { calmFling() }
@@ -374,7 +405,9 @@ fun LumenChatScreen(
     val pending = busy && grouped.none { it.running } &&
         (grouped.isEmpty() || grouped.last().kind == StepKind.YOU)
     val display = remember(grouped, pending) {
-        StepMapper.dedupeById(if (pending) grouped + WorkingStep else grouped)
+        StepMapper.linkRuns(
+            StepMapper.dedupeById(if (pending) grouped + WorkingStep else grouped),
+        )
     }
     val count = display.size
     val last = display.lastOrNull()
@@ -416,6 +449,23 @@ fun LumenChatScreen(
             val delta = (info.viewportEndOffset - info.afterContentPadding) - (lastVisible.offset + lastVisible.size)
             if (delta > 0) listState.scrollBy(delta.toFloat())
         }
+    }
+    // The viewport can also SHRINK without any content change: the usage meter,
+    // the todo/changes/ask cards or the IME appear and steal height, leaving the
+    // tail clipped below the fold. The growth-keyed effect above never fires then,
+    // so observe layout directly and re-pin the last row whenever a gap opens
+    // under it. Guarded by followTail and not-while-flinging so a deliberate
+    // scroll-up is never yanked back.
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.layoutInfo }
+            .collect { info ->
+                if (!followTail || listState.isScrollInProgress) return@collect
+                val lastItem = info.visibleItemsInfo
+                    .lastOrNull { it.index == info.totalItemsCount - 1 } ?: return@collect
+                val gap = (info.viewportEndOffset - info.afterContentPadding) -
+                    (lastItem.offset + lastItem.size)
+                if (gap > 0) listState.scrollBy(gap.toFloat())
+            }
     }
     // The `↓ new` cue fires when the content grows off-screen. Growth is detected
     // from the DATA (count OR last body length), because a streaming row scrolled
@@ -488,6 +538,9 @@ fun LumenChatScreen(
                                 if (onTerminal != null) {
                                     BarControl("shell", "open-terminal", colors, colors.accent, onClick = onTerminal)
                                 }
+                                if (onQuickSettings != null) {
+                                    BarControl("\u2699", "chat-settings-top", colors, colors.accent, onClick = onQuickSettings)
+                                }
                             }
                         }
                     }
@@ -499,10 +552,19 @@ fun LumenChatScreen(
                                 state = listState,
                                 flingBehavior = flingBehavior,
                                 contentPadding = PaddingValues(start = 8.dp, end = 12.dp, top = 12.dp, bottom = 14.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp),
                                 modifier = Modifier.fillMaxSize().testTag("timeline"),
                             ) {
                                 itemsIndexed(display, key = { _, s -> s.id }) { index, step ->
+                                    // Rows in a tool run sit tight (3dp) and draw a
+                                    // thin rail joining them; independent rows keep
+                                    // the old 10dp breath. Top padding, not the
+                                    // LazyColumn arrangement, so a linked row can
+                                    // tuck right under the one above it.
+                                    val topPad = when {
+                                        index == 0 -> 0.dp
+                                        step.linkedAbove -> 3.dp
+                                        else -> 10.dp
+                                    }
                                     MessageRow(
                                         step = step,
                                         colors = colors,
@@ -519,7 +581,27 @@ fun LumenChatScreen(
                                         fileKind = fileKind,
                                         onRewind = onRewind,
                                         onOpenCanvas = onOpenCanvas,
-                                        modifier = Modifier.animateItem(),
+                                        modifier = Modifier
+                                            .animateItem()
+                                            .then(
+                                                if (step.linkedAbove) {
+                                                    Modifier.drawBehind {
+                                                        val x = 1.dp.toPx()
+                                                        drawLine(
+                                                            color = colors.outline,
+                                                            start = Offset(x, 0f),
+                                                            end = Offset(x, size.height),
+                                                            strokeWidth = 1.dp.toPx(),
+                                                        )
+                                                    }
+                                                } else {
+                                                    Modifier
+                                                },
+                                            )
+                                            .padding(top = topPad)
+                                            .testTag(
+                                                if (step.linkedAbove) "run-link-${step.id}" else "run-${step.id}",
+                                            ),
                                     )
                                 }
                             }
@@ -560,6 +642,7 @@ fun LumenChatScreen(
                 input, busy, colors, onInput, onSend, onStop, onToggleTheme, onEditKey, agentMode, onAgentMode,
                 model = model,
                 onModel = onModel,
+                onQuickSettings = onQuickSettings,
                 attachments = attachments,
                 onRemoveAttachment = onRemoveAttachment,
                 onAttach = onAttachImage?.let { { pickImage.launch("image/*") } },
@@ -584,6 +667,24 @@ fun LumenChatScreen(
                     scope.launch { listState.animateScrollToItem(slot) }
                     onJumpToStep(index)
                 },
+            )
+        }
+        if (quickSettings) {
+            QuickSettingsSheet(
+                colors = colors,
+                provider = provider,
+                model = model,
+                theme = theme,
+                askBeforeTools = askBeforeTools,
+                budgetUsd = budgetUsd,
+                onProvider = onProvider,
+                onModel = onModelSelect,
+                onTheme = onTheme,
+                onMaxCost = onMaxCost,
+                onAskBeforeTools = onAskBeforeTools,
+                onEditKey = onEditKey,
+                onOpenFullSettings = onOpenFullSettings,
+                onClose = onCloseQuickSettings,
             )
         }
     }
@@ -620,13 +721,12 @@ private fun Bloom(colors: LumenColors, modifier: Modifier = Modifier) {
  */
 @Composable
 private fun NewCue(colors: LumenColors, onClick: () -> Unit) {
-    val edge = colors.spectrum.getOrElse(2) { colors.water }
     Row(
         Modifier
             .shadow(LumenElevation.floating, LumenShapes.pill)
             .clip(LumenShapes.pill)
             .background(colors.surface)
-            .border(1.dp, edge.copy(alpha = 0.22f), LumenShapes.pill)
+            .border(1.dp, colors.outline, LumenShapes.pill)
             .clickable { onClick() }
             .padding(horizontal = 11.dp, vertical = 5.dp)
             .testTag("new-cue"),
@@ -660,7 +760,7 @@ private fun BarControl(
             .widthIn(min = 44.dp)
             .clip(shape)
             .background(colors.surface)
-            .border(1.dp, colors.rule, shape)
+            .border(1.dp, colors.outline, shape)
             .clickable { onClick() }
             .padding(horizontal = 11.dp)
             .testTag(tag),
@@ -736,15 +836,8 @@ private fun MessageRow(
                 Modifier
                     .widthIn(max = 328.dp)
                     .clip(bubbleShape)
-                    .then(
-                        if (isYou) {
-                            Modifier
-                                .background(colors.surface, bubbleShape)
-                                .border(1.dp, colors.rule.copy(alpha = 0.55f), bubbleShape)
-                        } else {
-                            Modifier.background(colors.surface, bubbleShape)
-                        },
-                    )
+                    .background(colors.surface, bubbleShape)
+                    .border(1.dp, colors.outline, bubbleShape)
                     .padding(start = if (isYou) 12.dp else 13.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
             ) {
                 // role stamp for agent turns (double-tap it to copy the body)
@@ -895,7 +988,7 @@ private fun UserImages(images: List<UiImage>, colors: LumenColors) {
                         .widthIn(min = 120.dp, max = 240.dp)
                         .heightIn(max = 200.dp)
                         .clip(LumenShapes.panel)
-                        .border(1.dp, colors.rule, LumenShapes.panel)
+                        .border(1.dp, colors.outline, LumenShapes.panel)
                         .testTag("msg-image"),
                 )
             } else {
@@ -904,7 +997,7 @@ private fun UserImages(images: List<UiImage>, colors: LumenColors) {
                         .widthIn(max = 260.dp)
                         .clip(LumenShapes.panel)
                         .background(colors.bg.copy(alpha = 0.4f))
-                        .border(1.dp, colors.water.copy(alpha = 0.30f), LumenShapes.panel)
+                        .border(1.dp, colors.outline, LumenShapes.panel)
                         .padding(horizontal = 10.dp, vertical = 8.dp)
                         .testTag("msg-image"),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1158,6 +1251,7 @@ private fun ToolCardFrame(
             .shadow(LumenElevation.card, shape)
             .clip(shape)
             .background(colors.surface)
+            .border(1.dp, colors.outline, shape)
             .drawBehind {
                 val accent = accentForDraw()
                 val x = 1.dp.toPx()
@@ -1275,8 +1369,9 @@ private fun ToolCardBody(step: UiStep, colors: LumenColors, isSub: Boolean, puls
                         Row(
                             Modifier
                                 .fillMaxWidth()
-                                .clip(LumenShapes.inset)
+                                .clip(LumenShapes.row)
                                 .background(colors.bg.copy(alpha = 0.35f))
+                                .border(1.dp, colors.outline, LumenShapes.row)
                                 .padding(horizontal = 9.dp, vertical = 4.dp)
                                 .testTag("tool-row-$k"),
                             verticalAlignment = Alignment.Top,
@@ -1411,7 +1506,7 @@ private fun ChildTreeRow(child: UiStep, depth: Int, colors: LumenColors, pulse: 
             .drawBehind {
                 if (depth > 0) {
                     val x = 1.dp.toPx()
-                    drawLine(colors.rule, Offset(x, 0f), Offset(x, size.height), 1.dp.toPx())
+                    drawLine(colors.outline, Offset(x, 0f), Offset(x, size.height), 1.dp.toPx())
                 }
             }
             .padding(start = 11.dp, top = 3.dp, bottom = 3.dp, end = 2.dp)
@@ -1529,7 +1624,8 @@ private fun TodoBoard(todos: List<TodoItem>, colors: LumenColors, pulse: () -> F
             .padding(horizontal = 12.dp, vertical = 4.dp)
             .shadow(LumenElevation.card, shape)
             .clip(shape)
-            .background(colors.surface),
+            .background(colors.surface)
+            .border(1.dp, colors.outline, shape),
     ) {
         Row(
             Modifier
@@ -1699,10 +1795,10 @@ private fun ThinkSection(think: String, colors: LumenColors) {
                         color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                         modifier = Modifier
                             .clip(LumenShapes.small)
-                            .border(1.dp, colors.water.copy(alpha = 0.30f), LumenShapes.small)
-                            .clickable { showAll = false }
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                            .testTag("think-show-less"),
+                                .border(1.dp, colors.outline, LumenShapes.small)
+                                .clickable { showAll = false }
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                .testTag("think-show-less"),
                     )
                 } else {
                     Text(
@@ -1716,7 +1812,7 @@ private fun ThinkSection(think: String, colors: LumenColors) {
                             color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                             modifier = Modifier
                                 .clip(LumenShapes.small)
-                                .border(1.dp, colors.water.copy(alpha = 0.30f), LumenShapes.small)
+                                .border(1.dp, colors.outline, LumenShapes.small)
                                 .clickable { showAll = true }
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                                 .testTag("think-show-all"),
@@ -1771,7 +1867,7 @@ private fun WindowedText(
                 color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .clip(LumenShapes.small)
-                    .border(1.dp, colors.rule, LumenShapes.small)
+                    .border(1.dp, colors.outline, LumenShapes.small)
                     .clickable { showAll = false }
                     .padding(horizontal = 8.dp, vertical = 4.dp)
                     .testTag("literal-show-less"),
@@ -1786,7 +1882,7 @@ private fun WindowedText(
                 color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .clip(LumenShapes.small)
-                    .border(1.dp, colors.rule, LumenShapes.small)
+                    .border(1.dp, colors.outline, LumenShapes.small)
                     .clickable { showAll = true }
                     .padding(horizontal = 8.dp, vertical = 4.dp)
                     .testTag("literal-show-all"),
@@ -1900,7 +1996,8 @@ private fun ChangesCard(
             .padding(horizontal = 12.dp, vertical = 4.dp)
             .shadow(LumenElevation.card, shape)
             .clip(shape)
-            .background(colors.surface),
+            .background(colors.surface)
+            .border(1.dp, colors.outline, shape),
     ) {
         Row(
             Modifier
@@ -1979,7 +2076,7 @@ private fun ChangesCard(
                                 .fillMaxWidth()
                                 .clip(LumenShapes.inset)
                                 .background(colors.bg.copy(alpha = 0.4f))
-                                .border(1.dp, colors.rule, LumenShapes.inset)
+                                .border(1.dp, colors.outline, LumenShapes.inset)
                                 .padding(horizontal = 10.dp, vertical = 8.dp)
                                 .testTag("changes-diff"),
                         ) {
@@ -2069,7 +2166,6 @@ private fun AskCard(
     onAnswerQuestion: (List<String>) -> Unit,
     onSkipQuestion: () -> Unit,
 ) {
-    val edge = colors.spectrum.getOrElse(2) { colors.water }
     val shape = LumenShapes.card
     Column(
         Modifier
@@ -2078,7 +2174,7 @@ private fun AskCard(
             .shadow(LumenElevation.card, shape)
             .clip(shape)
             .background(colors.surface)
-            .border(1.dp, edge.copy(alpha = 0.30f), shape)
+            .border(1.dp, colors.outline, shape)
             .padding(12.dp)
             .testTag("ask-card"),
     ) {
@@ -2135,7 +2231,7 @@ private fun QuestionAsk(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(LumenShapes.inset)
-                    .border(1.dp, if (isSelected) colors.water else colors.rule, LumenShapes.inset)
+                    .border(1.dp, if (isSelected) colors.water else colors.outline, LumenShapes.inset)
                     .background(if (isSelected) colors.bg.copy(alpha = 0.35f) else Color.Transparent)
                     .clickable {
                         if (ask.multiple) {
@@ -2173,7 +2269,7 @@ private fun AskAction(
         modifier = Modifier
             .clip(LumenShapes.pill)
             .background(if (accent) colors.water else colors.surface)
-            .border(1.dp, if (accent) colors.water else colors.rule, LumenShapes.pill)
+            .border(1.dp, if (accent) colors.water else colors.outline, LumenShapes.pill)
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 8.dp)
             .testTag(tag),
@@ -2194,6 +2290,7 @@ private fun Composer(
     onAgentMode: (String) -> Unit,
     model: String = "",
     onModel: (() -> Unit)? = null,
+    onQuickSettings: (() -> Unit)? = null,
     attachments: List<PendingImage> = emptyList(),
     onRemoveAttachment: (Int) -> Unit = {},
     onAttach: (() -> Unit)? = null,
@@ -2253,7 +2350,7 @@ private fun Composer(
                 .padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 8.dp)
                 .clip(cardShape)
                 .background(colors.surface)
-                .border(1.dp, if (inputFocused) colors.water else colors.rule, cardShape)
+                .border(1.dp, if (inputFocused) colors.water else colors.outline, cardShape)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
             Box(Modifier.fillMaxWidth()) {
@@ -2296,7 +2393,12 @@ private fun Composer(
                 val modelLabel = model.substringAfterLast('/')
                 if (onModel != null && modelLabel.isNotBlank()) {
                     Spacer(Modifier.width(5.dp))
-                    ModelChip(modelLabel, colors, onModel)
+                    // Tapping the model opens the picker (kept for compatibility)
+                    // and the lightweight quick settings sheet over the chat.
+                    ModelChip(modelLabel, colors) {
+                        onModel?.invoke()
+                        onQuickSettings?.invoke()
+                    }
                 }
                 Spacer(Modifier.weight(1f))
                 if (onEditKey != null) {
@@ -2307,6 +2409,16 @@ private fun Composer(
                             .clickable { onEditKey() }
                             .padding(horizontal = 4.dp, vertical = 2.dp)
                             .testTag("key"),
+                    )
+                }
+                if (onQuickSettings != null) {
+                    Text(
+                        "\u2699", color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
+                        modifier = Modifier
+                            .clip(LumenShapes.small)
+                            .clickable { onQuickSettings() }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .testTag("chat-settings"),
                     )
                 }
                 if (onToggleTheme != null) {
@@ -2336,7 +2448,7 @@ private fun Composer(
                                 else -> SolidColor(colors.surface)
                             },
                         )
-                        .then(if (!busy && !canSend) Modifier.border(1.dp, colors.rule, actionShape) else Modifier)
+                        .then(if (!busy && !canSend) Modifier.border(1.dp, colors.outline, actionShape) else Modifier)
                         .clickable(
                             enabled = busy || canSend,
                             interactionSource = interaction,
@@ -2390,7 +2502,7 @@ private fun ModelChip(label: String, colors: LumenColors, onClick: () -> Unit) {
             .widthIn(max = 96.dp)
             .clip(LumenShapes.pill)
             .background(colors.water.copy(alpha = 0.10f))
-            .border(1.dp, colors.water.copy(alpha = 0.30f), LumenShapes.pill)
+            .border(1.dp, colors.outline, LumenShapes.pill)
             .clickable { onClick() }
             .padding(horizontal = 7.dp, vertical = 2.dp)
             .testTag("model-chip"),
@@ -2423,6 +2535,7 @@ private fun FileSuggestions(
             .shadow(LumenElevation.floating, shape)
             .clip(shape)
             .background(colors.surface)
+            .border(1.dp, colors.outline, shape)
             .heightIn(max = 208.dp)
             .verticalScroll(rememberScrollState())
             .testTag("file-suggestions"),
@@ -2457,7 +2570,7 @@ private fun AttachmentChip(
         Modifier
             .clip(LumenShapes.pill)
             .background(colors.surface)
-            .border(1.dp, colors.water.copy(alpha = 0.18f), LumenShapes.pill)
+            .border(1.dp, colors.outline, LumenShapes.pill)
             .padding(start = 9.dp, end = 4.dp, top = 3.dp, bottom = 3.dp)
             .testTag("attachment-$index"),
         verticalAlignment = Alignment.CenterVertically,
@@ -2537,7 +2650,7 @@ private fun AgentModeChip(
         modifier = Modifier
             .clip(LumenShapes.pill)
             .background(if (selected) tint.copy(alpha = 0.16f) else Color.Transparent)
-            .border(1.dp, if (selected) tint.copy(alpha = 0.45f) else colors.rule.copy(alpha = 0.6f), LumenShapes.pill)
+            .border(1.dp, if (selected) tint.copy(alpha = 0.45f) else colors.outline, LumenShapes.pill)
             .clickable { onSelect(label) }
             .padding(horizontal = 9.dp, vertical = 3.dp)
             .testTag(tag),
@@ -2583,11 +2696,7 @@ private fun FilePeekOverlay(
                 .shadow(LumenElevation.floating, LumenShapes.sheet)
                 .clip(LumenShapes.sheet)
                 .background(colors.surface)
-                .border(
-                    1.dp,
-                    colors.spectrum.getOrElse(2) { colors.water }.copy(alpha = 0.25f),
-                    LumenShapes.sheet,
-                )
+                .border(1.dp, colors.outline, LumenShapes.sheet)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -2714,4 +2823,218 @@ private fun PeekBacklinks(
             }
         }
     }
+}
+
+/**
+ * The lightweight in-chat settings surface: provider, model, theme, budget and the
+ * ask-before-tools switch, plus a footer that reaches the key screen and the full
+ * Settings page. Rendered over the transcript like [FilePeekOverlay] — a `surface`
+ * sheet with an [LumenColors.outline] hairline — so tuning a chat never yanks the
+ * reader out to the full Settings screen.
+ */
+@Composable
+private fun QuickSettingsSheet(
+    colors: LumenColors,
+    provider: String,
+    model: String,
+    theme: String,
+    askBeforeTools: Boolean,
+    budgetUsd: Double,
+    onProvider: ((String) -> Unit)?,
+    onModel: ((String) -> Unit)?,
+    onTheme: ((String) -> Unit)?,
+    onMaxCost: ((Double) -> Unit)?,
+    onAskBeforeTools: ((Boolean) -> Unit)?,
+    onEditKey: (() -> Unit)?,
+    onOpenFullSettings: (() -> Unit)?,
+    onClose: () -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = if (colors.dark) 0.62f else 0.38f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClose,
+            )
+            .testTag("quick-settings"),
+    ) {
+        Column(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .shadow(LumenElevation.floating, LumenShapes.sheet)
+                .clip(LumenShapes.sheet)
+                .background(colors.surface)
+                .border(1.dp, colors.outline, LumenShapes.sheet)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) {}
+                .heightIn(max = 460.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 18.dp),
+        ) {
+            Text(
+                "quick settings",
+                color = colors.fg, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                letterSpacing = 0.4.sp,
+            )
+            Spacer(Modifier.height(14.dp))
+
+            QuickLabel("provider", colors)
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                for ((id, label) in ProviderCatalogue.choices) {
+                    QuickChip(label, provider == id, "quick-provider-$id", colors) { onProvider?.invoke(id) }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            QuickLabel("model", colors)
+            for (m in ProviderCatalogue.defaultModels(provider)) {
+                val ref = "$provider/${m.id}"
+                val selected = model == ref
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp)
+                        .clip(LumenShapes.row)
+                        .background(if (selected) colors.bg.copy(alpha = 0.35f) else Color.Transparent)
+                        .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.row)
+                        .clickable { onModel?.invoke(ref) }
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                        .testTag("quick-model-${m.id}"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        Modifier.size(6.dp)
+                            .background(
+                                if (selected) colors.water else Color.Transparent,
+                                WaterShapes.droplet(tail = 0.5f),
+                            ),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        m.label ?: m.id,
+                        color = if (selected) colors.fg else colors.dim,
+                        fontFamily = Mono, fontSize = 12.5.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "${m.contextWindow / 1000}k",
+                        color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            QuickLabel("theme", colors)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (value in listOf("system", "light", "dark")) {
+                    QuickChip(value, theme == value, "quick-theme-$value", colors) { onTheme?.invoke(value) }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            QuickLabel("budget", colors)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                QuickChip("off", budgetUsd <= 0.0, "quick-budget-off", colors) { onMaxCost?.invoke(0.0) }
+                QuickChip("\$0.50", budgetUsd == 0.5, "quick-budget-050", colors) { onMaxCost?.invoke(0.5) }
+                QuickChip("\$2", budgetUsd == 2.0, "quick-budget-2", colors) { onMaxCost?.invoke(2.0) }
+                QuickChip("\$5", budgetUsd == 5.0, "quick-budget-5", colors) { onMaxCost?.invoke(5.0) }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            QuickLabel("tools", colors)
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("ask before tools", color = colors.fg, fontFamily = Mono, fontSize = 12.5.sp)
+                Switch(
+                    checked = askBeforeTools,
+                    onCheckedChange = { onAskBeforeTools?.invoke(it) },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = colors.bg,
+                        checkedTrackColor = colors.water,
+                        uncheckedThumbColor = colors.dim,
+                        uncheckedTrackColor = colors.surface,
+                        uncheckedBorderColor = colors.outline,
+                    ),
+                    modifier = Modifier.testTag("quick-ask-before-tools"),
+                )
+            }
+
+            Spacer(Modifier.height(18.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                QuickAction("API key", "quick-edit-key", colors) { onEditKey?.invoke() }
+                QuickAction("All settings", "quick-full-settings", colors) { onOpenFullSettings?.invoke() }
+                Spacer(Modifier.weight(1f))
+                QuickAction("close", "quick-close", colors) { onClose() }
+            }
+        }
+    }
+}
+
+/** A faint, spaced caption that heads a quick-settings section. */
+@Composable
+private fun QuickLabel(text: String, colors: LumenColors) {
+    Text(
+        text,
+        color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 2.sp,
+    )
+    Spacer(Modifier.height(8.dp))
+}
+
+/** A selectable pill chip in the quick-settings sheet. */
+@Composable
+private fun QuickChip(
+    text: String,
+    selected: Boolean,
+    tag: String,
+    colors: LumenColors,
+    onClick: () -> Unit,
+) {
+    Text(
+        text,
+        color = if (selected) colors.fg else colors.dim,
+        fontFamily = Mono, fontSize = 12.5.sp,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(LumenShapes.inset)
+            .background(if (selected) colors.bg.copy(alpha = 0.35f) else Color.Transparent)
+            .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.inset)
+            .clickable { onClick() }
+            .padding(horizontal = 13.dp, vertical = 8.dp)
+            .testTag(tag),
+    )
+}
+
+/** A quiet text action in the quick-settings footer. */
+@Composable
+private fun QuickAction(
+    label: String,
+    tag: String,
+    colors: LumenColors,
+    onClick: () -> Unit,
+) {
+    Text(
+        label,
+        color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+        modifier = Modifier
+            .clip(LumenShapes.small)
+            .clickable { onClick() }
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .testTag(tag),
+    )
 }

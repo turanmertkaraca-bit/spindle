@@ -1,6 +1,7 @@
 package dev.lumen.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -85,6 +86,7 @@ fun DiagnosticsScreen(
             Modifier.fillMaxWidth()
                 .clip(LumenShapes.card)
                 .background(colors.surface)
+                .border(1.dp, colors.outline, LumenShapes.card)
                 .padding(horizontal = 14.dp, vertical = 12.dp),
         ) {
             EnvRow(colors, "alpine", if (linux.alpineReady) "ready" else "not installed", linux.alpineReady)

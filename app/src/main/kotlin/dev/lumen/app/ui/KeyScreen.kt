@@ -13,9 +13,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -70,11 +72,10 @@ private val KeyHints: Map<String, String> = mapOf(
     "openrouter" to "Paste a key from openrouter.ai/keys.",
 )
 
-/** One selectable provider: name, a one-line hint and its default model. */
+/** One selectable provider: its id, display name and default model basename. */
 private data class ProviderOption(
     val id: String,
     val name: String,
-    val hint: String,
     val model: String,
 )
 
@@ -82,7 +83,6 @@ private val Providers: List<ProviderOption> = ProviderCatalogue.choices.map { (i
     ProviderOption(
         id = id,
         name = name,
-        hint = KeyHints[id] ?: "Paste the key for this provider.",
         model = KeyStore.defaultModel(id).substringAfter('/'),
     )
 }
@@ -155,9 +155,9 @@ private suspend fun probeKey(provider: String, key: String): ProbeOutcome =
     }
 
 /**
- * First-run key entry. Pick a provider (each shows a hint and its default
- * model), paste a key, optionally test it, continue. The key is stored
- * on-device and only ever sent to the provider you chose.
+ * First-run key entry. Pick a provider (a single radio row plus the default
+ * model it will use), paste a key, optionally test it, continue. The key is
+ * stored on-device and only ever sent to the provider you chose.
  *
  * The screen is deliberately self-contained: it keeps [busy]/[error] from the
  * caller (MainActivity wires those later) and runs the "Test key" probe itself
@@ -205,9 +205,9 @@ fun KeyScreen(
                 }
             },
         )
-        Spacer(Modifier.height(LumenSpacing.xl))
-        Text("Connect a provider to start", color = colors.dim, fontFamily = Mono, fontSize = 13.sp)
-        Spacer(Modifier.height(LumenSpacing.xl))
+        Spacer(Modifier.height(LumenSpacing.md))
+        Text("Connect a provider to start", color = colors.dim, fontFamily = Mono, fontSize = 12.5.sp)
+        Spacer(Modifier.height(LumenSpacing.lg))
 
         SectionLabel(colors, "provider")
         Spacer(Modifier.height(LumenSpacing.md))
@@ -226,14 +226,29 @@ fun KeyScreen(
             }
         }
 
+        val defaultModel = Providers.firstOrNull { it.id == provider }?.model
+        if (defaultModel != null) {
+            Spacer(Modifier.height(LumenSpacing.md))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SectionLabel(colors, "model")
+                Spacer(Modifier.width(LumenSpacing.md))
+                Text(defaultModel, color = colors.faint, fontFamily = Mono, fontSize = 12.sp)
+            }
+        }
+
         Spacer(Modifier.height(LumenSpacing.xl))
         SectionLabel(colors, "api key")
         Spacer(Modifier.height(LumenSpacing.md))
         Row(
             Modifier.fillMaxWidth()
+                .heightIn(min = 52.dp)
                 .clip(LumenShapes.panel)
                 .background(colors.surface)
-                .border(1.dp, if (focused) colors.water else colors.rule, LumenShapes.panel)
+                .border(
+                    if (focused) 1.5.dp else 1.dp,
+                    if (focused) colors.water else colors.dim.copy(alpha = 0.35f),
+                    LumenShapes.panel,
+                )
                 .padding(start = LumenSpacing.md, end = LumenSpacing.xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -250,13 +265,16 @@ fun KeyScreen(
                 cursorBrush = SolidColor(colors.accent),
                 visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Password,
+                    keyboardType = KeyboardType.Ascii,
                     autoCorrect = false,
                     capitalization = KeyboardCapitalization.None,
                     imeAction = ImeAction.Go,
                 ),
                 keyboardActions = KeyboardActions(onGo = { if (canGo) onSubmit(provider, key) }),
-                modifier = Modifier.weight(1f).padding(vertical = 12.dp).testTag("keyfield"),
+                modifier = Modifier.weight(1f)
+                    .padding(vertical = 12.dp)
+                    .testTag("keyfield")
+                    .semantics { contentDescription = "API key" },
                 decorationBox = { inner ->
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
                         if (key.isEmpty()) {
@@ -268,11 +286,13 @@ fun KeyScreen(
             )
             Box(
                 modifier = Modifier
+                    .sizeIn(minWidth = 40.dp, minHeight = 40.dp)
                     .clip(LumenShapes.small)
                     .clickable(enabled = !busy) { visible = !visible }
-                    .padding(horizontal = LumenSpacing.sm, vertical = LumenSpacing.sm)
+                    .padding(horizontal = LumenSpacing.sm)
                     .testTag("key-visibility")
                     .semantics { contentDescription = if (visible) "hide key" else "show key" },
+                contentAlignment = Alignment.Center,
             ) {
                 Text(
                     if (visible) "Hide" else "Show",
@@ -312,14 +332,25 @@ fun KeyScreen(
             }
         }
 
-        probe?.let { outcome ->
-            Spacer(Modifier.height(LumenSpacing.md))
-            ProbeLine(colors, outcome)
+        val currentProbe = probe
+        val feedback: Pair<String, Color>? = when {
+            testing -> "Testing…" to colors.dim
+            currentProbe is ProbeOutcome.Valid -> "Key looks valid" to colors.water
+            currentProbe is ProbeOutcome.Invalid -> "Key rejected by the provider" to LumenAlert
+            currentProbe is ProbeOutcome.Unreachable ->
+                "Could not reach the provider (${currentProbe.detail})" to colors.dim
+            error != null -> error to LumenAlert
+            else -> null
         }
-
-        if (error != null) {
-            Spacer(Modifier.height(LumenSpacing.md))
-            AlertLine(colors, error)
+        if (feedback != null) {
+            Spacer(Modifier.height(LumenSpacing.sm))
+            StatusLine(
+                text = feedback.first,
+                tint = feedback.second,
+                modifier = Modifier
+                    .testTag("probe-status")
+                    .semantics { contentDescription = feedback.first },
+            )
         }
 
         Spacer(Modifier.height(LumenSpacing.xl))
@@ -373,30 +404,21 @@ private fun ProviderCard(
     ) {
         Box(
             Modifier.size(8.dp).background(
-                if (selected) colors.water else Color.Transparent,
+                if (selected) colors.water else colors.rule,
                 WaterShapes.droplet(tail = 0.5f),
             ),
         )
         Spacer(Modifier.width(LumenSpacing.md))
-        Column(Modifier.weight(1f)) {
-            Text(
-                option.name,
-                color = if (selected) colors.fg else colors.dim,
-                fontFamily = Mono, fontSize = 14.sp,
-            )
-            Spacer(Modifier.height(LumenSpacing.xxs))
-            Text(
-                option.hint,
-                color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Spacer(Modifier.width(LumenSpacing.sm))
         Text(
-            "default \u00b7 ${option.model}",
-            color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            option.name,
+            color = if (selected) colors.fg else colors.dim,
+            fontFamily = Mono, fontSize = 14.sp,
+            modifier = Modifier.weight(1f),
         )
+        if (selected) {
+            Spacer(Modifier.width(LumenSpacing.sm))
+            Text("\u2713", color = colors.water, fontFamily = Mono, fontSize = 13.sp)
+        }
     }
 }
 
@@ -427,42 +449,26 @@ private fun SecondaryAction(
     }
 }
 
+/**
+ * The screen's single status line: a coloured dot and one short message. The
+ * probe result, the "Testing…" state and a caller error all render here so they
+ * share one visual language instead of stacking as separate blocks.
+ */
 @Composable
-private fun ProbeLine(colors: LumenColors, outcome: ProbeOutcome) {
-    val text = when (outcome) {
-        is ProbeOutcome.Valid -> "Key looks valid"
-        is ProbeOutcome.Invalid -> "Key rejected by the provider"
-        is ProbeOutcome.Unreachable -> "Could not reach the provider (${outcome.detail})"
-    }
-    val tint = when (outcome) {
-        is ProbeOutcome.Valid -> colors.water
-        is ProbeOutcome.Invalid -> LumenAlert
-        is ProbeOutcome.Unreachable -> colors.dim
-    }
+private fun StatusLine(
+    text: String,
+    tint: Color,
+    modifier: Modifier = Modifier,
+) {
     Row(
-        Modifier.fillMaxWidth().testTag("probe-status").semantics { contentDescription = text },
+        modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(7.dp).clip(CircleShape).background(tint))
         Spacer(Modifier.width(LumenSpacing.md))
-        Text(text, color = tint, fontFamily = Mono, fontSize = 12.sp)
-    }
-}
-
-@Composable
-private fun AlertLine(colors: LumenColors, text: String) {
-    Row(
-        Modifier.fillMaxWidth()
-            .clip(LumenShapes.panel)
-            .background(colors.surface)
-            .padding(horizontal = LumenSpacing.md, vertical = LumenSpacing.md),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(7.dp).clip(CircleShape).background(LumenAlert))
-        Spacer(Modifier.width(LumenSpacing.md))
         Text(
             text,
-            color = colors.fg, fontFamily = Mono, fontSize = 12.sp, lineHeight = 16.sp,
+            color = tint, fontFamily = Mono, fontSize = 12.sp, lineHeight = 16.sp,
             maxLines = 3, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )

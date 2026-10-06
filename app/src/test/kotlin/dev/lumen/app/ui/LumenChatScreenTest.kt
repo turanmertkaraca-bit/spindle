@@ -28,6 +28,7 @@ import dev.spindle.core.model.RunChanges
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.model.TodoItem
 import dev.spindle.core.model.TodoStatus
+import dev.spindle.core.model.Usage
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -295,6 +296,43 @@ class LumenChatScreenTest {
         check(compose.onAllNodesWithTag("new-cue").fetchSemanticsNodes().isEmpty()) {
             "no cue should appear while the reader is at the tail"
         }
+        compose.onNodeWithText("streamed answer line 5", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun `a usage meter that shrinks the viewport keeps the streaming tail visible`() {
+        val many = (0 until 12).map { i ->
+            UiStep("s$i", StepKind.ASSISTANT, "ASSISTANT", "t$i", "summary $i", "BODY $i full text")
+        }
+        val streaming = mutableStateOf(
+            many + UiStep("tail", StepKind.ASSISTANT, "ASSISTANT", "tt", "growing", "start"),
+        )
+        val usage = mutableStateOf(Usage())
+        compose.setContent {
+            LumenChatScreen(
+                streaming.value, input = "", busy = true, error = null, modifier = viewport,
+                ambient = false, haptics = false,
+                usage = usage.value, contextWindow = 128000, newTokens = 2935,
+            )
+        }
+        compose.waitForIdle()
+        // Anchor at the tail, then stream into the same assistant row.
+        compose.onNodeWithTag("timeline").performScrollToIndex(12)
+        compose.waitForIdle()
+        repeat(6) { n ->
+            compose.runOnIdle {
+                streaming.value = streaming.value.dropLast(1) + UiStep(
+                    "tail", StepKind.ASSISTANT, "ASSISTANT", "tt", "growing",
+                    (0..n).joinToString("\n") { "streamed answer line $it that wraps across the bubble width" },
+                )
+            }
+            compose.waitForIdle()
+        }
+        // The usage meter appears and steals viewport height from the timeline; the
+        // layout observer must re-pin the tail even though nothing streamed changed.
+        compose.runOnIdle { usage.value = Usage(inputTokens = 1000) }
+        compose.waitForIdle()
+        compose.onNodeWithTag("usage-meter", useUnmergedTree = true).assertExists()
         compose.onNodeWithText("streamed answer line 5", substring = true).assertIsDisplayed()
     }
 
@@ -699,5 +737,53 @@ class LumenChatScreenTest {
         check(maxRenderedTextLength() <= 7_000) {
             "a streamed frame laid out ${maxRenderedTextLength()} chars; each Text must stay bounded"
         }
+    }
+
+    @Test
+    fun `the model chip and settings affordance open quick settings`() {
+        var model = 0
+        var quick = 0
+        compose.setContent {
+            LumenChatScreen(
+                steps(2), input = "", busy = false, error = null, modifier = viewport, ambient = false,
+                model = "opencode-go/deepseek-v4.1-flash",
+                onModel = { model++ },
+                onQuickSettings = { quick++ },
+            )
+        }
+        // The model chip keeps invoking onModel (compatibility) and opens the sheet.
+        compose.onNodeWithTag("model-chip", useUnmergedTree = true).performClick()
+        // The composer's small settings affordance opens the sheet directly.
+        compose.onNodeWithTag("chat-settings", useUnmergedTree = true).performClick()
+        compose.waitForIdle()
+        assertEquals(1, model)
+        assertEquals(2, quick)
+    }
+
+    @Test
+    fun `quick settings sheet renders its sections`() {
+        compose.setContent {
+            LumenChatScreen(
+                steps(1), input = "", busy = false, error = null, modifier = viewport, ambient = false,
+                quickSettings = true,
+                provider = "deepseek",
+                model = "deepseek/deepseek-flash",
+                theme = "dark",
+                budgetUsd = 2.0,
+                askBeforeTools = true,
+            )
+        }
+        // The scrim is the sheet's dismissible boundary.
+        compose.onNodeWithTag("quick-settings").assertIsDisplayed()
+        // Provider, model, theme, budget and tools all render.
+        compose.onNodeWithTag("quick-provider-deepseek").assertExists()
+        compose.onNodeWithTag("quick-provider-opencode-go").assertExists()
+        compose.onNodeWithTag("quick-model-deepseek-flash").assertExists()
+        compose.onNodeWithTag("quick-theme-dark").assertExists()
+        compose.onNodeWithTag("quick-budget-2").assertExists()
+        compose.onNodeWithTag("quick-ask-before-tools").assertExists()
+        // Footer reaches the key screen and the full Settings page.
+        compose.onNodeWithTag("quick-edit-key").assertExists()
+        compose.onNodeWithTag("quick-full-settings").assertExists()
     }
 }

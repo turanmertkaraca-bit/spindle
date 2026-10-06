@@ -1,6 +1,7 @@
 package dev.lumen.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -165,6 +166,7 @@ private fun InputRow(
             Modifier.weight(1f)
                 .clip(LumenShapes.panel)
                 .background(colors.surface)
+                .border(1.dp, colors.outline, LumenShapes.panel)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
             if (draft.isEmpty()) {
