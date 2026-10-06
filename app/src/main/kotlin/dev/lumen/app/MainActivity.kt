@@ -144,9 +144,16 @@ class MainActivity : ComponentActivity() {
                     model = state.model,
                     onModel = { quickSettings = true },
                     onOpenMention = { p, l ->
-                        viewModel.openFileInFiles(p, l)
-                        filesReturn = "chat"
-                        route = "files"
+                        when (p.substringAfterLast('.', "").lowercase()) {
+                            "apk" -> viewModel.installApk(p)
+                            "html", "htm" -> openCanvas(p)
+                            "png", "jpg", "jpeg", "webp", "gif", "bmp" -> viewModel.openFileExternally(p)
+                            else -> {
+                                viewModel.openFileInFiles(p, l)
+                                filesReturn = "chat"
+                                route = "files"
+                            }
+                        }
                     },
                     fileRevision = state.fileRevision,
                     fileKind = viewModel::fileKind,

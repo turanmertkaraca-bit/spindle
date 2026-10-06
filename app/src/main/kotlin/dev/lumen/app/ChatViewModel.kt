@@ -13,6 +13,7 @@ import dev.lumen.app.platform.DebianEnvironment
 import dev.lumen.app.platform.PerfSampler
 import dev.lumen.app.platform.PerfSummary
 import dev.lumen.app.platform.RunService
+import dev.lumen.app.platform.WorkspaceActions
 import dev.lumen.app.platform.WorkspaceWatcher
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
@@ -343,6 +344,11 @@ class ChatViewModel(
     private val runningSessions: MutableSet<String>? = null,
     /** Test seam: overrides the frame sampler so teardown can be asserted. */
     private val perf: PerfSampler = PerfSampler(),
+    /**
+     * Platform actions that leave the app (install an APK, hand a file to an
+     * external viewer). Null on headless hosts, where those taps are no-ops.
+     */
+    private val actions: WorkspaceActions? = null,
 ) : ViewModel() {
 
     private val bus: EventBus = eventBus
@@ -1743,6 +1749,44 @@ class ChatViewModel(
     }
 
     /**
+     * Install the workspace APK at [path] through the system package installer.
+     * A refused or failed launch surfaces as [ChatState.error]; on a headless
+     * host (no [actions]) this is a no-op.
+     */
+    fun installApk(path: String) {
+        val target = inWorkspace(path)
+        if (target == null) {
+            _state.value = _state.value.copy(error = "cannot install $path")
+            return
+        }
+        val message = actions?.installApk(target.toString()) ?: return
+        _state.value = _state.value.copy(error = message)
+    }
+
+    /**
+     * Open the workspace file at [path] in an external app, choosing the MIME
+     * type from its extension. A refused or failed launch surfaces as
+     * [ChatState.error]; on a headless host (no [actions]) this is a no-op.
+     */
+    fun openFileExternally(path: String) {
+        val target = inWorkspace(path)
+        if (target == null) {
+            _state.value = _state.value.copy(error = "cannot open $path")
+            return
+        }
+        val mime = when (path.substringAfterLast('.', "").lowercase()) {
+            "png" -> "image/png"
+            "jpg", "jpeg" -> "image/jpeg"
+            "webp" -> "image/webp"
+            "gif" -> "image/gif"
+            "bmp" -> "image/bmp"
+            else -> "application/octet-stream"
+        }
+        val message = actions?.openExternally(target.toString(), mime) ?: return
+        _state.value = _state.value.copy(error = message)
+    }
+
+    /**
      * Load [path] into the editor, capped at [MAX_PEEK_LINES] with a truncation
      * flag (the screen disables Save when set). Escapes are refused. [line], or
      * else the file's last recorded change range, is highlighted when it is
@@ -2558,6 +2602,7 @@ class ChatViewModel(
                     catalogue = container.catalogue,
                     eventBus = events,
                     runningSessions = runningSessions,
+                    actions = WorkspaceActions(container.context, File(container.context.filesDir, "workspace")),
                 ) as T
             }
     }
