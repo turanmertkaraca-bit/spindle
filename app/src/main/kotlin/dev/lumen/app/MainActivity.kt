@@ -31,6 +31,7 @@ import dev.lumen.app.ui.HomeScreen
 import dev.lumen.app.ui.KeyScreen
 import dev.lumen.app.ui.LumenChatScreen
 import dev.lumen.app.ui.LumenColors
+import dev.lumen.app.ui.ModelPickerScreen
 import dev.lumen.app.ui.SettingsScreen
 import dev.lumen.app.ui.StorageScreen
 import dev.lumen.app.ui.TerminalScreen
@@ -72,6 +73,8 @@ class MainActivity : ComponentActivity() {
             var terminalReturn by rememberSaveable { mutableStateOf("home") }
             // The route to return to when leaving the canvas.
             var canvasReturn by rememberSaveable { mutableStateOf("chat") }
+            // The route to return to when leaving the full model picker.
+            var modelsReturn by rememberSaveable { mutableStateOf("settings") }
             val onChat = route == "chat" && state.currentSessionId != null
 
             // Open the canvas only when the page resolved; a refused path stays put.
@@ -82,6 +85,10 @@ class MainActivity : ComponentActivity() {
                     route = "canvas"
                 }
             }
+
+            // Pull the live catalogue once on start; the embedded snapshot is
+            // already seeded in state so the UI is never empty offline.
+            LaunchedEffect(Unit) { viewModel.refreshModels() }
 
             BackHandler(enabled = route != "home" || state.currentSessionId != null) {
                 when {
@@ -103,6 +110,7 @@ class MainActivity : ComponentActivity() {
                         route = "settings"
                     }
                     route == "key" -> route = "settings"
+                    route == "models" -> route = modelsReturn
                     route == "settings" -> route = "home"
                     route == "chat" -> {
                         viewModel.closeChat()
@@ -211,6 +219,23 @@ class MainActivity : ComponentActivity() {
                         route = "settings"
                     },
                     onModelSelect = viewModel::setModel,
+                    onOpenModels = { modelsReturn = "chat"; route = "models" },
+                )
+                route == "models" -> ModelPickerScreen(
+                    colors = colors,
+                    provider = state.provider,
+                    models = state.models,
+                    selected = state.model,
+                    refreshing = state.modelsRefreshing,
+                    error = state.modelsError,
+                    onProvider = viewModel::setProvider,
+                    onSelect = { ref ->
+                        viewModel.setModel(ref)
+                        route = modelsReturn
+                    },
+                    onRefresh = { viewModel.refreshModels() },
+                    onBack = { route = modelsReturn },
+                    modifier = modifier,
                 )
                 route == "files" -> {
                     // Always re-list on entry so external/agent changes show.
@@ -316,6 +341,7 @@ class MainActivity : ComponentActivity() {
                     onDiagnostics = { route = "diagnostics" },
                     onGitHub = { route = "github" },
                     githubLogin = state.githubLogin,
+                    onBrowseModels = { modelsReturn = "settings"; route = "models" },
                 )
                 route == "key" -> KeyScreen(
                     colors = colors,

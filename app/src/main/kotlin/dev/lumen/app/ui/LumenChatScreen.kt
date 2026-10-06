@@ -356,6 +356,8 @@ fun LumenChatScreen(
     onOpenFullSettings: (() -> Unit)? = null,
     /** Select a model ref (`provider/id`) from the quick settings sheet. */
     onModelSelect: ((String) -> Unit)? = null,
+    /** Open the full-screen live model picker from the composer's model chip. */
+    onOpenModels: (() -> Unit)? = null,
 ) {
     val listState = rememberLazyListState()
     val flingBehavior = remember { calmFling() }
@@ -643,6 +645,7 @@ fun LumenChatScreen(
                 model = model,
                 onModel = onModel,
                 onQuickSettings = onQuickSettings,
+                onOpenModels = onOpenModels,
                 attachments = attachments,
                 onRemoveAttachment = onRemoveAttachment,
                 onAttach = onAttachImage?.let { { pickImage.launch("image/*") } },
@@ -684,6 +687,7 @@ fun LumenChatScreen(
                 onAskBeforeTools = onAskBeforeTools,
                 onEditKey = onEditKey,
                 onOpenFullSettings = onOpenFullSettings,
+                onBrowseModels = onOpenModels,
                 onClose = onCloseQuickSettings,
             )
         }
@@ -2291,6 +2295,7 @@ private fun Composer(
     model: String = "",
     onModel: (() -> Unit)? = null,
     onQuickSettings: (() -> Unit)? = null,
+    onOpenModels: (() -> Unit)? = null,
     attachments: List<PendingImage> = emptyList(),
     onRemoveAttachment: (Int) -> Unit = {},
     onAttach: (() -> Unit)? = null,
@@ -2398,11 +2403,15 @@ private fun Composer(
                     val modelLabel = model.substringAfterLast('/')
                     if (onModel != null && modelLabel.isNotBlank()) {
                         Spacer(Modifier.width(5.dp))
-                        // Tapping the model opens the picker (kept for compatibility)
-                        // and the lightweight quick settings sheet over the chat.
+                        // Tapping the model opens the full picker when wired;
+                        // otherwise it keeps the historical picker + quick sheet.
                         ModelChip(modelLabel, colors) {
-                            onModel?.invoke()
-                            onQuickSettings?.invoke()
+                            if (onOpenModels != null) {
+                                onOpenModels()
+                            } else {
+                                onModel?.invoke()
+                                onQuickSettings?.invoke()
+                            }
                         }
                     }
                     Spacer(Modifier.width(6.dp))
@@ -2855,6 +2864,7 @@ private fun QuickSettingsSheet(
     onAskBeforeTools: ((Boolean) -> Unit)?,
     onEditKey: (() -> Unit)?,
     onOpenFullSettings: (() -> Unit)?,
+    onBrowseModels: (() -> Unit)? = null,
     onClose: () -> Unit,
 ) {
     Box(
@@ -3005,6 +3015,9 @@ private fun QuickSettingsSheet(
             ) {
                 QuickAction("API key", "quick-edit-key", colors) { onEditKey?.invoke() }
                 QuickAction("All settings", "quick-full-settings", colors) { onOpenFullSettings?.invoke() }
+                if (onBrowseModels != null) {
+                    QuickAction("all models", "quick-models", colors) { onBrowseModels() }
+                }
                 Spacer(Modifier.weight(1f))
                 QuickAction("close", "quick-close", colors) { onClose() }
             }

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.lumen.app.data.KeyStore
+import dev.lumen.app.data.ModelCatalogue
 import dev.lumen.app.data.ProviderCatalogue
 import dev.lumen.app.platform.AndroidEnvironment
 import dev.lumen.app.platform.AndroidShellExecutor
@@ -44,6 +45,7 @@ import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.model.SessionState
 import dev.spindle.core.model.TodoItem
+import dev.spindle.core.provider.ModelInfo
 import dev.spindle.core.provider.SimpleProviderRegistry
 import dev.spindle.core.refs.FileKind
 import dev.spindle.core.refs.ReferenceResolver
@@ -279,6 +281,12 @@ data class ChatState(
     val linux: LinuxEnvironmentState = LinuxEnvironmentState(),
     /** Monotonic counter bumped on any workspace file change. */
     val fileRevision: Int = 0,
+    /** The active provider's catalogue (embedded merged over cached live). */
+    val models: List<ModelInfo> = emptyList(),
+    /** True while a live catalogue refresh is in flight. */
+    val modelsRefreshing: Boolean = false,
+    /** The last catalogue refresh error, or null when the last one succeeded. */
+    val modelsError: String? = null,
     /** Context window of the selected model, in tokens (0 when unknown). */
     val contextWindow: Int = 0,
     /** Best-effort estimate of the next request's cost in USD; <0 when unknown. */
@@ -313,6 +321,12 @@ class ChatViewModel(
     private val runScope: CoroutineScope? = null,
     /** Test seam: overrides the provider registry so a scripted provider can run. */
     private val registryFactory: ((provider: String, key: String) -> SimpleProviderRegistry)? = null,
+    /**
+     * The on-device live model catalogue. Production passes the process
+     * singleton; a headless host (tests) leaves it null and falls back to the
+     * embedded snapshot for every lookup.
+     */
+    private val catalogue: ModelCatalogue? = null,
     /** How long session search waits for more keystrokes; 0 lands inline in tests. */
     private val searchDebounceMs: Long = SEARCH_DEBOUNCE_MS,
     /**
@@ -333,6 +347,10 @@ class ChatViewModel(
 
     private val bus: EventBus = eventBus
 
+    /** Seed the catalogue synchronously (embedded merged over any cache). */
+    private val initialModels: List<ModelInfo> =
+        catalogue?.models(keys.provider) ?: ProviderCatalogue.defaultModels(keys.provider)
+
     private val _state = MutableStateFlow(
         ChatState(
             model = keys.model,
@@ -343,7 +361,8 @@ class ChatViewModel(
             agentMode = keys.agentMode,
             maxCostUsd = keys.maxCostUsd,
             githubLogin = keys.githubLogin,
-            contextWindow = ProviderCatalogue.defaultModels(keys.provider)
+            models = initialModels,
+            contextWindow = initialModels
                 .firstOrNull { it.id == keys.model.substringAfter('/') }?.contextWindow ?: 0,
         ),
     )
@@ -914,8 +933,10 @@ class ChatViewModel(
             model = keys.model,
             provider = keys.provider,
             error = null,
+            models = catalogue?.models(keys.provider) ?: ProviderCatalogue.defaultModels(keys.provider),
         )
         refreshModelMetrics()
+        refreshModels(keys.provider)
     }
 
     /** The stored provider key, for prefilling the key screen non-destructively. */
@@ -935,14 +956,53 @@ class ChatViewModel(
     fun setProvider(provider: String) {
         keys.provider = provider
         keys.model = KeyStore.defaultModel(provider)
-        _state.value = _state.value.copy(provider = provider, model = keys.model)
+        _state.value = _state.value.copy(
+            provider = provider,
+            model = keys.model,
+            models = catalogue?.models(provider) ?: ProviderCatalogue.defaultModels(provider),
+        )
         refreshModelMetrics()
+        refreshModels(provider)
     }
 
     fun setModel(model: String) {
         keys.model = model
         _state.value = _state.value.copy(model = model)
         refreshModelMetrics()
+    }
+
+    /**
+     * Fetch the live catalogue for [provider] on the run scope (the Application
+     * scope in production, so it survives the Activity), seeding the UI with
+     * the current/cached list while it is in flight.
+     */
+    fun refreshModels(provider: String = keys.provider) {
+        val cat = catalogue ?: return
+        val scope = runScope ?: viewModelScope
+        _state.value = _state.value.copy(modelsRefreshing = true)
+        scope.launch {
+            val result = cat.refresh(provider)
+            if (_state.value.provider == provider) {
+                _state.value = _state.value.copy(
+                    models = result,
+                    modelsError = cat.errors.value[provider],
+                )
+            }
+            _state.value = _state.value.copy(modelsRefreshing = false)
+        }
+    }
+
+    /**
+     * The catalogue to measure against: the live list when it is already for
+     * this provider and non-empty, else the cached/embedded list.
+     */
+    private fun modelsFor(provider: String): List<ModelInfo> {
+        val current = _state.value.models
+        return if (provider == _state.value.provider && current.isNotEmpty()) {
+            current
+        } else {
+            catalogue?.models(provider) ?: ProviderCatalogue.defaultModels(provider)
+        }
     }
 
     /** Session token total already reflected in [ChatState.newTokens]. */
@@ -955,7 +1015,7 @@ class ChatViewModel(
      */
     private fun refreshModelMetrics() {
         val usage = _state.value.usage
-        val info = ProviderCatalogue.defaultModels(keys.provider)
+        val info = modelsFor(keys.provider)
             .firstOrNull { it.id == keys.model.substringAfter('/') }
         val nextCostUsd = if (info != null && info.maxOutputTokens > 0) {
             val input = usage.totalTokens / 1_000_000.0 * info.inputCostPerM
@@ -2226,7 +2286,7 @@ class ChatViewModel(
     /** True when the selected model advertises image input; unknown models pass. */
     private fun modelSupportsVision(): Boolean {
         val modelId = keys.model.substringAfter('/', keys.model)
-        val info = ProviderCatalogue.defaultModels(keys.provider).firstOrNull { it.id == modelId }
+        val info = modelsFor(keys.provider).firstOrNull { it.id == modelId }
         return info?.supportsVision ?: true
     }
 
@@ -2495,6 +2555,7 @@ class ChatViewModel(
                     environment = AndroidEnvironment(container.context),
                     debian = DebianEnvironment(container.context),
                     runScope = runScope,
+                    catalogue = container.catalogue,
                     eventBus = events,
                     runningSessions = runningSessions,
                 ) as T

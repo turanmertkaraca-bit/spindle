@@ -61,6 +61,8 @@ fun SettingsScreen(
     onGitHub: (() -> Unit)? = null,
     /** Non-secret GitHub login shown on the GitHub link's status line. */
     githubLogin: String = "",
+    /** Open the full-screen live model picker, when supplied. */
+    onBrowseModels: (() -> Unit)? = null,
 ) {
     Column(
         modifier
@@ -146,6 +148,15 @@ fun SettingsScreen(
                     )
                 }
             }
+        }
+        if (onBrowseModels != null) {
+            Spacer(Modifier.height(LumenSpacing.md))
+            LumenBarAction(
+                colors = colors,
+                label = "Browse all models",
+                tag = "settings-browse-models",
+                onClick = onBrowseModels,
+            )
         }
 
         Spacer(Modifier.height(LumenSpacing.xxl))

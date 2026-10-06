@@ -6,10 +6,12 @@ import dev.lumen.app.data.AndroidDatabase
 import dev.lumen.app.data.AndroidSessionStore
 import dev.lumen.app.data.AndroidSnapshotStore
 import dev.lumen.app.data.KeyStore
+import dev.lumen.app.data.ModelCatalogue
 import dev.spindle.core.event.EventBus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * Process owner for everything that must outlive an Activity: the agent-run
@@ -38,6 +40,7 @@ class LumenApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        applicationScope.launch { container.catalogue.refreshAll() }
     }
 }
 
@@ -56,6 +59,7 @@ class AppContainer(context: Context) : AutoCloseable {
     val keys = KeyStore(context)
     val store = AndroidSessionStore(database)
     val snapshots = AndroidSnapshotStore(database)
+    val catalogue = ModelCatalogue(keys, context)
 
     override fun close() {
         runCatching { database.close() }
