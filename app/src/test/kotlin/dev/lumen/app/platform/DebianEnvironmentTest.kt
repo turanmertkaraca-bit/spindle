@@ -32,7 +32,9 @@ class DebianEnvironmentTest {
 
         assertEquals(File(debian.binDir, "proot").absolutePath, argv.first())
         assertTrue(argv.contains("--rootfs=" + debian.rootfs.absolutePath))
-        assertTrue(argv.contains("--cwd=/root"))
+        // The guest starts in the bound session cwd so relative command paths
+        // resolve to the same files the app's file tools see.
+        assertTrue(argv.contains("--cwd=$cwd"))
         assertTrue(argv.contains("-0"))
         assertTrue(argv.contains("--kill-on-exit"))
         assertTrue(argv.contains("--link2symlink"))

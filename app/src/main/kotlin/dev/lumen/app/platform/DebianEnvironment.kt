@@ -378,15 +378,20 @@ class DebianEnvironment(private val context: Context) {
 
     /**
      * The proot argv for one guest command. This is the exact rehearsed flag
-     * set (no `-L`): `--rootfs --cwd=/root -0 --kill-on-exit --link2symlink`
-     * plus the /dev, /proc, /sys, cwd, Downloads and home binds, then
-     * `/bin/bash -c <command>`.
+     * set (no `-L`): `--rootfs --cwd=<cwd|/root> -0 --kill-on-exit
+     * --link2symlink` plus the /dev, /proc, /sys, cwd, Downloads and home
+     * binds, then `/bin/bash -c <command>`.
+     *
+     * The guest working directory is the bound session [cwd] when one is
+     * supplied, so a relative path in a command resolves to the same file the
+     * app's own tools (and the Files view) see. Left at `/root` only for a
+     * caller that has no working directory.
      */
     fun prootArgv(command: String, cwd: String): List<String> {
         val a = ArrayList<String>()
         a += File(binDir, "proot").absolutePath
         a += "--rootfs=" + rootfs.absolutePath
-        a += "--cwd=/root"
+        a += "--cwd=" + if (cwd.isNotBlank()) cwd else "/root"
         a += "-0"
         a += "--kill-on-exit"
         a += "--link2symlink"

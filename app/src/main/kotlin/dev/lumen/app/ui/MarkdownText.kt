@@ -372,15 +372,14 @@ private fun LinkedText(
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
 
     fun refAt(offset: Int): Pair<String, Int?>? {
-        // Query a one-character window: a zero-width [offset, offset] range is
-        // treated as non-overlapping by Compose's annotation lookup, so a real
-        // tap silently resolved to nothing (the semantics path still worked,
-        // which is why tests passed while device taps did not).
-        if (text.isEmpty()) return null
-        val at = offset.coerceIn(0, text.length - 1)
-        val path = text.getStringAnnotations(FILE_TAG, at, at + 1).firstOrNull()?.item ?: return null
-        val line = text.getStringAnnotations(FILE_LINE_TAG, at, at + 1).firstOrNull()?.item?.toIntOrNull()
-        return path to line
+        // Resolve against the already-scanned reference ranges rather than a
+        // fresh annotation query: an annotation lookup by offset is sensitive to
+        // range semantics and can miss the very glyph that was tapped. A plain
+        // containment test is exact and cheap.
+        val hit = refs.firstOrNull { offset >= it.start && offset < it.end } ?: return null
+        val line = text.getStringAnnotations(FILE_LINE_TAG, hit.start, hit.end)
+            .firstOrNull()?.item?.toIntOrNull()
+        return hit.item to line
     }
 
     val openFirst: () -> Boolean = {
