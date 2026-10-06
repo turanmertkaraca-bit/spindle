@@ -372,8 +372,14 @@ private fun LinkedText(
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
 
     fun refAt(offset: Int): Pair<String, Int?>? {
-        val path = text.getStringAnnotations(FILE_TAG, offset, offset).firstOrNull()?.item ?: return null
-        val line = text.getStringAnnotations(FILE_LINE_TAG, offset, offset).firstOrNull()?.item?.toIntOrNull()
+        // Query a one-character window: a zero-width [offset, offset] range is
+        // treated as non-overlapping by Compose's annotation lookup, so a real
+        // tap silently resolved to nothing (the semantics path still worked,
+        // which is why tests passed while device taps did not).
+        if (text.isEmpty()) return null
+        val at = offset.coerceIn(0, text.length - 1)
+        val path = text.getStringAnnotations(FILE_TAG, at, at + 1).firstOrNull()?.item ?: return null
+        val line = text.getStringAnnotations(FILE_LINE_TAG, at, at + 1).firstOrNull()?.item?.toIntOrNull()
         return path to line
     }
 

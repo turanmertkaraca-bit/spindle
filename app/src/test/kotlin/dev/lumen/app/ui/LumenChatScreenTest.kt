@@ -6,6 +6,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -758,6 +759,35 @@ class LumenChatScreenTest {
         compose.waitForIdle()
         assertEquals(1, model)
         assertEquals(2, quick)
+    }
+
+    @Test
+    fun `send keeps its full target with the model chip present on a narrow screen`() {
+        // Regression: the bottom control row used to squeeze the send box to a
+        // sliver once the model chip rendered (which only happens on device,
+        // where a model is always set), making the send button untappable.
+        var sent = 0
+        compose.setContent {
+            LumenChatScreen(
+                steps(2),
+                input = "hi",
+                busy = false,
+                error = null,
+                modifier = Modifier.size(width = 320.dp, height = 480.dp),
+                ambient = false,
+                model = "opencode-go/deepseek-v4.1-flash",
+                onModel = {},
+                onQuickSettings = {},
+                onSend = { sent++ },
+            )
+        }
+        compose.onNodeWithTag("send").assertIsDisplayed().assertWidthIsAtLeast(40.dp).performClick()
+        compose.waitForIdle()
+        assertEquals(1, sent)
+        // Only one attach affordance should exist.
+        check(compose.onAllNodesWithTag("attach-vision").fetchSemanticsNodes().isEmpty()) {
+            "the duplicate vision attach control must stay removed"
+        }
     }
 
     @Test

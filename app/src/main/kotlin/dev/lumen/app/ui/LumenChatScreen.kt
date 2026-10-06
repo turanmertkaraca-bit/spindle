@@ -2378,63 +2378,71 @@ private fun Composer(
             }
             Spacer(Modifier.height(6.dp))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                if (onAttach != null) {
-                    // Secondary affordances, dim by design, so the send control is
-                    // unmistakably the card's one primary action. The eye reuses
-                    // the same picker: an attached image IS the vision path.
-                    ComposerControl("+", "attach-image", colors.dim, onAttach)
-                    Spacer(Modifier.width(2.dp))
-                    ComposerControl("\u25c9", "attach-vision", colors.faint, onAttach)
-                    Spacer(Modifier.width(6.dp))
-                }
-                AgentModeChip("build", "agent-build", agentMode == "build", colors.water, colors, onAgentMode)
-                Spacer(Modifier.width(5.dp))
-                AgentModeChip("plan", "agent-plan", agentMode == "plan", colors.accent, colors, onAgentMode)
-                val modelLabel = model.substringAfterLast('/')
-                if (onModel != null && modelLabel.isNotBlank()) {
+                // The secondary controls live in their own weighted, scrollable
+                // track so they can never compress the send control, which must
+                // keep its full touch target on narrow screens. Only one attach
+                // affordance exists: an attached image IS the vision path.
+                Row(
+                    Modifier
+                        .weight(1f)
+                        .horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (onAttach != null) {
+                        ComposerControl("+", "attach-image", colors.dim, onAttach)
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    AgentModeChip("build", "agent-build", agentMode == "build", colors.water, colors, onAgentMode)
                     Spacer(Modifier.width(5.dp))
-                    // Tapping the model opens the picker (kept for compatibility)
-                    // and the lightweight quick settings sheet over the chat.
-                    ModelChip(modelLabel, colors) {
-                        onModel?.invoke()
-                        onQuickSettings?.invoke()
+                    AgentModeChip("plan", "agent-plan", agentMode == "plan", colors.accent, colors, onAgentMode)
+                    val modelLabel = model.substringAfterLast('/')
+                    if (onModel != null && modelLabel.isNotBlank()) {
+                        Spacer(Modifier.width(5.dp))
+                        // Tapping the model opens the picker (kept for compatibility)
+                        // and the lightweight quick settings sheet over the chat.
+                        ModelChip(modelLabel, colors) {
+                            onModel?.invoke()
+                            onQuickSettings?.invoke()
+                        }
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    if (onEditKey != null) {
+                        Text(
+                            "key", color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp,
+                            modifier = Modifier
+                                .clip(LumenShapes.small)
+                                .clickable { onEditKey() }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                .testTag("key"),
+                        )
+                    }
+                    if (onQuickSettings != null) {
+                        Text(
+                            "\u2699", color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
+                            modifier = Modifier
+                                .clip(LumenShapes.small)
+                                .clickable { onQuickSettings() }
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                .testTag("chat-settings"),
+                        )
+                    }
+                    if (onToggleTheme != null) {
+                        Text(
+                            "◐", color = colors.faint, fontFamily = Mono, fontSize = 13.sp,
+                            modifier = Modifier
+                                .clip(LumenShapes.small)
+                                .clickable { onToggleTheme() }
+                                .padding(horizontal = 4.dp)
+                                .testTag("theme"),
+                        )
                     }
                 }
-                Spacer(Modifier.weight(1f))
-                if (onEditKey != null) {
-                    Text(
-                        "key", color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp,
-                        modifier = Modifier
-                            .clip(LumenShapes.small)
-                            .clickable { onEditKey() }
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                            .testTag("key"),
-                    )
-                }
-                if (onQuickSettings != null) {
-                    Text(
-                        "\u2699", color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
-                        modifier = Modifier
-                            .clip(LumenShapes.small)
-                            .clickable { onQuickSettings() }
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                            .testTag("chat-settings"),
-                    )
-                }
-                if (onToggleTheme != null) {
-                    Text(
-                        "◐", color = colors.faint, fontFamily = Mono, fontSize = 13.sp,
-                        modifier = Modifier
-                            .clip(LumenShapes.small)
-                            .clickable { onToggleTheme() }
-                            .padding(horizontal = 4.dp)
-                            .testTag("theme"),
-                    )
-                }
-                Spacer(Modifier.width(4.dp))
+                Spacer(Modifier.width(6.dp))
                 // The primary action: a filled circular target. Idle-with-text is
                 // a bright spectral send; busy is a solid danger stop; blank-and-idle
                 // is a dim, bordered, disabled send so the control never shifts.
+                // It is a sibling of the flexible track, so it always keeps its
+                // full 40dp target.
                 val actionShape = LumenShapes.pill
                 Box(
                     Modifier
