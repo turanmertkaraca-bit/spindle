@@ -119,9 +119,10 @@ class StepMapperToolDetailTest {
             ),
         ).single()
         assertTrue(step.summary.contains("What file should I edit?"), "summary was: ${step.summary}")
-        assertTrue(!step.body.contains("{") && !step.body.contains("\"question\"")) {
-            "a pending question body must never show raw JSON, was: ${step.body}"
-        }
+        assertTrue(
+            !step.body.contains("{") && !step.body.contains("\"question\""),
+            "a pending question body must never show raw JSON, was: ${step.body}",
+        )
     }
 
     @Test
