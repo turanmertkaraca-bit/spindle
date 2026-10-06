@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -135,7 +137,7 @@ fun FilesScreen(
 
                     val listing = files
                     if (listing == null) {
-                        CenteredHint(colors, "Loading files…")
+                        CenteredHint(colors, "Loading files\u2026")
                     } else {
                         val listingError = listing.error
                         if (listingError != null && listing.entries.isEmpty()) {
@@ -149,14 +151,22 @@ fun FilesScreen(
                             )
                         } else {
                             LazyColumn(
-                                Modifier.fillMaxWidth().weight(1f).testTag("files-list"),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f)
+                                    .testTag("files-list"),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
                             ) {
                                 if (listingError != null) {
                                     item(key = "__error") {
                                         Text(
-                                            listingError, color = LumenAlert, fontFamily = Mono, fontSize = 11.sp,
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp).testTag("files-error"),
+                                            listingError,
+                                            color = LumenAlert,
+                                            fontFamily = Mono,
+                                            fontSize = LumenType.caption,
+                                            modifier = Modifier
+                                                .padding(horizontal = 6.dp, vertical = 4.dp)
+                                                .testTag("files-error"),
                                         )
                                     }
                                 }
@@ -245,35 +255,45 @@ fun FilesScreen(
 private fun Breadcrumb(colors: LumenColors, dir: String, onOpenDir: (String) -> Unit) {
     val segments = dir.split('/').filter { it.isNotEmpty() }
     Row(
-        Modifier.fillMaxWidth()
+        Modifier
+            .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 18.dp, vertical = 4.dp),
+            .padding(horizontal = LumenSpacing.page, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             "workspace",
             color = if (segments.isEmpty()) colors.fg else colors.water,
-            fontFamily = Mono, fontSize = 12.sp,
+            fontFamily = Mono,
+            fontSize = LumenType.body,
             modifier = Modifier
                 .clip(LumenShapes.glyph)
                 .clickable { onOpenDir("") }
-                .padding(horizontal = 4.dp, vertical = 3.dp)
+                .padding(horizontal = 5.dp, vertical = 4.dp)
                 .testTag("crumb-root"),
         )
         var prefix = ""
         for (seg in segments) {
             prefix = if (prefix.isEmpty()) seg else "$prefix/$seg"
             val target = prefix
-            Text("/", color = colors.faint, fontFamily = Mono, fontSize = 12.sp)
+            Text(
+                "/",
+                color = colors.outline,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+                modifier = Modifier.padding(horizontal = 1.dp),
+            )
             Text(
                 seg,
                 color = colors.water,
-                fontFamily = Mono, fontSize = 12.sp,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .clip(LumenShapes.glyph)
                     .clickable { onOpenDir(target) }
-                    .padding(horizontal = 4.dp, vertical = 3.dp)
+                    .padding(horizontal = 5.dp, vertical = 4.dp)
                     .testTag("crumb-$target"),
             )
         }
@@ -291,68 +311,103 @@ private fun EntryRow(
 ) {
     var menu by remember { mutableStateOf(false) }
     Row(
-        Modifier.fillMaxWidth()
-            .padding(horizontal = 4.dp)
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 0.dp, vertical = 3.dp)
             .clip(LumenShapes.row)
             .background(colors.surface)
             .border(1.dp, colors.outline, LumenShapes.row)
             .clickable { onEnter(entry) }
-            .padding(start = 12.dp, end = 6.dp, top = 11.dp, bottom = 11.dp)
+            .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp)
             .testTag("entry-${entry.path}"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             if (entry.isDir) "\u25b8" else "\u00b7",
             color = if (entry.isDir) colors.water else colors.faint,
-            fontFamily = Mono, fontSize = 13.sp,
+            fontFamily = Mono,
+            fontSize = LumenType.bodyLarge,
             modifier = Modifier.width(18.dp),
         )
         Spacer(Modifier.width(6.dp))
         Text(
             entry.name,
-            color = colors.fg, fontFamily = Mono, fontSize = 13.sp,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            color = colors.fg,
+            fontFamily = Mono,
+            fontSize = LumenType.bodyLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         if (!entry.isDir) {
             Spacer(Modifier.width(8.dp))
-            Text(humanSize(entry.size), color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp)
+            Text(
+                humanSize(entry.size),
+                color = colors.faint,
+                fontFamily = Mono,
+                fontSize = LumenType.micro,
+            )
             if (isHtml(entry.name)) {
                 Spacer(Modifier.width(8.dp))
                 Text(
                     "\u25b6 View",
-                    color = colors.water, fontFamily = Mono, fontSize = 10.5.sp, fontWeight = FontWeight.Medium,
+                    color = colors.water,
+                    fontFamily = Mono,
+                    fontSize = LumenType.micro,
+                    fontWeight = FontWeight.Medium,
                     modifier = Modifier
                         .clip(LumenShapes.small)
                         .background(colors.surface)
                         .border(1.dp, colors.outline, LumenShapes.small)
                         .clickable { onOpenCanvas(entry.path) }
-                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
                         .testTag("view-${entry.path}"),
                 )
             }
         }
         Box {
-            Text(
-                "⋯", color = colors.faint, fontFamily = Mono, fontSize = 15.sp,
+            Box(
                 modifier = Modifier
+                    .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
                     .clip(LumenShapes.small)
                     .clickable { menu = true }
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .padding(horizontal = 8.dp)
                     .testTag("menu-${entry.path}"),
-            )
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "\u22ef",
+                    color = colors.faint,
+                    fontFamily = Mono,
+                    fontSize = 16.sp,
+                )
+            }
             DropdownMenu(
                 expanded = menu,
                 onDismissRequest = { menu = false },
                 containerColor = colors.surface,
             ) {
                 DropdownMenuItem(
-                    text = { Text("Rename", color = colors.fg, fontFamily = Mono, fontSize = 13.sp) },
+                    text = {
+                        Text(
+                            "Rename",
+                            color = colors.fg,
+                            fontFamily = Mono,
+                            fontSize = LumenType.body,
+                        )
+                    },
                     onClick = { menu = false; onRename(entry) },
                     modifier = Modifier.testTag("rename-${entry.path}"),
                 )
                 DropdownMenuItem(
-                    text = { Text("Delete", color = LumenAlert, fontFamily = Mono, fontSize = 13.sp) },
+                    text = {
+                        Text(
+                            "Delete",
+                            color = LumenAlert,
+                            fontFamily = Mono,
+                            fontSize = LumenType.body,
+                        )
+                    },
                     onClick = { menu = false; onDelete(entry) },
                     modifier = Modifier.testTag("delete-${entry.path}"),
                 )
@@ -430,9 +485,12 @@ private fun EditorOverlay(
             val last = h.last.coerceAtLeast(first)
             Text(
                 "edited L$first\u2013L$last",
-                color = colors.water, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.4.sp,
+                color = colors.water,
+                fontFamily = Mono,
+                fontSize = LumenType.micro,
+                letterSpacing = 0.4.sp,
                 modifier = Modifier
-                    .padding(start = 16.dp, end = 16.dp, top = 6.dp)
+                    .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 8.dp)
                     .clip(LumenShapes.small)
                     .background(colors.water.copy(alpha = 0.12f))
                     .border(1.dp, colors.outline, LumenShapes.small)
@@ -443,22 +501,32 @@ private fun EditorOverlay(
 
         if (failed) {
             Text(
-                editor.error.orEmpty(), color = LumenAlert, fontFamily = Mono, fontSize = 12.sp,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                editor.error.orEmpty(),
+                color = LumenAlert,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+                modifier = Modifier.padding(horizontal = LumenSpacing.page, vertical = 10.dp),
             )
             return@Column
         }
         if (editor.truncated) {
             Text(
-                "File is too long to edit safely — saving is off",
-                color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.4.sp,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp).testTag("editor-truncated"),
+                "File is too long to edit safely \u2014 saving is off",
+                color = colors.faint,
+                fontFamily = Mono,
+                fontSize = LumenType.micro,
+                letterSpacing = 0.4.sp,
+                modifier = Modifier
+                    .padding(start = LumenSpacing.page, end = LumenSpacing.page, bottom = 6.dp)
+                    .testTag("editor-truncated"),
             )
         }
         Box(
-            Modifier.weight(1f).fillMaxWidth()
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
                 .verticalScroll(scroll)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = LumenSpacing.page, vertical = 10.dp),
         ) {
             BasicTextField(
                 value = draft,
@@ -466,7 +534,12 @@ private fun EditorOverlay(
                     draft = it
                     dirty = true
                 },
-                textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 13.sp, lineHeight = 19.sp),
+                textStyle = LocalTextStyle.current.copy(
+                    color = colors.fg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.bodyLarge,
+                    lineHeight = LumenType.lineBody,
+                ),
                 cursorBrush = SolidColor(colors.water),
                 onTextLayout = { layout = it },
                 modifier = Modifier
@@ -509,17 +582,19 @@ private fun NameDialog(
         containerColor = colors.surface,
         titleContentColor = colors.fg,
         textContentColor = colors.dim,
-        title = { Text(title, fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium) },
+        title = { Text(title, fontFamily = Mono, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
         text = {
             BasicTextField(
                 value = value,
                 onValueChange = { value = it },
                 singleLine = true,
-                textStyle = TextStyle(color = colors.fg, fontFamily = Mono, fontSize = 14.sp),
+                textStyle = TextStyle(color = colors.fg, fontFamily = Mono, fontSize = LumenType.bodyLarge),
                 cursorBrush = SolidColor(colors.water),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
                     .clip(LumenShapes.inset)
                     .background(colors.bg)
+                    .border(1.dp, colors.outline, LumenShapes.inset)
                     .padding(10.dp)
                     .testTag("name-input"),
             )
@@ -528,7 +603,9 @@ private fun NameDialog(
             Text(
                 confirm,
                 color = if (valid) colors.accent else colors.faint,
-                fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+                fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .clip(LumenShapes.small)
                     .clickable(enabled = valid) { onConfirm(value.trim()) }
@@ -538,7 +615,10 @@ private fun NameDialog(
         },
         dismissButton = {
             Text(
-                "Cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
+                "Cancel",
+                color = colors.dim,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
                 modifier = Modifier
                     .clip(LumenShapes.small)
                     .clickable { onDismiss() }
@@ -564,13 +644,15 @@ private fun ConfirmDialog(
         containerColor = colors.surface,
         titleContentColor = colors.fg,
         textContentColor = colors.dim,
-        title = { Text(title, fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium) },
-        text = { Text(message, fontFamily = Mono, fontSize = 12.5.sp, lineHeight = 18.sp) },
+        title = { Text(title, fontFamily = Mono, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
+        text = { Text(message, fontFamily = Mono, fontSize = LumenType.body, lineHeight = LumenType.lineTight) },
         confirmButton = {
             Text(
                 confirm,
                 color = if (destructive) LumenAlert else colors.accent,
-                fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+                fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .clip(LumenShapes.small)
                     .clickable { onConfirm() }
@@ -580,7 +662,10 @@ private fun ConfirmDialog(
         },
         dismissButton = {
             Text(
-                "Cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
+                "Cancel",
+                color = colors.dim,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
                 modifier = Modifier
                     .clip(LumenShapes.small)
                     .clickable { onDismiss() }
@@ -599,8 +684,19 @@ private fun ColumnScope.CenteredHint(
     tag: String? = null,
     error: Boolean = false,
 ) {
-    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-        StateHint(colors, text, detail = detail, tag = tag, tint = if (error) LumenAlert else colors.water)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .weight(1f),
+        contentAlignment = Alignment.Center,
+    ) {
+        StateHint(
+            colors = colors,
+            text = text,
+            detail = detail,
+            tag = tag,
+            tint = if (error) LumenAlert else colors.water,
+        )
     }
 }
 

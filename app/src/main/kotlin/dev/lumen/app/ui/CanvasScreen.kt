@@ -9,13 +9,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -113,22 +108,34 @@ fun CanvasScreen(
             backTag = "canvas-back",
             actions = {
                 LumenBarAction(
-                    colors = colors, label = "Reload", tag = "canvas-reload",
+                    colors = colors,
+                    label = "Reload",
+                    tag = "canvas-reload",
                     onClick = { requested += 1 },
                 )
             },
         )
         if (html.isBlank()) {
             Box(
-                Modifier.fillMaxWidth().weight(1f),
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
                 contentAlignment = Alignment.Center,
             ) {
-                StateHint(colors, "Nothing to render", detail = "This page has no HTML", tag = "canvas-empty")
+                StateHint(
+                    colors,
+                    "Nothing to render",
+                    detail = "This page has no HTML",
+                    tag = "canvas-empty",
+                )
             }
         } else {
             key(reload) {
                 AndroidView(
-                    modifier = Modifier.fillMaxWidth().weight(1f).testTag("canvas-web"),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .testTag("canvas-web"),
                     factory = { ctx ->
                         WebView(ctx).apply {
                             setBackgroundColor(colors.bg.toArgb())

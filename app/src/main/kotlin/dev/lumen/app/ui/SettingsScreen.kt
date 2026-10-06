@@ -63,24 +63,29 @@ fun SettingsScreen(
     githubLogin: String = "",
 ) {
     Column(
-        modifier.fillMaxSize().background(colors.bg).imePadding()
+        modifier
+            .fillMaxSize()
+            .background(colors.bg)
+            .imePadding()
             .verticalScroll(rememberScrollState())
-            .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 28.dp),
+            .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 8.dp, bottom = 28.dp),
     ) {
         LumenTopBar(
             colors = colors,
             title = "Settings",
-            titleSize = 20.sp,
+            titleSize = LumenType.title,
             actions = {
                 LumenBarAction(colors, "Done", "settings-done", onBack, primary = true)
             },
         )
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(LumenSpacing.xl))
 
-        Text("provider", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
-        Spacer(Modifier.height(8.dp))
+        SectionTitle(colors, "provider")
+        Spacer(Modifier.height(LumenSpacing.md))
         Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             for (p in ProviderCatalogue.choices) {
@@ -88,82 +93,119 @@ fun SettingsScreen(
             }
         }
 
-        Spacer(Modifier.height(24.dp))
-        Text("model", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(LumenSpacing.xxl))
+        SectionTitle(colors, "model")
+        Spacer(Modifier.height(LumenSpacing.md))
         val models = ProviderCatalogue.defaultModels(provider)
         if (models.isEmpty()) {
-            StateHint(colors, "No models configured", detail = "Check the provider or add a key", tag = "models-empty")
+            StateHint(
+                colors,
+                "No models configured",
+                detail = "Check the provider or add a key",
+                tag = "models-empty",
+            )
         }
-        for (m in models) {
-            val ref = "$provider/${m.id}"
-            val selected = model == ref
-            Row(
-                Modifier.fillMaxWidth()
-                    .padding(vertical = 2.dp)
-                    .clip(LumenShapes.panel)
-                    .background(if (selected) colors.surface else colors.bg)
-                    .border(1.dp, colors.outline, LumenShapes.panel)
-                    .clickable { onModel(ref) }
-                    .padding(horizontal = 12.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    Modifier.size(6.dp)
-                        .background(if (selected) colors.water else Color.Transparent, WaterShapes.droplet(tail = 0.5f)),
-                )
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    m.label ?: m.id,
-                    color = if (selected) colors.fg else colors.dim, fontFamily = Mono, fontSize = 13.sp,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    "${m.contextWindow / 1000}k",
-                    color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
-                )
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (m in models) {
+                val ref = "$provider/${m.id}"
+                val selected = model == ref
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(LumenShapes.panel)
+                        .background(if (selected) colors.surface else Color.Transparent)
+                        .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.panel)
+                        .clickable { onModel(ref) }
+                        .padding(horizontal = 14.dp, vertical = 13.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier
+                                .size(8.dp)
+                                .background(
+                                    if (selected) colors.water else Color.Transparent,
+                                    WaterShapes.droplet(tail = 0.5f),
+                                ),
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            m.label ?: m.id,
+                            color = if (selected) colors.fg else colors.dim,
+                            fontFamily = Mono,
+                            fontSize = LumenType.bodyLarge,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    Text(
+                        "${m.contextWindow / 1000}k",
+                        color = colors.faint,
+                        fontFamily = Mono,
+                        fontSize = LumenType.caption,
+                    )
+                }
             }
         }
 
-        Spacer(Modifier.height(24.dp))
-        Text("theme", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(LumenSpacing.xxl))
+        SectionTitle(colors, "theme")
+        Spacer(Modifier.height(LumenSpacing.md))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             chip(colors, "system", theme == "system", "theme-system") { onTheme("system") }
             chip(colors, "light", theme == "light", "theme-light") { onTheme("light") }
             chip(colors, "dark", theme == "dark", "theme-dark") { onTheme("dark") }
         }
 
-        Spacer(Modifier.height(24.dp))
-        Text("budget", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(LumenSpacing.xxl))
+        SectionTitle(colors, "budget")
+        Spacer(Modifier.height(LumenSpacing.sm))
         Text(
             "Stop a session before it spends more than this",
-            color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
+            color = colors.dim,
+            fontFamily = Mono,
+            fontSize = LumenType.caption,
         )
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Spacer(Modifier.height(LumenSpacing.md))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             chip(colors, "off", maxCostUsd <= 0.0, "budget-off") { onMaxCost(0.0) }
             chip(colors, "\$0.50", maxCostUsd == 0.5, "budget-050") { onMaxCost(0.5) }
             chip(colors, "\$2", maxCostUsd == 2.0, "budget-2") { onMaxCost(2.0) }
             chip(colors, "\$5", maxCostUsd == 5.0, "budget-5") { onMaxCost(5.0) }
         }
 
-        Spacer(Modifier.height(24.dp))
-        Text("tools", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(LumenSpacing.xxl))
+        SectionTitle(colors, "tools")
+        Spacer(Modifier.height(LumenSpacing.md))
         Row(
-            Modifier.fillMaxWidth(),
+            Modifier
+                .fillMaxWidth()
+                .clip(LumenShapes.card)
+                .background(colors.surface)
+                .border(1.dp, colors.outline, LumenShapes.card)
+                .clickable { onAskBeforeTools(!askBeforeTools) }
+                .padding(horizontal = 14.dp, vertical = 13.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
-                Text("ask before tools", color = colors.fg, fontFamily = Mono, fontSize = 13.sp)
+                Text(
+                    "ask before tools",
+                    color = colors.fg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.bodyLarge,
+                )
                 Spacer(Modifier.height(3.dp))
                 Text(
                     "Confirm each tool before it runs",
-                    color = colors.dim, fontFamily = Mono, fontSize = 11.sp,
+                    color = colors.dim,
+                    fontFamily = Mono,
+                    fontSize = LumenType.caption,
                 )
             }
             Spacer(Modifier.width(12.dp))
@@ -182,9 +224,9 @@ fun SettingsScreen(
         }
 
         if (onGitHub != null) {
-            Spacer(Modifier.height(24.dp))
-            Text("integrations", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(LumenSpacing.xxl))
+            SectionTitle(colors, "integrations")
+            Spacer(Modifier.height(LumenSpacing.md))
             SettingsLink(
                 colors = colors,
                 label = "github",
@@ -198,27 +240,56 @@ fun SettingsScreen(
             )
         }
 
-        Spacer(Modifier.height(24.dp))
-        Text("system", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
+        Spacer(Modifier.height(LumenSpacing.xxl))
+        SectionTitle(colors, "system")
+        Spacer(Modifier.height(LumenSpacing.md))
+        SettingsLink(
+            colors,
+            "storage",
+            "what is using space \u00b7 clear safe caches",
+            "settings-storage",
+            onStorage,
+        )
         Spacer(Modifier.height(8.dp))
-        SettingsLink(colors, "storage", "what is using space · clear safe caches", "settings-storage", onStorage)
-        Spacer(Modifier.height(6.dp))
-        SettingsLink(colors, "diagnostics", "linux environment · event log", "settings-diagnostics", onDiagnostics)
+        SettingsLink(
+            colors,
+            "diagnostics",
+            "linux environment \u00b7 event log",
+            "settings-diagnostics",
+            onDiagnostics,
+        )
 
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(LumenSpacing.xxl))
         Box(
-            Modifier.fillMaxWidth()
+            Modifier
+                .fillMaxWidth()
                 .clip(LumenShapes.pill)
                 .background(colors.surface)
                 .border(1.dp, colors.outline, LumenShapes.pill)
                 .clickable { onEditKey() }
-                .padding(vertical = 14.dp)
+                .padding(vertical = 15.dp)
                 .testTag("edit-key"),
             contentAlignment = Alignment.Center,
         ) {
-            Text("Change API key", color = colors.dim, fontFamily = Mono, fontSize = 14.sp)
+            Text(
+                "Change API key",
+                color = colors.dim,
+                fontFamily = Mono,
+                fontSize = LumenType.bodyLarge,
+            )
         }
     }
+}
+
+@Composable
+private fun SectionTitle(colors: LumenColors, text: String) {
+    Text(
+        text,
+        color = colors.fg,
+        fontFamily = Mono,
+        fontSize = LumenType.heading,
+        fontWeight = FontWeight.Medium,
+    )
 }
 
 @Composable
@@ -230,7 +301,8 @@ private fun SettingsLink(
     onClick: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth()
+        Modifier
+            .fillMaxWidth()
             .clip(LumenShapes.card)
             .background(colors.surface)
             .border(1.dp, colors.outline, LumenShapes.card)
@@ -241,11 +313,26 @@ private fun SettingsLink(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(label, color = colors.fg, fontFamily = Mono, fontSize = 14.sp)
+            Text(
+                label,
+                color = colors.fg,
+                fontFamily = Mono,
+                fontSize = LumenType.bodyLarge,
+            )
             Spacer(Modifier.height(2.dp))
-            Text(subtitle, color = colors.dim, fontFamily = Mono, fontSize = 11.sp)
+            Text(
+                subtitle,
+                color = colors.dim,
+                fontFamily = Mono,
+                fontSize = LumenType.caption,
+            )
         }
-        Text("›", color = colors.accent, fontFamily = Mono, fontSize = 18.sp)
+        Text(
+            "\u203a",
+            color = colors.accent,
+            fontFamily = Mono,
+            fontSize = 20.sp,
+        )
     }
 }
 
@@ -260,7 +347,8 @@ private fun chip(
     Text(
         text,
         color = if (selected) colors.fg else colors.dim,
-        fontFamily = Mono, fontSize = 13.sp,
+        fontFamily = Mono,
+        fontSize = LumenType.body,
         modifier = Modifier
             .clip(LumenShapes.inset)
             .background(if (selected) colors.surface else Color.Transparent)

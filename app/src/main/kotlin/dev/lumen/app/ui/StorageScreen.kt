@@ -55,60 +55,80 @@ fun StorageScreen(
     var confirmClearAll by remember { mutableStateOf(false) }
 
     Column(
-        modifier.fillMaxSize().background(colors.bg).imePadding()
-            .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 24.dp),
+        modifier
+            .fillMaxSize()
+            .background(colors.bg)
+            .imePadding()
+            .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 8.dp, bottom = 24.dp),
     ) {
         LumenTopBar(
             colors = colors,
             title = "Storage",
-            titleSize = 20.sp,
+            titleSize = LumenType.title,
             onBack = onBack,
             backTag = "storage-back",
             actions = {
                 LumenBarAction(colors, "Rescan", "storage-rescan", onRescan)
             },
         )
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(LumenSpacing.xl))
 
         Text(
-            storage?.let { humanBytes(it.total) } ?: "…",
-            color = colors.fg, fontFamily = Mono, fontSize = 32.sp, fontWeight = FontWeight.Medium,
+            storage?.let { humanBytes(it.total) } ?: "\u2026",
+            color = colors.fg,
+            fontFamily = Mono,
+            fontSize = 36.sp,
+            fontWeight = FontWeight.Medium,
             modifier = Modifier.testTag("storage-total"),
         )
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(5.dp))
         Text(
             when {
-                storage == null -> "Calculating…"
-                storage.scanning -> "Scanning…"
+                storage == null -> "Calculating\u2026"
+                storage.scanning -> "Scanning\u2026"
                 storage.categories.isEmpty() -> "Nothing measured"
-                else -> "${storage.categories.size} areas · largest first"
+                else -> "${storage.categories.size} areas \u00b7 largest first"
             },
-            color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
+            color = colors.dim,
+            fontFamily = Mono,
+            fontSize = LumenType.body,
         )
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(LumenSpacing.lg))
 
         Box(
-            Modifier.fillMaxWidth()
+            Modifier
+                .fillMaxWidth()
                 .clip(LumenShapes.pill)
-                .background(colors.surface)
+                .background(LumenAlert.copy(alpha = 0.08f))
                 .border(1.dp, LumenAlert.copy(alpha = 0.55f), LumenShapes.pill)
                 .clickable { confirmClearAll = true }
-                .padding(vertical = 13.dp)
+                .padding(vertical = 14.dp)
                 .testTag("storage-clear-all"),
             contentAlignment = Alignment.Center,
         ) {
-            Text("Clear all caches", color = LumenAlert, fontFamily = Mono, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(
+                "Clear all caches",
+                color = LumenAlert,
+                fontFamily = Mono,
+                fontSize = LumenType.bodyLarge,
+                fontWeight = FontWeight.Medium,
+            )
         }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(LumenSpacing.lg))
 
         val categories = storage?.categories.orEmpty().sortedByDescending { it.bytes }
         if (categories.isEmpty()) {
-            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center,
+            ) {
                 StateHint(
                     colors = colors,
                     text = when {
-                        storage == null -> "Calculating storage…"
-                        storage.scanning -> "Scanning storage…"
+                        storage == null -> "Calculating storage\u2026"
+                        storage.scanning -> "Scanning storage\u2026"
                         else -> "Nothing measured yet"
                     },
                     detail = "Clearable caches will appear here",
@@ -116,7 +136,13 @@ fun StorageScreen(
                 )
             }
         } else {
-            LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("storage-list")) {
+            LazyColumn(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .testTag("storage-list"),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 items(categories, key = { it.name }) { category ->
                     CategoryRow(colors = colors, category = category, onClear = { onClear(category.name) })
                 }
@@ -126,7 +152,10 @@ fun StorageScreen(
         Spacer(Modifier.height(10.dp))
         Text(
             "Your chats, source and keys are never cleared.",
-            color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.3.sp,
+            color = colors.faint,
+            fontFamily = Mono,
+            fontSize = LumenType.micro,
+            letterSpacing = 0.3.sp,
         )
     }
 
@@ -136,16 +165,22 @@ fun StorageScreen(
             containerColor = colors.surface,
             titleContentColor = colors.fg,
             textContentColor = colors.dim,
-            title = { Text("Clear all caches?", fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium) },
+            title = { Text("Clear all caches?", fontFamily = Mono, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
             text = {
                 Text(
                     "Cached downloads and temporary files will be removed. Your chats, source and keys stay safe.",
-                    fontFamily = Mono, fontSize = 12.5.sp, lineHeight = 18.sp,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
+                    lineHeight = LumenType.lineTight,
                 )
             },
             confirmButton = {
                 Text(
-                    "Clear all", color = LumenAlert, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    "Clear all",
+                    color = LumenAlert,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
+                    fontWeight = FontWeight.Medium,
                     modifier = Modifier
                         .clip(LumenShapes.small)
                         .clickable {
@@ -158,7 +193,10 @@ fun StorageScreen(
             },
             dismissButton = {
                 Text(
-                    "Cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
+                    "Cancel",
+                    color = colors.dim,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
                     modifier = Modifier
                         .clip(LumenShapes.small)
                         .clickable { confirmClearAll = false }
@@ -177,33 +215,46 @@ private fun CategoryRow(
     onClear: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 2.dp)
+        Modifier
+            .fillMaxWidth()
             .clip(LumenShapes.row)
             .background(colors.surface)
             .border(1.dp, colors.outline, LumenShapes.row)
-            .padding(horizontal = 12.dp, vertical = 12.dp)
+            .padding(horizontal = 14.dp, vertical = 13.dp)
             .testTag("storage-row-${category.name}"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(category.name, color = colors.fg, fontFamily = Mono, fontSize = 13.sp)
+            Text(
+                category.name,
+                color = colors.fg,
+                fontFamily = Mono,
+                fontSize = LumenType.bodyLarge,
+            )
             Spacer(Modifier.height(2.dp))
             Text(
                 if (category.clearable) "Clearable" else "Kept",
                 color = if (category.clearable) colors.water else colors.faint,
-                fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.4.sp,
+                fontFamily = Mono,
+                fontSize = LumenType.micro,
+                letterSpacing = 0.4.sp,
             )
         }
         Text(
             humanBytes(category.bytes),
-            color = colors.fg, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+            color = colors.fg,
+            fontFamily = Mono,
+            fontSize = LumenType.bodyLarge,
+            fontWeight = FontWeight.Medium,
         )
         if (category.clearable) {
             Spacer(Modifier.width(10.dp))
             Text(
                 "Clear",
-                color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                color = colors.accent,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+                fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .clip(LumenShapes.small)
                     .background(colors.surface)

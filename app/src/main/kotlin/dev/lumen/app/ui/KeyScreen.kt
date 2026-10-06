@@ -188,26 +188,47 @@ fun KeyScreen(
     val canTest = key.isNotBlank() && !busy && !testing
 
     Column(
-        modifier.fillMaxSize().background(colors.bg).imePadding()
+        modifier
+            .fillMaxSize()
+            .background(colors.bg)
+            .imePadding()
             .verticalScroll(rememberScrollState())
-            .padding(start = LumenSpacing.xl, end = LumenSpacing.xl, top = LumenSpacing.md, bottom = 28.dp),
+            .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = LumenSpacing.md, bottom = 28.dp),
     ) {
         LumenTopBar(
             colors = colors,
             title = "API key",
-            titleSize = 20.sp,
+            titleSize = LumenType.title,
             actions = {
                 if (onToggleTheme != null) {
                     LumenBarAction(
-                        colors = colors, label = "\u25d0", tag = "theme", onClick = onToggleTheme,
+                        colors = colors,
+                        label = "\u25d0",
+                        tag = "theme",
+                        onClick = onToggleTheme,
                         contentDescription = "toggle theme",
                     )
                 }
             },
         )
-        Spacer(Modifier.height(LumenSpacing.md))
-        Text("Connect a provider to start", color = colors.dim, fontFamily = Mono, fontSize = 12.5.sp)
-        Spacer(Modifier.height(LumenSpacing.lg))
+        Spacer(Modifier.height(LumenSpacing.xl))
+
+        Text(
+            "Connect a provider",
+            color = colors.fg,
+            fontFamily = Mono,
+            fontSize = LumenType.heading,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Your key stays on this device and is sent only to the provider you pick.",
+            color = colors.dim,
+            fontFamily = Mono,
+            fontSize = LumenType.body,
+            lineHeight = LumenType.lineTight,
+        )
+        Spacer(Modifier.height(LumenSpacing.xl))
 
         SectionLabel(colors, "provider")
         Spacer(Modifier.height(LumenSpacing.md))
@@ -232,21 +253,27 @@ fun KeyScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 SectionLabel(colors, "model")
                 Spacer(Modifier.width(LumenSpacing.md))
-                Text(defaultModel, color = colors.faint, fontFamily = Mono, fontSize = 12.sp)
+                Text(
+                    defaultModel,
+                    color = colors.faint,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
+                )
             }
         }
 
-        Spacer(Modifier.height(LumenSpacing.xl))
+        Spacer(Modifier.height(LumenSpacing.xxl))
         SectionLabel(colors, "api key")
         Spacer(Modifier.height(LumenSpacing.md))
         Row(
-            Modifier.fillMaxWidth()
-                .heightIn(min = 52.dp)
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 56.dp)
                 .clip(LumenShapes.panel)
                 .background(colors.surface)
                 .border(
                     if (focused) 1.5.dp else 1.dp,
-                    if (focused) colors.water else colors.dim.copy(alpha = 0.35f),
+                    if (focused) colors.water else colors.outline,
                     LumenShapes.panel,
                 )
                 .padding(start = LumenSpacing.md, end = LumenSpacing.xs),
@@ -261,7 +288,11 @@ fun KeyScreen(
                 singleLine = true,
                 enabled = !busy,
                 interactionSource = focusInteraction,
-                textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 14.sp),
+                textStyle = LocalTextStyle.current.copy(
+                    color = colors.fg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.bodyLarge,
+                ),
                 cursorBrush = SolidColor(colors.accent),
                 visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(
@@ -271,14 +302,20 @@ fun KeyScreen(
                     imeAction = ImeAction.Go,
                 ),
                 keyboardActions = KeyboardActions(onGo = { if (canGo) onSubmit(provider, key) }),
-                modifier = Modifier.weight(1f)
-                    .padding(vertical = 12.dp)
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 14.dp)
                     .testTag("keyfield")
                     .semantics { contentDescription = "API key" },
                 decorationBox = { inner ->
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
                         if (key.isEmpty()) {
-                            Text("Paste your key", color = colors.faint, fontFamily = Mono, fontSize = 14.sp)
+                            Text(
+                                "Paste your key",
+                                color = colors.faint,
+                                fontFamily = Mono,
+                                fontSize = LumenType.bodyLarge,
+                            )
                         }
                         inner()
                     }
@@ -286,7 +323,7 @@ fun KeyScreen(
             )
             Box(
                 modifier = Modifier
-                    .sizeIn(minWidth = 40.dp, minHeight = 40.dp)
+                    .sizeIn(minWidth = LumenSize.touchMin, minHeight = LumenSize.touchMin)
                     .clip(LumenShapes.small)
                     .clickable(enabled = !busy) { visible = !visible }
                     .padding(horizontal = LumenSpacing.sm)
@@ -296,14 +333,18 @@ fun KeyScreen(
             ) {
                 Text(
                     if (visible) "Hide" else "Show",
-                    color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
+                    color = colors.dim,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
                 )
             }
         }
         Spacer(Modifier.height(LumenSpacing.sm))
         Text(
             KeyHints[provider] ?: "Paste the key for the provider you picked.",
-            color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
+            color = colors.faint,
+            fontFamily = Mono,
+            fontSize = LumenType.caption,
         )
 
         Spacer(Modifier.height(LumenSpacing.md))
@@ -318,7 +359,7 @@ fun KeyScreen(
             Spacer(Modifier.width(LumenSpacing.sm))
             SecondaryAction(
                 colors = colors,
-                label = if (testing) "Testing…" else "Test key",
+                label = if (testing) "Testing\u2026" else "Test key",
                 tag = "test-key",
                 enabled = canTest,
             ) {
@@ -334,7 +375,7 @@ fun KeyScreen(
 
         val currentProbe = probe
         val feedback: Pair<String, Color>? = when {
-            testing -> "Testing…" to colors.dim
+            testing -> "Testing\u2026" to colors.dim
             currentProbe is ProbeOutcome.Valid -> "Key looks valid" to colors.water
             currentProbe is ProbeOutcome.Invalid -> "Key rejected by the provider" to LumenAlert
             currentProbe is ProbeOutcome.Unreachable ->
@@ -345,6 +386,7 @@ fun KeyScreen(
         if (feedback != null) {
             Spacer(Modifier.height(LumenSpacing.sm))
             StatusLine(
+                colors = colors,
                 text = feedback.first,
                 tint = feedback.second,
                 modifier = Modifier
@@ -353,34 +395,38 @@ fun KeyScreen(
             )
         }
 
-        Spacer(Modifier.height(LumenSpacing.xl))
+        Spacer(Modifier.height(LumenSpacing.xxl))
         Box(
-            Modifier.fillMaxWidth()
+            Modifier
+                .fillMaxWidth()
                 .clip(LumenShapes.pill)
                 .background(if (canGo) colors.water else colors.surface)
-                .border(1.dp, if (canGo) Color.Transparent else colors.rule, LumenShapes.pill)
+                .border(1.dp, if (canGo) Color.Transparent else colors.outline, LumenShapes.pill)
                 .clickable(enabled = canGo) { onSubmit(provider, key) }
-                .padding(vertical = 14.dp)
+                .padding(vertical = 15.dp)
                 .testTag("continue"),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                if (busy) "Connecting…" else "Continue",
+                if (busy) "Connecting\u2026" else "Continue",
                 color = if (canGo) colors.bg else colors.faint,
-                fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                fontFamily = Mono,
+                fontSize = LumenType.bodyLarge,
+                fontWeight = FontWeight.Medium,
             )
         }
-        Spacer(Modifier.height(LumenSpacing.lg))
-        Text(
-            "Keys stay on this device.\nThey are sent only to the provider you pick.",
-            color = colors.faint, fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp,
-        )
     }
 }
 
 @Composable
 private fun SectionLabel(colors: LumenColors, text: String) {
-    Text(text, color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
+    Text(
+        text,
+        color = colors.faint,
+        fontFamily = Mono,
+        fontSize = LumenType.caption,
+        letterSpacing = 2.sp,
+    )
 }
 
 @Composable
@@ -392,10 +438,11 @@ private fun ProviderCard(
     onClick: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth()
+        Modifier
+            .fillMaxWidth()
             .clip(LumenShapes.card)
             .background(if (selected) colors.surface else Color.Transparent)
-            .border(1.dp, if (selected) colors.water else colors.rule, LumenShapes.card)
+            .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.card)
             .clickable(enabled = enabled) { onClick() }
             .padding(horizontal = LumenSpacing.lg, vertical = LumenSpacing.md)
             .testTag("provider-${option.id}")
@@ -403,21 +450,38 @@ private fun ProviderCard(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.size(8.dp).background(
-                if (selected) colors.water else colors.rule,
-                WaterShapes.droplet(tail = 0.5f),
-            ),
+            Modifier
+                .size(9.dp)
+                .background(
+                    if (selected) colors.water else colors.outline,
+                    WaterShapes.droplet(tail = 0.5f),
+                ),
         )
         Spacer(Modifier.width(LumenSpacing.md))
         Text(
             option.name,
             color = if (selected) colors.fg else colors.dim,
-            fontFamily = Mono, fontSize = 14.sp,
+            fontFamily = Mono,
+            fontSize = LumenType.bodyLarge,
             modifier = Modifier.weight(1f),
         )
         if (selected) {
             Spacer(Modifier.width(LumenSpacing.sm))
-            Text("\u2713", color = colors.water, fontFamily = Mono, fontSize = 13.sp)
+            Box(
+                Modifier
+                    .size(18.dp)
+                    .clip(CircleShape)
+                    .background(colors.water.copy(alpha = 0.12f))
+                    .border(1.dp, colors.water.copy(alpha = 0.45f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "\u2713",
+                    color = colors.water,
+                    fontFamily = Mono,
+                    fontSize = 10.sp,
+                )
+            }
         }
     }
 }
@@ -430,46 +494,55 @@ private fun SecondaryAction(
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
-    // The tag lives on the clickable Box, with the label as a child, so the
-    // tagged semantics node is exactly the hit target (robust under tests).
     Box(
         modifier = Modifier
             .clip(LumenShapes.pill)
             .background(colors.surface)
-            .border(1.dp, colors.rule, LumenShapes.pill)
+            .border(1.dp, colors.outline, LumenShapes.pill)
             .clickable(enabled = enabled) { onClick() }
-            .padding(horizontal = LumenSpacing.lg, vertical = 9.dp)
+            .padding(horizontal = LumenSpacing.lg, vertical = 10.dp)
             .testTag(tag),
     ) {
         Text(
             label,
             color = if (enabled) colors.dim else colors.faint,
-            fontFamily = Mono, fontSize = 12.sp,
+            fontFamily = Mono,
+            fontSize = LumenType.body,
         )
     }
 }
 
 /**
  * The screen's single status line: a coloured dot and one short message. The
- * probe result, the "Testing…" state and a caller error all render here so they
+ * probe result, the "Testing\u2026" state and a caller error all render here so they
  * share one visual language instead of stacking as separate blocks.
  */
 @Composable
 private fun StatusLine(
+    colors: LumenColors,
     text: String,
     tint: Color,
     modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier.fillMaxWidth(),
+        modifier
+            .fillMaxWidth()
+            .clip(LumenShapes.panel)
+            .background(colors.surface)
+            .border(1.dp, colors.outline, LumenShapes.panel)
+            .padding(horizontal = LumenSpacing.md, vertical = LumenSpacing.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(7.dp).clip(CircleShape).background(tint))
         Spacer(Modifier.width(LumenSpacing.md))
         Text(
             text,
-            color = tint, fontFamily = Mono, fontSize = 12.sp, lineHeight = 16.sp,
-            maxLines = 3, overflow = TextOverflow.Ellipsis,
+            color = tint,
+            fontFamily = Mono,
+            fontSize = LumenType.body,
+            lineHeight = LumenType.lineTight,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
     }

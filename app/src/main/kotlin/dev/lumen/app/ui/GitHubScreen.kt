@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -101,14 +102,17 @@ fun GitHubScreen(
     }
 
     Column(
-        modifier.fillMaxSize().background(colors.bg).imePadding()
+        modifier
+            .fillMaxSize()
+            .background(colors.bg)
+            .imePadding()
             .verticalScroll(rememberScrollState())
-            .padding(start = LumenSpacing.xl, end = LumenSpacing.xl, top = LumenSpacing.md, bottom = 28.dp),
+            .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = LumenSpacing.md, bottom = 28.dp),
     ) {
         LumenTopBar(
             colors = colors,
             title = "GitHub",
-            titleSize = 20.sp,
+            titleSize = LumenType.title,
             onBack = onBack,
             backTag = "github-back",
         )
@@ -127,7 +131,8 @@ fun GitHubScreen(
         SectionLabel(colors, "personal access token")
         Spacer(Modifier.height(LumenSpacing.md))
         Row(
-            Modifier.fillMaxWidth()
+            Modifier
+                .fillMaxWidth()
                 .clip(LumenShapes.panel)
                 .background(colors.surface)
                 .border(1.dp, colors.outline, LumenShapes.panel)
@@ -139,7 +144,11 @@ fun GitHubScreen(
                 onValueChange = { token = it },
                 singleLine = true,
                 enabled = !busy,
-                textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 14.sp),
+                textStyle = LocalTextStyle.current.copy(
+                    color = colors.fg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.bodyLarge,
+                ),
                 cursorBrush = SolidColor(colors.accent),
                 visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(
@@ -148,31 +157,46 @@ fun GitHubScreen(
                     capitalization = KeyboardCapitalization.None,
                     imeAction = ImeAction.Done,
                 ),
-                modifier = Modifier.weight(1f).padding(vertical = 12.dp).testTag("github-token"),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 14.dp)
+                    .testTag("github-token"),
                 decorationBox = { inner ->
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
                         if (token.isEmpty()) {
-                            Text("ghp_…", color = colors.faint, fontFamily = Mono, fontSize = 14.sp)
+                            Text(
+                                "ghp_\u2026",
+                                color = colors.faint,
+                                fontFamily = Mono,
+                                fontSize = LumenType.bodyLarge,
+                            )
                         }
                         inner()
                     }
                 },
             )
-            Text(
-                if (visible) "Hide" else "Show",
-                color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
+            Box(
                 modifier = Modifier
+                    .sizeIn(minWidth = LumenSize.touchMin, minHeight = LumenSize.touchMin)
                     .clip(LumenShapes.small)
                     .clickable(enabled = !busy) { visible = !visible }
                     .padding(horizontal = LumenSpacing.sm, vertical = LumenSpacing.sm)
                     .testTag("github-token-visibility")
                     .semantics { contentDescription = if (visible) "hide token" else "show token" },
-            )
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (visible) "Hide" else "Show",
+                    color = colors.dim,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
+                )
+            }
         }
 
         Spacer(Modifier.height(LumenSpacing.md))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            ActionPill(colors, "Save", "github-save", enabled = !busy) {
+            ActionPill(colors = colors, label = "Save", tag = "github-save", enabled = !busy) {
                 keys.githubToken = token.trim().takeIf { it.isNotBlank() }
                 keys.githubRepo = repo.trim()
                 report(if (token.isBlank()) "Token cleared" else "Saved on this device", false)
@@ -180,13 +204,13 @@ fun GitHubScreen(
             Spacer(Modifier.width(LumenSpacing.sm))
             ActionPill(
                 colors,
-                if (busy) "Working…" else "Test connection",
+                if (busy) "Working\u2026" else "Test connection",
                 "github-test",
                 enabled = !busy && token.isNotBlank(),
             ) {
                 scope.launch {
                     busy = true
-                    report("Checking token…", false)
+                    report("Checking token\u2026", false)
                     when (val result = client.user(token.trim())) {
                         is GitHubUserStatus.Valid -> {
                             login = result.login
@@ -208,11 +232,12 @@ fun GitHubScreen(
             StatusLine(colors, message, statusIsError)
         }
 
-        Spacer(Modifier.height(LumenSpacing.xl))
+        Spacer(Modifier.height(LumenSpacing.xxl))
         SectionLabel(colors, "status")
         Spacer(Modifier.height(LumenSpacing.md))
         Column(
-            Modifier.fillMaxWidth()
+            Modifier
+                .fillMaxWidth()
                 .clip(LumenShapes.card)
                 .background(colors.surface)
                 .border(1.dp, colors.outline, LumenShapes.card)
@@ -243,7 +268,7 @@ fun GitHubScreen(
                     ActionPill(colors, "Install git", "github-git-install", enabled = !busy) {
                         scope.launch {
                             busy = true
-                            report("Installing git…", false)
+                            report("Installing git\u2026", false)
                             when (val r = git.installGit()) {
                                 is GitResult.Ok -> report("Git installed", false)
                                 is GitResult.Failed -> report(r.message, true)
@@ -257,25 +282,35 @@ fun GitHubScreen(
             }
         }
 
-        Spacer(Modifier.height(LumenSpacing.xl))
+        Spacer(Modifier.height(LumenSpacing.xxl))
         SectionLabel(colors, "repository")
         Spacer(Modifier.height(LumenSpacing.md))
         Box(
-            Modifier.fillMaxWidth()
+            Modifier
+                .fillMaxWidth()
                 .clip(LumenShapes.panel)
                 .background(colors.surface)
                 .border(1.dp, colors.outline, LumenShapes.panel)
-                .padding(horizontal = LumenSpacing.md, vertical = 12.dp),
+                .padding(horizontal = LumenSpacing.md, vertical = 14.dp),
         ) {
             if (repo.isEmpty()) {
-                Text(GITHUB_URL_HINT, color = colors.faint, fontFamily = Mono, fontSize = 14.sp)
+                Text(
+                    GITHUB_URL_HINT,
+                    color = colors.faint,
+                    fontFamily = Mono,
+                    fontSize = LumenType.bodyLarge,
+                )
             }
             BasicTextField(
                 value = repo,
                 onValueChange = { repo = it },
                 singleLine = true,
                 enabled = !busy,
-                textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 14.sp),
+                textStyle = LocalTextStyle.current.copy(
+                    color = colors.fg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.bodyLarge,
+                ),
                 cursorBrush = SolidColor(colors.accent),
                 keyboardOptions = KeyboardOptions(
                     autoCorrect = false,
@@ -288,7 +323,9 @@ fun GitHubScreen(
 
         Spacer(Modifier.height(LumenSpacing.md))
         Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(LumenSpacing.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -304,7 +341,7 @@ fun GitHubScreen(
                 } else {
                     scope.launch {
                         busy = true
-                        report("Cloning…", false)
+                        report("Cloning\u2026", false)
                         val result = git.clone(slug, slug.substringAfter('/'), token.trim())
                         report(
                             when (result) {
@@ -342,18 +379,27 @@ fun GitHubScreen(
             }
         }
 
-        Spacer(Modifier.height(LumenSpacing.xl))
+        Spacer(Modifier.height(LumenSpacing.xxl))
         Text(
             "The token is sealed on-device and sent only to GitHub.\n" +
                 "It is never written into the repository config.",
-            color = colors.faint, fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp,
+            color = colors.faint,
+            fontFamily = Mono,
+            fontSize = LumenType.caption,
+            lineHeight = LumenType.lineTight,
         )
     }
 }
 
 @Composable
 private fun SectionLabel(colors: LumenColors, text: String) {
-    Text(text, color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
+    Text(
+        text,
+        color = colors.faint,
+        fontFamily = Mono,
+        fontSize = LumenType.caption,
+        letterSpacing = 2.sp,
+    )
 }
 
 @Composable
@@ -364,21 +410,21 @@ private fun ActionPill(
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
-    // The tag lives on the clickable Box, with the label as a child, so the
-    // tagged semantics node is exactly the hit target (robust under tests).
     Box(
         modifier = Modifier
             .clip(LumenShapes.pill)
             .background(colors.surface)
             .border(1.dp, colors.outline, LumenShapes.pill)
             .clickable(enabled = enabled) { onClick() }
-            .padding(horizontal = LumenSpacing.lg, vertical = 9.dp)
+            .padding(horizontal = LumenSpacing.lg, vertical = 10.dp)
             .testTag(tag),
     ) {
         Text(
             label,
             color = if (enabled) colors.dim else colors.faint,
-            fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+            fontFamily = Mono,
+            fontSize = LumenType.body,
+            fontWeight = FontWeight.Medium,
             maxLines = 1,
         )
     }
@@ -389,13 +435,19 @@ private fun StatusRow(colors: LumenColors, label: String, value: String) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
             label,
-            color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 1.sp,
+            color = colors.faint,
+            fontFamily = Mono,
+            fontSize = LumenType.caption,
+            letterSpacing = 1.sp,
             modifier = Modifier.width(84.dp),
         )
         Text(
             value,
-            color = colors.fg, fontFamily = Mono, fontSize = 13.sp,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            color = colors.fg,
+            fontFamily = Mono,
+            fontSize = LumenType.bodyLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -403,7 +455,8 @@ private fun StatusRow(colors: LumenColors, label: String, value: String) {
 @Composable
 private fun StatusLine(colors: LumenColors, message: String, isError: Boolean) {
     Row(
-        Modifier.fillMaxWidth()
+        Modifier
+            .fillMaxWidth()
             .clip(LumenShapes.panel)
             .background(colors.surface)
             .border(1.dp, colors.outline, LumenShapes.panel)
@@ -416,8 +469,12 @@ private fun StatusLine(colors: LumenColors, message: String, isError: Boolean) {
         Spacer(Modifier.width(LumenSpacing.md))
         Text(
             message,
-            color = colors.fg, fontFamily = Mono, fontSize = 12.sp, lineHeight = 16.sp,
-            maxLines = 3, overflow = TextOverflow.Ellipsis,
+            color = colors.fg,
+            fontFamily = Mono,
+            fontSize = LumenType.body,
+            lineHeight = LumenType.lineTight,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
     }

@@ -10,6 +10,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -41,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
@@ -78,7 +81,7 @@ internal data class TopMenuAction(val label: String, val tag: String, val onClic
 internal fun LumenBackButton(colors: LumenColors, tag: String, onClick: () -> Unit) {
     Box(
         Modifier
-            .size(44.dp)
+            .size(LumenSize.touchComfort)
             .clip(LumenShapes.control)
             .background(colors.surface)
             .border(1.dp, colors.outline, LumenShapes.control)
@@ -87,7 +90,13 @@ internal fun LumenBackButton(colors: LumenColors, tag: String, onClick: () -> Un
             .testTag(tag),
         contentAlignment = Alignment.Center,
     ) {
-        Text("\u2039", color = colors.dim, fontFamily = Mono, fontSize = 22.sp, fontWeight = FontWeight.Light)
+        Text(
+            "\u2039",
+            color = colors.dim,
+            fontFamily = Mono,
+            fontSize = 24.sp,
+            fontWeight = FontWeight.Light,
+        )
     }
 }
 
@@ -107,7 +116,7 @@ internal fun LumenBarAction(
 ) {
     val shape = LumenShapes.pill
     val filled = primary && enabled
-    val base = Modifier.heightIn(min = 40.dp).clip(shape)
+    val base = Modifier.heightIn(min = LumenSize.touchMin).clip(shape)
     val surface = if (filled) {
         base.background(colors.water)
     } else {
@@ -123,8 +132,11 @@ internal fun LumenBarAction(
                 filled -> colors.bg
                 else -> colors.dim
             },
-            fontFamily = Mono, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            fontFamily = Mono,
+            fontSize = LumenType.caption,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -159,7 +171,14 @@ internal fun LumenMenuButton(
         ) {
             items.forEach { item ->
                 DropdownMenuItem(
-                    text = { Text(item.label, color = colors.fg, fontFamily = Mono, fontSize = 13.sp) },
+                    text = {
+                        Text(
+                            item.label,
+                            color = colors.fg,
+                            fontFamily = Mono,
+                            fontSize = LumenType.body,
+                        )
+                    },
                     onClick = { open = false; item.onClick() },
                     modifier = Modifier.testTag(item.tag),
                 )
@@ -181,21 +200,27 @@ internal fun LumenTopBar(
     onBack: (() -> Unit)? = null,
     backTag: String = "back",
     titleTag: String? = null,
-    titleSize: TextUnit = 16.sp,
+    titleSize: TextUnit = LumenType.heading,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     Row(
-        modifier.fillMaxWidth().padding(start = 6.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+        modifier
+            .fillMaxWidth()
+            .padding(start = 4.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (onBack != null) {
             LumenBackButton(colors, backTag, onBack)
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(4.dp))
         }
         Text(
             title,
-            color = colors.fg, fontFamily = Mono, fontSize = titleSize, fontWeight = FontWeight.Medium,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            color = colors.fg,
+            fontFamily = Mono,
+            fontSize = titleSize,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = if (titleTag != null) Modifier.weight(1f).testTag(titleTag) else Modifier.weight(1f),
         )
         Spacer(Modifier.width(10.dp))
@@ -289,32 +314,40 @@ fun HomeScreen(
     )
 
     // Secondary destinations tuck into one quiet menu so the header stays calm.
-    // Files and Terminal are promoted to the quick-controls row; Settings stays
-    // here as the one rarer verb.
     val menuItems = listOf(TopMenuAction("Settings", "settings", onSettings))
 
     Column(
-        modifier.fillMaxSize().background(colors.bg).imePadding()
-            .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 20.dp),
+        modifier
+            .fillMaxSize()
+            .background(colors.bg)
+            .imePadding()
+            .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 8.dp, bottom = 20.dp),
     ) {
         LumenTopBar(
             colors = colors,
             title = "lumen",
-            titleSize = 26.sp,
+            titleSize = LumenType.hero,
             actions = {
                 if (onToggleTheme != null) {
                     LumenBarAction(
-                        colors = colors, label = "\u25d0", tag = "theme", onClick = onToggleTheme,
+                        colors = colors,
+                        label = "\u25d0",
+                        tag = "theme",
+                        onClick = onToggleTheme,
                         contentDescription = "toggle theme",
                     )
                 }
                 LumenMenuButton(
-                    colors = colors, label = "\u22ef", tag = "home-menu", items = menuItems,
+                    colors = colors,
+                    label = "\u22ef",
+                    tag = "home-menu",
+                    items = menuItems,
                     contentDescription = "more destinations",
                 )
             },
         )
-        Spacer(Modifier.height(12.dp))
+
+        Spacer(Modifier.height(LumenSpacing.md))
         StatusStrip(
             colors = colors,
             provider = provider,
@@ -326,57 +359,66 @@ fun HomeScreen(
             onDiagnostics = onDiagnostics,
             onGitHub = onGitHub,
         )
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(LumenSpacing.lg))
 
         // The one obvious thing to do on this screen.
+        val waterGradient = remember(colors.spectrum) {
+            Brush.horizontalGradient(
+                colors.spectrum.takeIf { it.size >= 2 } ?: listOf(colors.water, colors.accent),
+            )
+        }
         Box(
-            Modifier.fillMaxWidth()
+            Modifier
+                .fillMaxWidth()
                 .graphicsLayer { scaleX = newChatScale; scaleY = newChatScale }
                 .clip(LumenShapes.pill)
-                .background(colors.water)
+                .background(waterGradient)
                 .clickable(
                     interactionSource = newChatInteraction,
                     indication = null,
                     onClick = onNewChat,
                 )
-                .padding(vertical = 14.dp)
+                .padding(vertical = 15.dp)
                 .testTag("new-chat"),
             contentAlignment = Alignment.Center,
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(7.dp).background(colors.bg.copy(alpha = 0.85f), WaterShapes.droplet(tail = 0.55f)))
+                Box(
+                    Modifier
+                        .size(8.dp)
+                        .background(colors.bg.copy(alpha = 0.9f), WaterShapes.droplet(tail = 0.55f)),
+                )
                 Spacer(Modifier.width(10.dp))
-                Text("New chat", color = colors.bg, fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    "New chat",
+                    color = colors.bg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                )
             }
         }
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(LumenSpacing.lg))
 
-        Box(
-            Modifier.fillMaxWidth()
-                .clip(LumenShapes.pill)
-                .background(colors.surface)
-                .border(1.dp, colors.outline, LumenShapes.pill)
-                .padding(horizontal = 16.dp, vertical = 11.dp),
-        ) {
-            if (searchQuery.isEmpty()) {
-                Text("Search chats", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
-            }
-            BasicTextField(
-                value = searchQuery,
-                onValueChange = onSearch,
-                singleLine = true,
-                textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 13.sp),
-                cursorBrush = SolidColor(colors.water),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                modifier = Modifier.fillMaxWidth().testTag("search"),
-            )
-        }
+        SearchField(
+            colors = colors,
+            query = searchQuery,
+            onQuery = onSearch,
+        )
 
         // Quick controls: the one toggle worth surfacing plus the two cockpits,
         // kept to a single quiet line right under the search.
         Spacer(Modifier.height(10.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("ask before tools", color = colors.dim, fontFamily = Mono, fontSize = 11.sp)
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "ask before tools",
+                color = colors.dim,
+                fontFamily = Mono,
+                fontSize = LumenType.caption,
+            )
             Spacer(Modifier.width(8.dp))
             Switch(
                 checked = askBeforeTools,
@@ -392,11 +434,11 @@ fun HomeScreen(
             )
             Spacer(Modifier.weight(1f))
             onFiles?.let { open ->
-                RowAction(colors, "files", "files", onClick = open)
+                CockpitPill(colors, "files", "files", onClick = open)
             }
-            if (onFiles != null && onTerminal != null) Spacer(Modifier.width(6.dp))
+            if (onFiles != null && onTerminal != null) Spacer(Modifier.width(8.dp))
             onTerminal?.let { open ->
-                RowAction(colors, "terminal", "terminal", onClick = open)
+                CockpitPill(colors, "terminal", "terminal", onClick = open)
             }
         }
 
@@ -404,18 +446,26 @@ fun HomeScreen(
         // an "×" so the active filter is removable. Hidden when there are none.
         val filterTags = (availableTags + tagFilter).distinct().sorted()
         if (filterTags.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(LumenSpacing.md))
             Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("tags", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 1.2.sp)
+                Text(
+                    "tags",
+                    color = colors.faint,
+                    fontFamily = Mono,
+                    fontSize = LumenType.micro,
+                    letterSpacing = 1.2.sp,
+                )
                 filterTags.forEach { tag ->
                     val selected = tag in tagFilter
                     TagChip(
                         colors = colors,
-                        text = if (selected) "$tag ×" else tag,
+                        text = if (selected) "$tag \u00d7" else tag,
                         selected = selected,
                         tag = "tag-filter-$tag",
                         onClick = { onToggleTagFilter(tag) },
@@ -424,7 +474,9 @@ fun HomeScreen(
                 if (tagFilter.isNotEmpty()) {
                     Text(
                         "clear",
-                        color = colors.accent, fontFamily = Mono, fontSize = 11.sp,
+                        color = colors.accent,
+                        fontFamily = Mono,
+                        fontSize = LumenType.micro,
                         modifier = Modifier
                             .clip(LumenShapes.small)
                             .clickable { onClearTagFilters() }
@@ -434,17 +486,24 @@ fun HomeScreen(
                 }
             }
         }
-        Spacer(Modifier.height(6.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
                 "${sessions.size} ${if (sessions.size == 1) "chat" else "chats"}",
-                color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.6.sp,
+                color = colors.faint,
+                fontFamily = Mono,
+                fontSize = LumenType.micro,
+                letterSpacing = 0.6.sp,
                 modifier = Modifier.weight(1f),
             )
             Text(
                 if (showArchived) "Hide archived" else "Show archived",
                 color = if (showArchived) colors.dim else colors.faint.copy(alpha = 0.85f),
-                fontFamily = Mono, fontSize = 10.5.sp,
+                fontFamily = Mono,
+                fontSize = LumenType.micro,
                 modifier = Modifier
                     .clip(LumenShapes.small)
                     .clickable { onShowArchived(!showArchived) }
@@ -452,41 +511,46 @@ fun HomeScreen(
                     .testTag("show-archived"),
             )
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(6.dp))
 
         if (search != null) {
             if (search.isEmpty()) {
-                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                    StateHint(colors, "No matches", detail = "Try a different word", tag = "search-empty")
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    StateHint(
+                        colors = colors,
+                        text = "No matches",
+                        detail = "Try a different word",
+                        tag = "search-empty",
+                    )
                 }
             } else {
-                LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("search-results")) {
-                    items(search.distinctBy { it.sessionId.value + ":" + it.messageId }, key = { it.sessionId.value + ":" + it.messageId }) { hit ->
-                        Column(
-                            Modifier.fillMaxWidth()
-                                .padding(vertical = 2.dp)
-                                .clip(LumenShapes.row)
-                                .background(colors.surface)
-                                .border(1.dp, colors.outline, LumenShapes.row)
-                                .clickable { onOpen(hit.sessionId.value) }
-                                .padding(horizontal = 12.dp, vertical = 10.dp)
-                                .testTag("search-hit-${hit.messageId}"),
-                        ) {
-                            Text(
-                                hit.role.lowercase(), color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp,
-                                letterSpacing = 1.2.sp,
-                            )
-                            Spacer(Modifier.height(3.dp))
-                            Text(
-                                hit.snippet, color = colors.fg, fontFamily = Mono, fontSize = 13.sp,
-                                maxLines = 2, overflow = TextOverflow.Ellipsis,
-                            )
-                        }
+                LazyColumn(
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .testTag("search-results"),
+                    contentPadding = PaddingValues(vertical = 2.dp),
+                ) {
+                    items(
+                        search.distinctBy { it.sessionId.value + ":" + it.messageId },
+                        key = { it.sessionId.value + ":" + it.messageId },
+                    ) { hit ->
+                        SearchHitRow(colors, hit, onOpen)
                     }
                 }
             }
         } else if (sessions.isEmpty()) {
-            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center,
+            ) {
                 StateHint(
                     colors = colors,
                     text = if (tagFilter.isNotEmpty()) "No chats with these tags" else "No chats yet",
@@ -495,164 +559,28 @@ fun HomeScreen(
                 )
             }
         } else {
-            LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("sessions")) {
+            LazyColumn(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .testTag("sessions"),
+                contentPadding = PaddingValues(vertical = 4.dp),
+            ) {
                 items(sessions.distinctBy { it.id }, key = { it.id }) { s ->
-                    var expanded by remember { mutableStateOf(false) }
-                    var renaming by remember { mutableStateOf(false) }
-                    var tagging by remember { mutableStateOf(false) }
-                    var draft by remember(s.title) { mutableStateOf(s.title) }
-                    var tagDraft by remember { mutableStateOf("") }
-                    Column(Modifier.fillMaxWidth()) {
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .padding(vertical = 2.dp)
-                                .clip(LumenShapes.row)
-                                .background(colors.surface)
-                                .border(1.dp, colors.outline, LumenShapes.row)
-                                .clickable { onOpen(s.id) }
-                                .padding(horizontal = 12.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Box(Modifier.size(8.dp).background(colors.water, WaterShapes.droplet(tail = 0.55f)))
-                            Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    if (s.pinned) "★ ${s.title}" else s.title,
-                                    color = colors.fg, fontFamily = Mono, fontSize = 14.sp,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                )
-                                if (s.preview.isNotEmpty()) {
-                                    Spacer(Modifier.height(3.dp))
-                                    Text(
-                                        s.preview, color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
-                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                                if (s.tags.isNotEmpty()) {
-                                    Spacer(Modifier.height(5.dp))
-                                    Row(
-                                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                    ) {
-                                        s.tags.forEach { tag ->
-                                            TagChip(
-                                                colors = colors,
-                                                text = tag,
-                                                selected = tag in tagFilter,
-                                                tag = "session-tag-${s.id}-$tag",
-                                                onClick = { onToggleTagFilter(tag) },
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                            Spacer(Modifier.width(10.dp))
-                            Text(ago(s.updatedAt), color = colors.faint, fontFamily = Mono, fontSize = 11.sp)
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                "⋯",
-                                color = colors.dim, fontFamily = Mono, fontSize = 15.sp,
-                                modifier = Modifier
-                                    .clip(LumenShapes.small)
-                                    .clickable { expanded = !expanded }
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                                    .testTag("more-${s.id}"),
-                            )
-                        }
-                        if (expanded) {
-                            if (renaming) {
-                                Row(
-                                    Modifier.fillMaxWidth().padding(start = 32.dp, end = 12.dp, bottom = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Box(
-                                        Modifier.weight(1f)
-                                            .clip(LumenShapes.inset)
-                                            .background(colors.surface)
-                                            .border(1.dp, colors.outline, LumenShapes.inset)
-                                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                                    ) {
-                                        BasicTextField(
-                                            value = draft,
-                                            onValueChange = { draft = it },
-                                            singleLine = true,
-                                            textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 13.sp),
-                                            cursorBrush = SolidColor(colors.water),
-                                            modifier = Modifier.fillMaxWidth().testTag("rename-field-${s.id}"),
-                                        )
-                                    }
-                                    Spacer(Modifier.width(8.dp))
-                                    RowAction(colors, "save", "rename-save-${s.id}") {
-                                        onRename(s.id, draft)
-                                        renaming = false
-                                        expanded = false
-                                    }
-                                }
-                            } else if (tagging) {
-                                Column(
-                                    Modifier.fillMaxWidth()
-                                        .padding(start = 32.dp, end = 12.dp, bottom = 8.dp)
-                                        .testTag("tag-editor-${s.id}"),
-                                ) {
-                                    if (s.tags.isNotEmpty()) {
-                                        Row(
-                                            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        ) {
-                                            s.tags.forEach { tag ->
-                                                RowAction(colors, "$tag ×", "remove-tag-${s.id}-$tag") {
-                                                    onRemoveTag(s.id, tag)
-                                                }
-                                            }
-                                        }
-                                        Spacer(Modifier.height(8.dp))
-                                    }
-                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                        Box(
-                                            Modifier.weight(1f)
-                                                .clip(LumenShapes.inset)
-                                                .background(colors.surface)
-                                                .border(1.dp, colors.outline, LumenShapes.inset)
-                                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                                        ) {
-                                            if (tagDraft.isEmpty()) {
-                                                Text("Add a tag", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
-                                            }
-                                            BasicTextField(
-                                                value = tagDraft,
-                                                onValueChange = { tagDraft = it },
-                                                singleLine = true,
-                                                textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 13.sp),
-                                                cursorBrush = SolidColor(colors.water),
-                                                modifier = Modifier.fillMaxWidth().testTag("tag-field-${s.id}"),
-                                            )
-                                        }
-                                        Spacer(Modifier.width(8.dp))
-                                        RowAction(colors, "add", "tag-save-${s.id}") {
-                                            onAddTag(s.id, tagDraft)
-                                            tagDraft = ""
-                                        }
-                                        Spacer(Modifier.width(6.dp))
-                                        RowAction(colors, "done", "tag-done-${s.id}") { tagging = false }
-                                    }
-                                }
-                            } else {
-                                Row(
-                                    Modifier.fillMaxWidth()
-                                        .padding(start = 32.dp, end = 12.dp, bottom = 8.dp)
-                                        .testTag("actions-${s.id}"),
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                ) {
-                                    RowAction(colors, if (s.pinned) "unpin" else "pin", "pin-${s.id}") { onPin(s.id, !s.pinned) }
-                                    RowAction(colors, if (s.archived) "unarchive" else "archive", "archive-${s.id}") { onArchive(s.id, !s.archived) }
-                                    RowAction(colors, "rename", "rename-${s.id}") { draft = s.title; renaming = true }
-                                    RowAction(colors, "tag", "tag-${s.id}") { tagDraft = ""; tagging = true }
-                                    RowAction(colors, "fork", "fork-${s.id}") { onFork(s.id) }
-                                    RowAction(colors, "delete", "delete-${s.id}", destructive = true) { deleteTarget = s.id }
-                                }
-                            }
-                        }
-                    }
+                    SessionCard(
+                        colors = colors,
+                        session = s,
+                        tagFilter = tagFilter,
+                        onOpen = onOpen,
+                        onToggleTagFilter = onToggleTagFilter,
+                        onPin = onPin,
+                        onArchive = onArchive,
+                        onFork = onFork,
+                        onRename = onRename,
+                        onAddTag = onAddTag,
+                        onRemoveTag = onRemoveTag,
+                        onDelete = { deleteTarget = it },
+                    )
                 }
             }
         }
@@ -665,16 +593,22 @@ fun HomeScreen(
             containerColor = colors.surface,
             titleContentColor = colors.fg,
             textContentColor = colors.dim,
-            title = { Text("Delete chat?", fontFamily = Mono, fontSize = 15.sp, fontWeight = FontWeight.Medium) },
+            title = { Text("Delete chat?", fontFamily = Mono, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
             text = {
                 Text(
                     "\"${sessions.firstOrNull { it.id == id }?.title ?: "this chat"}\" and all of its messages will be removed. This cannot be undone.",
-                    fontFamily = Mono, fontSize = 12.5.sp, lineHeight = 18.sp,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
+                    lineHeight = LumenType.lineTight,
                 )
             },
             confirmButton = {
                 Text(
-                    "Delete", color = LumenAlert, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    "Delete",
+                    color = LumenAlert,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
+                    fontWeight = FontWeight.Medium,
                     modifier = Modifier
                         .clip(LumenShapes.small)
                         .clickable {
@@ -687,7 +621,10 @@ fun HomeScreen(
             },
             dismissButton = {
                 Text(
-                    "Cancel", color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
+                    "Cancel",
+                    color = colors.dim,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
                     modifier = Modifier
                         .clip(LumenShapes.small)
                         .clickable { deleteTarget = null }
@@ -696,6 +633,374 @@ fun HomeScreen(
                 )
             },
         )
+    }
+}
+
+@Composable
+private fun SearchField(
+    colors: LumenColors,
+    query: String,
+    onQuery: (String) -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(LumenShapes.pill)
+            .background(colors.surface)
+            .border(1.dp, colors.outline, LumenShapes.pill)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "\u2315",
+                color = colors.faint,
+                fontFamily = Mono,
+                fontSize = 14.sp,
+                modifier = Modifier.padding(end = 8.dp),
+            )
+            Box(Modifier.weight(1f)) {
+                if (query.isEmpty()) {
+                    Text(
+                        "Search chats",
+                        color = colors.faint,
+                        fontFamily = Mono,
+                        fontSize = LumenType.body,
+                    )
+                }
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQuery,
+                    singleLine = true,
+                    textStyle = LocalTextStyle.current.copy(
+                        color = colors.fg,
+                        fontFamily = Mono,
+                        fontSize = LumenType.body,
+                    ),
+                    cursorBrush = SolidColor(colors.water),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    modifier = Modifier.fillMaxWidth().testTag("search"),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchHitRow(
+    colors: LumenColors,
+    hit: SearchHit,
+    onOpen: (String) -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp)
+            .clip(LumenShapes.row)
+            .background(colors.surface)
+            .border(1.dp, colors.outline, LumenShapes.row)
+            .clickable { onOpen(hit.sessionId.value) }
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .testTag("search-hit-${hit.messageId}"),
+    ) {
+        Text(
+            hit.role.lowercase(),
+            color = colors.faint,
+            fontFamily = Mono,
+            fontSize = LumenType.micro,
+            letterSpacing = 1.2.sp,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            hit.snippet,
+            color = colors.fg,
+            fontFamily = Mono,
+            fontSize = LumenType.body,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun SessionCard(
+    colors: LumenColors,
+    session: SessionRow,
+    tagFilter: Set<String>,
+    onOpen: (String) -> Unit,
+    onToggleTagFilter: (String) -> Unit,
+    onPin: (String, Boolean) -> Unit,
+    onArchive: (String, Boolean) -> Unit,
+    onFork: (String) -> Unit,
+    onRename: (String, String) -> Unit,
+    onAddTag: (String, String) -> Unit,
+    onRemoveTag: (String, String) -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
+    var tagging by remember { mutableStateOf(false) }
+    var draft by remember(session.title) { mutableStateOf(session.title) }
+    var tagDraft by remember { mutableStateOf("") }
+
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
+                .clip(LumenShapes.card)
+                .background(colors.surface)
+                .border(1.dp, colors.outline, LumenShapes.card)
+                .clickable { onOpen(session.id) }
+                .padding(horizontal = 14.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .size(9.dp)
+                    .background(colors.water, WaterShapes.droplet(tail = 0.55f)),
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (session.pinned) "\u2605 ${session.title}" else session.title,
+                    color = colors.fg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (session.preview.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        session.preview,
+                        color = colors.dim,
+                        fontFamily = Mono,
+                        fontSize = LumenType.body,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (session.tags.isNotEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        session.tags.forEach { tag ->
+                            TagChip(
+                                colors = colors,
+                                text = tag,
+                                selected = tag in tagFilter,
+                                tag = "session-tag-${session.id}-$tag",
+                                onClick = { onToggleTagFilter(tag) },
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.width(10.dp))
+            Text(
+                ago(session.updatedAt),
+                color = colors.faint,
+                fontFamily = Mono,
+                fontSize = LumenType.micro,
+            )
+            Spacer(Modifier.width(6.dp))
+            Box(
+                modifier = Modifier
+                    .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
+                    .clip(LumenShapes.small)
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 6.dp)
+                    .testTag("more-${session.id}"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "\u22ef",
+                    color = colors.dim,
+                    fontFamily = Mono,
+                    fontSize = 16.sp,
+                )
+            }
+        }
+        if (expanded) {
+            if (renaming) {
+                RenameEditor(
+                    colors = colors,
+                    draft = draft,
+                    onDraft = { draft = it },
+                    onSave = {
+                        onRename(session.id, draft)
+                        renaming = false
+                        expanded = false
+                    },
+                    tag = session.id,
+                )
+            } else if (tagging) {
+                TagEditor(
+                    colors = colors,
+                    session = session,
+                    tagDraft = tagDraft,
+                    onTagDraft = { tagDraft = it },
+                    onAddTag = {
+                        onAddTag(session.id, tagDraft)
+                        tagDraft = ""
+                    },
+                    onRemoveTag = { onRemoveTag(session.id, it) },
+                    onDone = { tagging = false },
+                )
+            } else {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 36.dp, end = 12.dp, bottom = 10.dp)
+                        .testTag("actions-${session.id}"),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    RowAction(
+                        colors,
+                        if (session.pinned) "unpin" else "pin",
+                        "pin-${session.id}",
+                    ) { onPin(session.id, !session.pinned) }
+                    RowAction(
+                        colors,
+                        if (session.archived) "unarchive" else "archive",
+                        "archive-${session.id}",
+                    ) { onArchive(session.id, !session.archived) }
+                    RowAction(colors, "rename", "rename-${session.id}") {
+                        draft = session.title
+                        renaming = true
+                    }
+                    RowAction(colors, "tag", "tag-${session.id}") {
+                        tagDraft = ""
+                        tagging = true
+                    }
+                    RowAction(colors, "fork", "fork-${session.id}") { onFork(session.id) }
+                    RowAction(
+                        colors,
+                        "delete",
+                        "delete-${session.id}",
+                        destructive = true,
+                    ) { onDelete(session.id) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RenameEditor(
+    colors: LumenColors,
+    draft: String,
+    onDraft: (String) -> Unit,
+    onSave: () -> Unit,
+    tag: String,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 36.dp, end = 12.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .weight(1f)
+                .clip(LumenShapes.inset)
+                .background(colors.surface)
+                .border(1.dp, colors.outline, LumenShapes.inset)
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+        ) {
+            BasicTextField(
+                value = draft,
+                onValueChange = onDraft,
+                singleLine = true,
+                textStyle = LocalTextStyle.current.copy(
+                    color = colors.fg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
+                ),
+                cursorBrush = SolidColor(colors.water),
+                modifier = Modifier.fillMaxWidth().testTag("rename-field-$tag"),
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        RowAction(colors, "save", "rename-save-$tag", onClick = onSave)
+    }
+}
+
+@Composable
+private fun TagEditor(
+    colors: LumenColors,
+    session: SessionRow,
+    tagDraft: String,
+    onTagDraft: (String) -> Unit,
+    onAddTag: () -> Unit,
+    onRemoveTag: (String) -> Unit,
+    onDone: () -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = 36.dp, end = 12.dp, bottom = 10.dp)
+            .testTag("tag-editor-${session.id}"),
+    ) {
+        if (session.tags.isNotEmpty()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                session.tags.forEach { tag ->
+                    RowAction(
+                        colors,
+                        "$tag \u00d7",
+                        "remove-tag-${session.id}-$tag",
+                    ) { onRemoveTag(tag) }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .weight(1f)
+                    .clip(LumenShapes.inset)
+                    .background(colors.surface)
+                    .border(1.dp, colors.outline, LumenShapes.inset)
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+            ) {
+                if (tagDraft.isEmpty()) {
+                    Text(
+                        "Add a tag",
+                        color = colors.faint,
+                        fontFamily = Mono,
+                        fontSize = LumenType.body,
+                    )
+                }
+                BasicTextField(
+                    value = tagDraft,
+                    onValueChange = onTagDraft,
+                    singleLine = true,
+                    textStyle = LocalTextStyle.current.copy(
+                        color = colors.fg,
+                        fontFamily = Mono,
+                        fontSize = LumenType.body,
+                    ),
+                    cursorBrush = SolidColor(colors.water),
+                    modifier = Modifier.fillMaxWidth().testTag("tag-field-${session.id}"),
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            RowAction(colors, "add", "tag-save-${session.id}", onClick = onAddTag)
+            Spacer(Modifier.width(6.dp))
+            RowAction(colors, "done", "tag-done-${session.id}", onClick = onDone)
+        }
     }
 }
 
@@ -714,12 +1019,14 @@ private fun RowAction(
     Text(
         label,
         color = if (destructive) LumenAlert else colors.dim,
-        fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+        fontFamily = Mono,
+        fontSize = LumenType.caption,
+        fontWeight = FontWeight.Medium,
         modifier = Modifier
             .clip(LumenShapes.small)
             .background(colors.surface)
             .clickable { onClick() }
-            .padding(horizontal = 9.dp, vertical = 6.dp)
+            .padding(horizontal = 10.dp, vertical = 7.dp)
             .testTag(tag),
     )
 }
@@ -736,7 +1043,8 @@ private fun TagChip(
     Text(
         text,
         color = if (selected) colors.fg else colors.dim,
-        fontFamily = Mono, fontSize = 10.sp,
+        fontFamily = Mono,
+        fontSize = LumenType.micro,
         maxLines = 1,
         modifier = Modifier
             .clip(LumenShapes.small)
@@ -747,7 +1055,7 @@ private fun TagChip(
                 LumenShapes.small,
             )
             .clickable { onClick() }
-            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .padding(horizontal = 7.dp, vertical = 3.dp)
             .testTag(tag),
     )
 }
@@ -773,15 +1081,18 @@ private fun StatusStrip(
         .joinToString(" \u00b7 ")
         .ifBlank { "no model" }
     Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        StatusPill(colors, modelLabel, "status-provider", onSettings)
-        StatusPill(colors, sandboxLabel.ifBlank { "sandbox" }, "status-sandbox", onDiagnostics)
-        StatusPill(colors, budgetLabel(maxCostUsd), "status-budget", onSettings)
+        StatusPill(colors, "\u25c8", modelLabel, "status-provider", onSettings)
+        StatusPill(colors, "\u25a0", sandboxLabel.ifBlank { "sandbox" }, "status-sandbox", onDiagnostics)
+        StatusPill(colors, "\u0024", budgetLabel(maxCostUsd), "status-budget", onSettings)
         StatusPill(
             colors,
+            "\u263a",
             if (githubLogin.isNotBlank()) "@$githubLogin" else "connect github",
             "status-github",
             onGitHub,
@@ -793,6 +1104,7 @@ private fun StatusStrip(
 @Composable
 private fun StatusPill(
     colors: LumenColors,
+    glyph: String,
     text: String,
     tag: String,
     onClick: (() -> Unit)?,
@@ -802,12 +1114,60 @@ private fun StatusPill(
         .background(colors.surface)
         .border(1.dp, colors.outline, LumenShapes.pill)
     val interactive = if (onClick != null) shell.clickable { onClick() } else shell
-    Text(
-        text,
-        color = colors.dim, fontFamily = Mono, fontSize = 10.5.sp,
-        maxLines = 1,
-        modifier = interactive.padding(horizontal = 9.dp, vertical = 5.dp).testTag(tag),
-    )
+    Row(
+        modifier = interactive
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            glyph,
+            color = colors.water,
+            fontFamily = Mono,
+            fontSize = 9.sp,
+            modifier = Modifier.padding(end = 5.dp),
+        )
+        Text(
+            text,
+            color = colors.dim,
+            fontFamily = Mono,
+            fontSize = LumenType.micro,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun CockpitPill(
+    colors: LumenColors,
+    label: String,
+    tag: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .clip(LumenShapes.pill)
+            .background(colors.surface)
+            .border(1.dp, colors.outline, LumenShapes.pill)
+            .clickable { onClick() }
+            .padding(horizontal = 11.dp, vertical = 7.dp)
+            .testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(6.dp)
+                .background(colors.water, WaterShapes.droplet(tail = 0.5f)),
+        )
+        Spacer(Modifier.width(7.dp))
+        Text(
+            label,
+            color = colors.dim,
+            fontFamily = Mono,
+            fontSize = LumenType.caption,
+            fontWeight = FontWeight.Medium,
+        )
+    }
 }
 
 /** "budget off" when the cap is disabled, otherwise a compact "$N cap". */

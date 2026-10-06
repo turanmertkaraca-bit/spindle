@@ -2,8 +2,8 @@ package dev.lumen.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
@@ -83,36 +84,41 @@ fun TerminalScreen(
                 onBack = onBack,
                 backTag = "terminal-back",
                 actions = {
-                    Text(
-                        if (running) "running" else "stopped",
-                        color = if (running) colors.water else colors.faint,
-                        fontFamily = Mono, fontSize = 11.sp, letterSpacing = 0.8.sp,
-                    )
+                    StatusDot(colors, running)
+                    Spacer(Modifier.width(10.dp))
                     LumenBarAction(colors, "Clear", "terminal-clear", onClear)
                 },
             )
 
             if (lines.isEmpty()) {
                 Box(
-                    Modifier.fillMaxWidth().weight(1f).padding(horizontal = 14.dp, vertical = 8.dp),
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
                     contentAlignment = Alignment.Center,
                 ) {
                     StateHint(
                         colors = colors,
-                        text = if (running) "Waiting for output…" else "Shell has exited",
+                        text = if (running) "Waiting for output\u2026" else "Shell has exited",
                         detail = if (running) "Anything the command prints shows up here" else "Restart to open a fresh shell",
                         tag = "terminal-empty",
                     )
                 }
             } else {
                 Box(
-                    Modifier.fillMaxWidth().weight(1f)
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
                         .verticalScroll(scroll)
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                        .padding(horizontal = LumenSpacing.page, vertical = 8.dp),
                 ) {
                     Text(
                         output,
-                        color = colors.fg, fontFamily = Mono, fontSize = 12.5.sp, lineHeight = 18.sp,
+                        color = colors.fg,
+                        fontFamily = Mono,
+                        fontSize = LumenType.body,
+                        lineHeight = LumenType.lineBody,
                         modifier = Modifier.fillMaxWidth().testTag("terminal-output"),
                     )
                 }
@@ -120,14 +126,38 @@ fun TerminalScreen(
 
             if (error != null) {
                 Text(
-                    error, color = LumenAlert, fontFamily = Mono, fontSize = 11.sp,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 2.dp)
+                    error,
+                    color = LumenAlert,
+                    fontFamily = Mono,
+                    fontSize = LumenType.caption,
+                    modifier = Modifier
+                        .padding(start = LumenSpacing.page, end = LumenSpacing.page, bottom = 2.dp)
                         .testTag("terminal-error"),
                 )
             }
 
             InputRow(colors, running, onSend, onInterrupt, onRestart)
         }
+    }
+}
+
+@Composable
+private fun StatusDot(colors: LumenColors, running: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(if (running) colors.water else colors.faint),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            if (running) "running" else "stopped",
+            color = if (running) colors.water else colors.faint,
+            fontFamily = Mono,
+            fontSize = LumenType.caption,
+            letterSpacing = 0.8.sp,
+        )
     }
 }
 
@@ -159,11 +189,14 @@ private fun InputRow(
     }
 
     Row(
-        Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
+        Modifier
+            .fillMaxWidth()
+            .padding(start = LumenSpacing.page - 6.dp, end = LumenSpacing.page - 6.dp, top = 8.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.weight(1f)
+            Modifier
+                .weight(1f)
                 .clip(LumenShapes.panel)
                 .background(colors.surface)
                 .border(1.dp, colors.outline, LumenShapes.panel)
@@ -171,8 +204,10 @@ private fun InputRow(
         ) {
             if (draft.isEmpty()) {
                 Text(
-                    if (running) "Type a command" else "Shell exited — restart",
-                    color = colors.faint, fontFamily = Mono, fontSize = 13.sp,
+                    if (running) "Type a command" else "Shell exited \u2014 restart",
+                    color = colors.faint,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
                 )
             }
             BasicTextField(
@@ -180,7 +215,11 @@ private fun InputRow(
                 onValueChange = { draft = it },
                 singleLine = true,
                 enabled = true,
-                textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 13.sp),
+                textStyle = LocalTextStyle.current.copy(
+                    color = colors.fg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
+                ),
                 cursorBrush = SolidColor(colors.water),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(onSend = { submit() }),
@@ -189,8 +228,11 @@ private fun InputRow(
         }
         Spacer(Modifier.width(8.dp))
         LumenBarAction(
-            colors = colors, label = "Stop", tag = "terminal-ctrl-c",
-            onClick = onInterrupt, enabled = running,
+            colors = colors,
+            label = "Stop",
+            tag = "terminal-ctrl-c",
+            onClick = onInterrupt,
+            enabled = running,
             contentDescription = "stop command",
         )
         Spacer(Modifier.width(4.dp))

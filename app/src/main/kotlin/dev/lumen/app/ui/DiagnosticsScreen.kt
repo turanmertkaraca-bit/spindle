@@ -53,13 +53,16 @@ fun DiagnosticsScreen(
     val clipboard = LocalClipboardManager.current
 
     Column(
-        modifier.fillMaxSize().background(colors.bg).imePadding()
-            .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 20.dp),
+        modifier
+            .fillMaxSize()
+            .background(colors.bg)
+            .imePadding()
+            .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 8.dp, bottom = 20.dp),
     ) {
         LumenTopBar(
             colors = colors,
             title = "Diagnostics",
-            titleSize = 20.sp,
+            titleSize = LumenType.title,
             onBack = onBack,
             backTag = "diag-back",
             actions = {
@@ -78,19 +81,26 @@ fun DiagnosticsScreen(
                 )
             },
         )
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(LumenSpacing.xl))
 
-        Text("linux environment", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
-        Spacer(Modifier.height(8.dp))
+        Text(
+            "linux environment",
+            color = colors.fg,
+            fontFamily = Mono,
+            fontSize = LumenType.heading,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(Modifier.height(LumenSpacing.md))
         Column(
-            Modifier.fillMaxWidth()
+            Modifier
+                .fillMaxWidth()
                 .clip(LumenShapes.card)
                 .background(colors.surface)
                 .border(1.dp, colors.outline, LumenShapes.card)
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(horizontal = 14.dp, vertical = 14.dp),
         ) {
             EnvRow(colors, "alpine", if (linux.alpineReady) "ready" else "not installed", linux.alpineReady)
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(6.dp))
             val debianLabel = when {
                 linux.debianActive -> "active"
                 linux.debianReady -> "installed (probe failed)"
@@ -98,15 +108,20 @@ fun DiagnosticsScreen(
             }
             EnvRow(colors, "debian", debianLabel, linux.debianActive)
             linux.progress?.let {
-                Spacer(Modifier.height(6.dp))
-                Text(it, color = colors.water, fontFamily = Mono, fontSize = 11.sp)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    it,
+                    color = colors.water,
+                    fontFamily = Mono,
+                    fontSize = LumenType.caption,
+                )
             }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val enabled = !linux.installing
                 LumenBarAction(
                     colors = colors,
-                    label = if (linux.installing) "Installing…" else "Install Debian",
+                    label = if (linux.installing) "Installing\u2026" else "Install Debian",
                     tag = "install-debian",
                     onClick = onInstallDebian,
                     primary = true,
@@ -115,19 +130,54 @@ fun DiagnosticsScreen(
                 LumenBarAction(colors, "Refresh", "linux-refresh", onRefreshLinux)
             }
         }
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(LumenSpacing.xxl))
 
-        Text("event log", color = colors.faint, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 2.sp)
-        Spacer(Modifier.height(8.dp))
+        Text(
+            "event log",
+            color = colors.fg,
+            fontFamily = Mono,
+            fontSize = LumenType.heading,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(Modifier.height(LumenSpacing.md))
         if (diag.isEmpty()) {
-            StateHint(colors, "No events yet", detail = "Activity will appear here", tag = "diag-empty")
+            StateHint(
+                colors,
+                "No events yet",
+                detail = "Activity will appear here",
+                tag = "diag-empty",
+            )
         } else {
-            LazyColumn(Modifier.fillMaxWidth().weight(1f).testTag("diag-log")) {
+            LazyColumn(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .clip(LumenShapes.card)
+                    .background(colors.surface)
+                    .border(1.dp, colors.outline, LumenShapes.card)
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .testTag("diag-log"),
+            ) {
                 itemsIndexed(diag) { _, line ->
-                    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                        Text(stamp(line.at), color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp)
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                    ) {
+                        Text(
+                            stamp(line.at),
+                            color = colors.faint,
+                            fontFamily = Mono,
+                            fontSize = LumenType.micro,
+                        )
                         Spacer(Modifier.width(8.dp))
-                        Text(line.text, color = colors.fg, fontFamily = Mono, fontSize = 11.5.sp)
+                        Text(
+                            line.text,
+                            color = colors.fg,
+                            fontFamily = Mono,
+                            fontSize = LumenType.caption,
+                            lineHeight = LumenType.lineTight,
+                        )
                     }
                 }
             }
@@ -137,9 +187,23 @@ fun DiagnosticsScreen(
 
 @Composable
 private fun EnvRow(colors: LumenColors, label: String, value: String, ok: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = colors.fg, fontFamily = Mono, fontSize = 13.sp, modifier = Modifier.width(70.dp))
-        Text(value, color = if (ok) colors.water else colors.dim, fontFamily = Mono, fontSize = 12.5.sp)
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            label,
+            color = colors.fg,
+            fontFamily = Mono,
+            fontSize = LumenType.bodyLarge,
+        )
+        Text(
+            value,
+            color = if (ok) colors.water else colors.dim,
+            fontFamily = Mono,
+            fontSize = LumenType.body,
+        )
     }
 }
 

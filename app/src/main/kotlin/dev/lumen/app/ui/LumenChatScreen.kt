@@ -2878,10 +2878,13 @@ private fun QuickSettingsSheet(
         ) {
             Text(
                 "quick settings",
-                color = colors.fg, fontFamily = Mono, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                color = colors.fg,
+                fontFamily = Mono,
+                fontSize = LumenType.heading,
+                fontWeight = FontWeight.Medium,
                 letterSpacing = 0.4.sp,
             )
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(16.dp))
 
             QuickLabel("provider", colors)
             Row(
@@ -2893,46 +2896,51 @@ private fun QuickSettingsSheet(
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(18.dp))
             QuickLabel("model", colors)
-            for (m in ProviderCatalogue.defaultModels(provider)) {
-                val ref = "$provider/${m.id}"
-                val selected = model == ref
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 2.dp)
-                        .clip(LumenShapes.row)
-                        .background(if (selected) colors.bg.copy(alpha = 0.35f) else Color.Transparent)
-                        .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.row)
-                        .clickable { onModel?.invoke(ref) }
-                        .padding(horizontal = 12.dp, vertical = 10.dp)
-                        .testTag("quick-model-${m.id}"),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        Modifier.size(6.dp)
-                            .background(
-                                if (selected) colors.water else Color.Transparent,
-                                WaterShapes.droplet(tail = 0.5f),
-                            ),
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        m.label ?: m.id,
-                        color = if (selected) colors.fg else colors.dim,
-                        fontFamily = Mono, fontSize = 12.5.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        "${m.contextWindow / 1000}k",
-                        color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp,
-                    )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                for (m in ProviderCatalogue.defaultModels(provider)) {
+                    val ref = "$provider/${m.id}"
+                    val selected = model == ref
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(LumenShapes.row)
+                            .background(if (selected) colors.bg.copy(alpha = 0.35f) else Color.Transparent)
+                            .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.row)
+                            .clickable { onModel?.invoke(ref) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                            .testTag("quick-model-${m.id}"),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            Modifier.size(7.dp)
+                                .background(
+                                    if (selected) colors.water else Color.Transparent,
+                                    WaterShapes.droplet(tail = 0.5f),
+                                ),
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            m.label ?: m.id,
+                            color = if (selected) colors.fg else colors.dim,
+                            fontFamily = Mono,
+                            fontSize = LumenType.body,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            "${m.contextWindow / 1000}k",
+                            color = colors.faint,
+                            fontFamily = Mono,
+                            fontSize = LumenType.micro,
+                        )
+                    }
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(18.dp))
             QuickLabel("theme", colors)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (value in listOf("system", "light", "dark")) {
@@ -2940,7 +2948,7 @@ private fun QuickSettingsSheet(
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(18.dp))
             QuickLabel("budget", colors)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 QuickChip("off", budgetUsd <= 0.0, "quick-budget-off", colors) { onMaxCost?.invoke(0.0) }
@@ -2949,14 +2957,24 @@ private fun QuickSettingsSheet(
                 QuickChip("\$5", budgetUsd == 5.0, "quick-budget-5", colors) { onMaxCost?.invoke(5.0) }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(18.dp))
             QuickLabel("tools", colors)
             Row(
-                Modifier.fillMaxWidth(),
+                Modifier
+                    .fillMaxWidth()
+                    .clip(LumenShapes.row)
+                    .background(colors.surface.copy(alpha = 0.25f))
+                    .border(1.dp, colors.outline, LumenShapes.row)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("ask before tools", color = colors.fg, fontFamily = Mono, fontSize = 12.5.sp)
+                Text(
+                    "ask before tools",
+                    color = colors.fg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
+                )
                 Switch(
                     checked = askBeforeTools,
                     onCheckedChange = { onAskBeforeTools?.invoke(it) },
@@ -2971,7 +2989,7 @@ private fun QuickSettingsSheet(
                 )
             }
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(20.dp))
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2991,7 +3009,10 @@ private fun QuickSettingsSheet(
 private fun QuickLabel(text: String, colors: LumenColors) {
     Text(
         text,
-        color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 2.sp,
+        color = colors.faint,
+        fontFamily = Mono,
+        fontSize = LumenType.caption,
+        letterSpacing = 2.sp,
     )
     Spacer(Modifier.height(8.dp))
 }
@@ -3008,7 +3029,8 @@ private fun QuickChip(
     Text(
         text,
         color = if (selected) colors.fg else colors.dim,
-        fontFamily = Mono, fontSize = 12.5.sp,
+        fontFamily = Mono,
+        fontSize = LumenType.body,
         maxLines = 1,
         modifier = Modifier
             .clip(LumenShapes.inset)
@@ -3030,7 +3052,10 @@ private fun QuickAction(
 ) {
     Text(
         label,
-        color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+        color = colors.accent,
+        fontFamily = Mono,
+        fontSize = LumenType.body,
+        fontWeight = FontWeight.Medium,
         modifier = Modifier
             .clip(LumenShapes.small)
             .clickable { onClick() }

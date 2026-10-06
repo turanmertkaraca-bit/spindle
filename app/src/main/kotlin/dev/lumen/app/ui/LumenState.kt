@@ -36,27 +36,41 @@ fun StateHint(
     tag: String? = null,
 ) {
     Column(
-        modifier.padding(horizontal = 32.dp),
+        modifier.padding(horizontal = 40.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(
             Modifier
-                .size(9.dp)
+                .size(LumenSize.droplet * 1.8f)
                 .clip(WaterShapes.droplet(tail = 0.55f))
-                .background(tint.copy(alpha = 0.55f)),
-        )
-        Spacer(Modifier.height(12.dp))
+                .background(tint.copy(alpha = 0.5f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                Modifier
+                    .size(LumenSize.droplet)
+                    .clip(WaterShapes.droplet(tail = 0.5f))
+                    .background(tint.copy(alpha = 0.85f)),
+            )
+        }
+        Spacer(Modifier.height(16.dp))
         Text(
             text,
-            color = colors.dim, fontFamily = Mono, fontSize = 12.5.sp,
+            color = colors.fg,
+            fontFamily = Mono,
+            fontSize = LumenType.bodyLarge,
+            lineHeight = LumenType.lineTight,
             textAlign = TextAlign.Center,
             modifier = if (tag != null) Modifier.testTag(tag) else Modifier,
         )
         if (detail != null) {
-            Spacer(Modifier.height(5.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 detail,
-                color = colors.faint, fontFamily = Mono, fontSize = 11.sp,
+                color = colors.faint,
+                fontFamily = Mono,
+                fontSize = LumenType.caption,
+                lineHeight = LumenType.lineTight,
                 textAlign = TextAlign.Center,
             )
         }

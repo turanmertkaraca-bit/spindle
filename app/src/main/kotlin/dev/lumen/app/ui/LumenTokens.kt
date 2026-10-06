@@ -4,6 +4,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /**
  * The shared "failed/error" red, independent of the prism spectrum. Mirrors the
@@ -82,7 +83,40 @@ object LumenSpacing {
     val md: Dp = 10.dp
     val lg: Dp = 14.dp
     val xl: Dp = 20.dp
+    val xxl: Dp = 28.dp
 
     /** The horizontal gutter between the transcript and the screen edges. */
     val gutter: Dp = 12.dp
+
+    /** The horizontal page inset used by most non-chat screens. */
+    val page: Dp = 18.dp
+}
+
+/**
+ * A compact, shared typography scale. All text is still monospace; the scale
+ * just makes it easy to keep headings, body, captions and microcopy aligned
+ * without hunting for literals.
+ */
+object LumenType {
+    val hero = 28.sp
+    val title = 20.sp
+    val heading = 15.sp
+    val body = 13.sp
+    val bodyLarge = 14.sp
+    val caption = 11.sp
+    val micro = 10.sp
+    val lineTight = 16.sp
+    val lineBody = 19.sp
+}
+
+/**
+ * Shared touch targets and icon sizes so buttons and glyphs feel consistent.
+ */
+object LumenSize {
+    val touchMin = 40.dp
+    val touchComfort = 48.dp
+    val iconSm = 16.dp
+    val iconMd = 20.dp
+    val iconLg = 28.dp
+    val droplet = 10.dp
 }
