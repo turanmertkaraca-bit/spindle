@@ -31,7 +31,7 @@ class GitRunnerTest {
         }
     }
 
-    private fun temp(): Path = Files.createTempDirectory("lumen-git").toPath()
+    private fun temp(): Path = Files.createTempDirectory("lumen-git")
 
     @Test
     fun `probe reports the installed version`() = runBlocking {
