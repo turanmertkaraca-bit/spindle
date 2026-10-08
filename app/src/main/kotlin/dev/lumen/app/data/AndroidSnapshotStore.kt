@@ -33,8 +33,11 @@ class AndroidSnapshotStore internal constructor(private val shared: AndroidDatab
     }
 
     override suspend fun record(snapshot: Snapshot) = locked {
+        // `sequence` is AUTOINCREMENT and assigned by SQLite, so it is omitted
+        // here; a replace re-inserts the row and therefore moves it to the end
+        // of the monotonic order, which is exactly "newest".
         db.execSQL(
-            "INSERT OR REPLACE INTO snapshots VALUES(?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO snapshots(id,session_id,path,content,sha256,created_at) VALUES(?,?,?,?,?,?)",
             arrayOf(
                 snapshot.id, snapshot.sessionId.value, snapshot.path,
                 snapshot.content, snapshot.sha256, snapshot.createdAt,
@@ -44,14 +47,14 @@ class AndroidSnapshotStore internal constructor(private val shared: AndroidDatab
 
     override suspend fun latest(sessionId: SessionId, path: String): Snapshot? = locked {
         db.rawQuery(
-            "SELECT * FROM snapshots WHERE session_id=? AND path=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            "SELECT * FROM snapshots WHERE session_id=? AND path=? ORDER BY sequence DESC LIMIT 1",
             arrayOf(sessionId.value, path),
         ).use { c -> if (c.moveToFirst()) c.toSnapshot() else null }
     }
 
     override suspend fun forSession(sessionId: SessionId): List<Snapshot> = locked {
         db.rawQuery(
-            "SELECT * FROM snapshots WHERE session_id=? ORDER BY created_at, rowid",
+            "SELECT * FROM snapshots WHERE session_id=? ORDER BY sequence",
             arrayOf(sessionId.value),
         ).use { c -> buildList { while (c.moveToNext()) add(c.toSnapshot()) } }
     }
@@ -77,7 +80,7 @@ class AndroidSnapshotStore internal constructor(private val shared: AndroidDatab
             }
             for (sid in sessions) {
                 val ids = db.rawQuery(
-                    "SELECT id FROM snapshots WHERE session_id=? ORDER BY created_at DESC, rowid DESC",
+                    "SELECT id FROM snapshots WHERE session_id=? ORDER BY sequence DESC",
                     arrayOf(sid),
                 ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
                 ids.drop(keep).forEach { db.delete("snapshots", "id=?", arrayOf(it)); removed++ }
@@ -123,7 +126,7 @@ class AndroidSnapshotStore internal constructor(private val shared: AndroidDatab
                 }
                 for (sid in sessions) {
                     val ids = db.rawQuery(
-                        "SELECT id FROM snapshots WHERE session_id=? ORDER BY created_at DESC, rowid DESC",
+                        "SELECT id FROM snapshots WHERE session_id=? ORDER BY sequence DESC",
                         arrayOf(sid),
                     ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
                     // Remove the oldest non-pinned rows beyond the cap; pins may
@@ -142,7 +145,7 @@ class AndroidSnapshotStore internal constructor(private val shared: AndroidDatab
                 val excess = count - maxTotal
                 if (excess > 0) {
                     val ids = db.rawQuery(
-                        "SELECT id FROM snapshots ORDER BY created_at ASC, rowid ASC",
+                        "SELECT id FROM snapshots ORDER BY sequence ASC",
                         null,
                     ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
                     var toRemove = excess
@@ -161,11 +164,14 @@ class AndroidSnapshotStore internal constructor(private val shared: AndroidDatab
         removed
     }
 
-    /** Ids of the newest snapshot of every `(session, path)` pair. */
+    /**
+     * Ids of the newest snapshot of every `(session, path)` pair, where "newest"
+     * is the highest monotonic `sequence` (not the wall clock).
+     */
     private fun pinnedIds(): Set<String> = db.rawQuery(
         "SELECT s.id FROM snapshots s WHERE NOT EXISTS (" +
             "SELECT 1 FROM snapshots x WHERE x.session_id = s.session_id AND x.path = s.path " +
-            "AND (x.created_at > s.created_at OR (x.created_at = s.created_at AND x.rowid > s.rowid)))",
+            "AND x.sequence > s.sequence)",
         null,
     ).use { c -> buildSet { while (c.moveToNext()) add(c.getString(0)) } }
 

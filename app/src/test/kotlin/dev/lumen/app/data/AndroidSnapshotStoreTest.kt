@@ -96,4 +96,19 @@ class AndroidSnapshotStoreTest {
         assertEquals(listOf("s7", "s8", "s9"), store.forSession(SessionId("sess")).map { it.id })
         store.close()
     }
+
+    @Test
+    fun `newest follows insertion order even when the clock rolls back`() = runTest {
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val store = AndroidSnapshotStore(database)
+        val now = System.currentTimeMillis()
+        // The later record carries the *older* wall clock; monotonic sequence,
+        // not created_at, must decide which is newest.
+        store.record(snap("clock_ahead", "s1", now))
+        store.record(snap("clock_behind", "s1", now - 10_000))
+
+        assertEquals("clock_behind", store.latest(SessionId("s1"), "a.kt")?.id)
+        assertEquals(listOf("clock_ahead", "clock_behind"), store.forSession(SessionId("s1")).map { it.id })
+        store.close()
+    }
 }

@@ -1,5 +1,6 @@
 package dev.lumen.app.data
 
+import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import dev.spindle.core.model.Message
 import dev.spindle.core.model.MessageId
@@ -225,6 +226,108 @@ class AndroidSessionStoreTest {
             store.updateMessage(m.copy(parts = listOf(Part.Text(PartId("sp3"), "bravo"))))
             assertTrue(store.search("alpha").isEmpty(), "the old text is gone from the index")
             assertEquals(1, store.search("bravo").size, "the new text is searchable")
+        }
+    }
+
+    @Test
+    fun `appendMessage is idempotent and preserves the existing seq`() = runTest {
+        newStore().use { store ->
+            store.createSession(Session(SessionId("ses_idem"), "t", "/tmp", 0, 0))
+            val mx = Message(
+                MessageId("mx"), SessionId("ses_idem"), Role.USER, createdAt = 1,
+                parts = listOf(Part.Text(PartId("px"), "original text")),
+            )
+            store.appendMessage(mx)
+            store.appendMessage(Message(MessageId("my"), SessionId("ses_idem"), Role.ASSISTANT, createdAt = 2))
+
+            // A re-append of an existing id must neither duplicate it nor move it
+            // to a fresh seq slot (which would reorder it after `my`).
+            store.appendMessage(
+                mx.copy(
+                    createdAt = 99,
+                    parts = listOf(Part.Text(PartId("px2"), "rewritten")),
+                ),
+            )
+
+            val all = store.messages(SessionId("ses_idem"))
+            assertEquals(2, all.size, "a duplicate id must not create a second row")
+            assertEquals(listOf("mx", "my"), all.map { it.id.value }, "the original seq is retained")
+            assertEquals("original text", (all[0].parts.single() as Part.Text).text)
+        }
+    }
+
+    @Test
+    fun `FTS rebuild repairs a partial index`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val first = AndroidSessionStore(context)
+        val sid = SessionId("ses_partial")
+        first.createSession(Session(sid, "t", "/tmp", 0, 0))
+        first.appendMessage(
+            Message(MessageId("pa"), sid, Role.USER, createdAt = 1, parts = listOf(Part.Text(PartId("qa"), "alpha one"))),
+        )
+        first.appendMessage(
+            Message(MessageId("pb"), sid, Role.ASSISTANT, createdAt = 2, parts = listOf(Part.Text(PartId("qb"), "beta two"))),
+        )
+        first.appendMessage(
+            Message(MessageId("pc"), sid, Role.USER, createdAt = 3, parts = listOf(Part.Text(PartId("qc"), "gamma three"))),
+        )
+        assertEquals(1, first.search("beta").size)
+        first.close()
+
+        // Yank one row out from under the index, as a partial write would.
+        val removed = runCatching {
+            val raw = context.openOrCreateDatabase("lumen.db", Context.MODE_PRIVATE, null)
+            try {
+                raw.execSQL("DELETE FROM message_fts WHERE message_id = 'pb'")
+            } finally {
+                raw.close()
+            }
+        }
+        assumeTrue("FTS5 is required to exercise the repair path", removed.isSuccess)
+
+        newStore().use { second ->
+            assertEquals(1, second.search("beta").size, "the missing row is re-indexed")
+            assertEquals(1, second.search("alpha").size)
+            assertEquals(1, second.search("gamma").size)
+        }
+    }
+
+    @Test
+    fun `deleting a parent removes its descendant sessions`() = runTest {
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val store = AndroidSessionStore(database)
+        store.createSession(Session(SessionId("root"), "r", "/tmp", 0, 0))
+        store.createSession(Session(SessionId("child"), "c", "/tmp", 0, 0, parentId = SessionId("root")))
+        store.createSession(Session(SessionId("grand"), "g", "/tmp", 0, 0, parentId = SessionId("child")))
+        store.appendMessage(Message(MessageId("rm"), SessionId("root"), Role.USER, createdAt = 0))
+        store.appendMessage(Message(MessageId("cm"), SessionId("child"), Role.USER, createdAt = 0))
+        store.appendMessage(Message(MessageId("gm"), SessionId("grand"), Role.USER, createdAt = 0))
+
+        store.deleteSession(SessionId("root"))
+
+        assertTrue(
+            store.sessions(limit = 100, includeChildren = true).isEmpty(),
+            "the whole parent_id chain is removed",
+        )
+        assertTrue(store.messages(SessionId("child")).isEmpty())
+        assertTrue(store.messages(SessionId("grand")).isEmpty())
+        store.close()
+    }
+
+    @Test
+    fun `prune keeps only the newest N sessions`() = runTest {
+        newStore().use { store ->
+            (1..5).forEach { i ->
+                store.createSession(Session(SessionId("p$i"), "t", "/tmp", i.toLong() * 10, i.toLong() * 10))
+                store.appendMessage(Message(MessageId("pm$i"), SessionId("p$i"), Role.USER, createdAt = i.toLong()))
+            }
+
+            val removed = store.prune(keepSessions = 2)
+
+            assertEquals(3, removed)
+            assertEquals(listOf("p5", "p4"), store.sessions(limit = 100).map { it.id.value })
+            assertTrue(store.messages(SessionId("p1")).isEmpty(), "pruned sessions lose their messages")
+            assertEquals(1, store.messages(SessionId("p5")).size, "kept sessions are untouched")
         }
     }
 }

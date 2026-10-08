@@ -1,5 +1,6 @@
 package dev.lumen.app.data
 
+import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import dev.spindle.core.model.FinishReason
@@ -131,29 +132,44 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
                 return
             }
             try {
-                val indexed = db.rawQuery("SELECT COUNT(*) FROM message_fts", null).use { c ->
-                    if (c.moveToFirst()) c.getInt(0) else 0
-                }
-                if (indexed == 0) backfillFts()
+                repairFts()
             } catch (_: Throwable) {
-                // A backfill failure is non-fatal; insert/delete keep it in sync.
+                // A repair failure is non-fatal; insert/delete keep the index in
+                // sync from here, and any later write failure flips ftsReady off.
             }
             ftsInitialized = true
         }
     }
 
-    /** Rebuild the FTS rows from a single batched read of every stored message. */
-    private fun backfillFts() {
-        val messages = allMessages()
-        if (messages.isEmpty()) return
-        db.beginTransaction()
-        try {
-            for (message in messages) ftsRow(message)
-            db.setTransactionSuccessful()
-        } finally {
-            db.endTransaction()
+    /**
+     * Rebuild the index when it does not cover every searchable message. The old
+     * heuristic ("any row implies complete") never repaired a partial or stale
+     * index; comparing counts repairs an empty, partially-deleted or externally
+     * damaged index. Messages with no searchable text are legitimately absent, so
+     * the second comparison is against that subset (mirrors `SqliteSessionStore`).
+     */
+    private fun repairFts() {
+        if (!ftsReady) return
+        val messageCount = countRows("messages")
+        val indexed = countRows("message_fts")
+        if (indexed == messageCount) return
+        val searchable = allMessages().filter { messageSearchText(it).isNotBlank() }
+        if (indexed == searchable.size) return
+        transaction {
+            db.execSQL("DELETE FROM message_fts")
+            for (message in searchable) {
+                db.execSQL(
+                    "INSERT INTO message_fts(message_id, session_id, role, body) VALUES(?,?,?,?)",
+                    arrayOf(message.id.value, message.sessionId.value, message.role.name, messageSearchText(message)),
+                )
+            }
         }
     }
+
+    private fun countRows(table: String): Int =
+        db.rawQuery("SELECT COUNT(*) FROM $table", null).use { c ->
+            if (c.moveToFirst()) c.getInt(0) else 0
+        }
 
     private fun ftsRow(message: Message) {
         if (!ftsReady) return
@@ -243,15 +259,42 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
         transaction { deleteSessionUnlocked(id) }
     }
 
+    /**
+     * Delete a session and every descendant session (the `parent_id` chain),
+     * each with its parts/messages/todos/snapshots and FTS rows, so deleting a
+     * parent cannot leak its children. Mirrors opencode's cascading delete.
+     */
     private fun deleteSessionUnlocked(id: SessionId) {
-        db.delete("parts", "session_id=?", arrayOf(id.value))
-        db.delete("messages", "session_id=?", arrayOf(id.value))
-        db.delete("todos", "session_id=?", arrayOf(id.value))
+        for (sid in sessionTree(id.value)) deleteSessionRows(sid)
+    }
+
+    /** [root] plus every transitive child id, breadth-first. */
+    private fun sessionTree(root: String): List<String> {
+        val ids = ArrayList<String>()
+        val seen = HashSet<String>()
+        val queue = ArrayDeque<String>()
+        queue.add(root)
+        while (queue.isNotEmpty()) {
+            val current = queue.removeFirst()
+            if (!seen.add(current)) continue
+            ids.add(current)
+            db.rawQuery("SELECT id FROM sessions WHERE parent_id=?", arrayOf(current)).use { c ->
+                while (c.moveToNext()) queue.add(c.getString(0))
+            }
+        }
+        return ids
+    }
+
+    /** Remove exactly one session's rows (no cascade); shared by [prune]. */
+    private fun deleteSessionRows(sessionId: String) {
+        db.delete("parts", "session_id=?", arrayOf(sessionId))
+        db.delete("messages", "session_id=?", arrayOf(sessionId))
+        db.delete("todos", "session_id=?", arrayOf(sessionId))
         // Snapshots are large whole-file copies; a deleted session must not leave
         // them orphaned in the shared DB forever.
-        db.delete("snapshots", "session_id=?", arrayOf(id.value))
-        ftsDeleteSession(id.value)
-        db.delete("sessions", "id=?", arrayOf(id.value))
+        db.delete("snapshots", "session_id=?", arrayOf(sessionId))
+        ftsDeleteSession(sessionId)
+        db.delete("sessions", "id=?", arrayOf(sessionId))
     }
 
     override suspend fun forkSession(
@@ -303,11 +346,44 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
 
     // ---- messages ----
 
-    override suspend fun appendMessage(message: Message) = locked { transaction { insertMessage(message) } }
+    /**
+     * Append a message. Idempotent on the message id: re-appending an existing
+     * id is a no-op (ignore-on-conflict) that leaves the stored row — its parts,
+     * FTS entry and `seq` — untouched. Allocating the next `seq` and inserting
+     * happen in one transaction, and `idx_msg` is UNIQUE, so concurrent writers
+     * cannot share a sequence slot.
+     */
+    override suspend fun appendMessage(message: Message) {
+        locked { transaction { insertMessage(message) } }
+    }
 
-    private fun insertMessage(message: Message) {
+    /**
+     * [appendMessage]'s body; returns true when a new row was actually written.
+     * Uses `insertWithOnConflict`, not `INSERT OR IGNORE` + `changes()`, because
+     * `changes()` is per-connection and the query could be served by a different
+     * pooled connection than the insert.
+     */
+    private fun insertMessage(message: Message): Boolean {
         val seq = nextSeq(message.sessionId)
-        writeMessageRow(message, seq)
+        val values = ContentValues().apply {
+            put("id", message.id.value)
+            put("session_id", message.sessionId.value)
+            put("role", message.role.name)
+            put("created_at", message.createdAt)
+            put("model", message.model)
+            put("provider_id", message.providerId)
+            put("agent", message.agent)
+            put("usage", json.encodeToString(Usage.serializer(), message.usage))
+            put("finish", message.finish?.name)
+            put("error", message.error)
+            put("seq", seq)
+        }
+        val rowId = db.insertWithOnConflict("messages", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+        // An ignored duplicate must not rewrite the existing row's parts or FTS.
+        if (rowId == -1L) return false
+        writeParts(message)
+        ftsRow(message)
+        return true
     }
 
     override suspend fun updateMessage(message: Message) = locked {
@@ -321,7 +397,7 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
         }
     }
 
-    /** Write the message row plus its parts and FTS entry as one unit. */
+    /** Upsert/rewrite path: write the message row plus its parts and FTS entry. */
     private fun writeMessageRow(message: Message, seq: Long) {
         db.execSQL(
             "INSERT OR REPLACE INTO messages VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -476,21 +552,24 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
         }
     }
 
+    /**
+     * Keep the [keepSessions] most recently updated sessions and drop the rest,
+     * whole: each dropped session's messages/parts/todos/snapshots/FTS rows go
+     * with it. Sessions are compared as a flat set (children count toward the
+     * budget like any other) and deletion here is non-cascading, so a child that
+     * survives the cut is not swept away with an aged-out parent. Negative
+     * values behave like zero.
+     */
     override suspend fun prune(keepSessions: Int): Int = locked {
-        // keepSessions == 0 means "drop everything"; the old LIMIT 0 query
-        // returned an empty keep-set and bailed out, making it a silent no-op.
-        if (keepSessions <= 0) {
-            val all = sessionsUnlocked(Int.MAX_VALUE, includeChildren = true, includeArchived = true).map { it.id.value }
-            transaction { for (id in all) deleteSessionUnlocked(SessionId(id)) }
-            return@locked all.size
-        }
-        val keep = sessionsUnlocked(keepSessions, includeChildren = true, includeArchived = true).map { it.id.value }
-        val placeholders = keep.joinToString(",") { "?" }
-        val gone = db.rawQuery("SELECT id FROM sessions WHERE id NOT IN ($placeholders)", keep.toTypedArray()).use { c ->
-            buildList { while (c.moveToNext()) add(c.getString(0)) }
-        }
-        transaction { for (id in gone) deleteSessionUnlocked(SessionId(id)) }
-        gone.size
+        val keep = keepSessions.coerceAtLeast(0)
+        // `keep` is a coerced non-negative Int, so inlining it is injection-safe
+        // and avoids depending on SQLite coercing a text-bound LIMIT/OFFSET.
+        val drop = db.rawQuery(
+            "SELECT id FROM sessions ORDER BY updated_at DESC LIMIT -1 OFFSET $keep",
+            null,
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+        transaction { for (id in drop) deleteSessionRows(id) }
+        drop.size
     }
 
     /**

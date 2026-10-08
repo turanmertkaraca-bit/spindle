@@ -11,6 +11,7 @@ import dev.spindle.core.event.EventBus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -41,6 +42,32 @@ class LumenApp : Application() {
         super.onCreate()
         container = AppContainer(this)
         applicationScope.launch { container.catalogue.refreshAll() }
+        applicationScope.launch { retentionJanitor() }
+    }
+
+    /**
+     * Bounded retention, run once at startup and then on a slow cadence. Local
+     * history and whole-file snapshots must not grow without limit, and FTS/WAL
+     * housekeeping should happen even when no run reaches its end boundary.
+     *
+     * Every step is individually best-effort: a failed prune must never crash the
+     * process, so each call is wrapped in [runCatching].
+     */
+    private suspend fun retentionJanitor() {
+        while (true) {
+            runCatching { container.store.prune(keepSessions = KEEP_SESSIONS) }
+            runCatching { container.snapshots.pruneBounded() }
+            runCatching { container.store.maintain() }
+            delay(JANITOR_INTERVAL_MS)
+        }
+    }
+
+    private companion object {
+        /** Sessions retained (newest first); older ones are dropped whole. */
+        const val KEEP_SESSIONS = 100
+
+        /** Run retention every 6 hours. */
+        const val JANITOR_INTERVAL_MS = 6L * 60L * 60L * 1_000L
     }
 }
 

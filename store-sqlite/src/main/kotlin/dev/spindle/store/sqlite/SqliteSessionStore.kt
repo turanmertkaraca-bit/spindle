@@ -80,9 +80,9 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
         }
         // `PRAGMA user_version` is the durable source of truth (SPEC §5.1); the
         // `schema_version` table is kept for compatibility with older databases.
-        // Taking the max lets either location record progress and makes a
-        // database written by another host (e.g. the Android store, which keeps
-        // neither) simply start at 0 and replay the idempotent migrations.
+        // Taking the max lets either location record progress; a database written
+        // by a host that records neither simply starts at 0 and replays the
+        // idempotent migrations.
         val current = maxOf(
             connection.createStatement().use { st ->
                 st.executeQuery("SELECT COALESCE(MAX(version), 0) FROM schema_version").use { rs ->
@@ -312,9 +312,9 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
      * Append a message. Idempotent on the message id: re-appending an existing
      * id is a no-op (`INSERT OR IGNORE`) rather than a replace or a duplicate.
      *
-     * NOTE: the Android store (`AndroidSessionStore`) uses `INSERT OR REPLACE`
-     * and `InMemorySessionStore` appends duplicates. This JVM store is the
-     * documented reference; the others are owned elsewhere and not changed here.
+     * NOTE: `InMemorySessionStore` still appends duplicates. The durable Android
+     * store matches this behaviour (`INSERT OR IGNORE`); this JVM store remains
+     * the documented reference.
      */
     override suspend fun appendMessage(message: Message) {
         mutex.withLock {
