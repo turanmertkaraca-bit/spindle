@@ -115,6 +115,62 @@ class MarkdownMentionTest {
     }
 
     @Test
+    fun `a bare url in prose links and opens externally`() {
+        var opened: String? = null
+        compose.setContent {
+            MarkdownBody(
+                markdown = "Docs live at https://example.com/guide for now.",
+                colors = LumenColors.Light,
+                modifier = viewport,
+                cwd = "",
+                onOpenUrl = { opened = it },
+            )
+        }
+        val node = compose.onNodeWithText("https://example.com/guide", substring = true)
+            .fetchSemanticsNode()
+        assertTrue(node.config.contains(SemanticsActions.OnClick), "a bare URL should link")
+
+        compose.onNodeWithText("https://example.com/guide", substring = true)
+            .performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        assertEquals("https://example.com/guide", opened)
+    }
+
+    @Test
+    fun `a markdown link opens its url and strips trailing punctuation`() {
+        var opened: String? = null
+        compose.setContent {
+            MarkdownBody(
+                markdown = "See [the docs](https://example.com/docs), then continue.",
+                colors = LumenColors.Light,
+                modifier = viewport,
+                cwd = "",
+                onOpenUrl = { opened = it },
+            )
+        }
+        compose.onNodeWithText("the docs", substring = true)
+            .performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        assertEquals("https://example.com/docs", opened)
+    }
+
+    @Test
+    fun `a url inside inline code stays inert`() {
+        compose.setContent {
+            MarkdownBody(
+                markdown = "Run `curl https://example.com` to fetch it.",
+                colors = LumenColors.Light,
+                modifier = viewport,
+                cwd = "",
+                onOpenUrl = { },
+            )
+        }
+        val node = compose.onNodeWithText("curl https://example.com", substring = true)
+            .fetchSemanticsNode()
+        assertFalse(node.config.contains(SemanticsActions.OnClick), "code spans must not link")
+    }
+
+    @Test
     fun `the model chip shows the basename and opens the picker`() {
         var picked = 0
         compose.setContent {

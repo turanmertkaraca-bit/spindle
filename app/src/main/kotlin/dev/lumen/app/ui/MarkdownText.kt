@@ -54,9 +54,13 @@ import dev.spindle.core.text.MdSpan
 
 private val MdMono = FontFamily.Monospace
 
-/** Annotation tags the linked runs carry; both sit on the reference range. */
+/** Annotation tags the linked runs carry; all sit on the reference range. */
 private const val FILE_TAG = "file"
 private const val FILE_LINE_TAG = "file-line"
+private const val URL_TAG = "url"
+
+/** Bare http(s) URLs in prose; trailing sentence punctuation is trimmed off. */
+private val UrlRegex = Regex("""https?://[^\s<>()\[\]{}"']+""")
 
 /**
  * Layout bounds. Text layout (`StaticLayout`) is super-linear and allocation
@@ -121,6 +125,8 @@ fun MarkdownBody(
     exists: (String) -> Boolean = { false },
     touchedPaths: Set<String> = emptySet(),
     onOpenFile: (String, Int?) -> Unit = { _, _ -> },
+    /** Open an external http(s) link (markdown link or bare URL) in the browser. */
+    onOpenUrl: (String) -> Unit = {},
     fileRevision: Int = 0,
     fileKind: ((String) -> FileKind?)? = null,
 ) {
@@ -135,7 +141,7 @@ fun MarkdownBody(
         markdown.length <= cap -> {
             val blocks = remember(markdown) { Markdown.parse(markdown) }
             Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, fileRevision, fileKind)
+                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind)
             }
         }
 
@@ -143,7 +149,7 @@ fun MarkdownBody(
             val shown = "\u2026\n" + markdown.takeLast(cap)
             val blocks = remember(shown) { Markdown.parse(shown) }
             Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, fileRevision, fileKind)
+                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind)
             }
         }
 
@@ -184,7 +190,7 @@ fun MarkdownBody(
             val shown = markdown.take(cap)
             val blocks = remember(shown) { Markdown.parse(shown) }
             Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, fileRevision, fileKind)
+                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind)
                 Text(
                     "\u2026[${markdown.length - cap} chars hidden] \u00b7 show full",
                     color = colors.accent, fontFamily = MdMono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
@@ -209,15 +215,16 @@ private fun MarkdownBlocks(
     exists: (String) -> Boolean,
     touchedPaths: Set<String>,
     onOpenFile: (String, Int?) -> Unit,
+    onOpenUrl: (String) -> Unit,
     fileRevision: Int,
     fileKind: ((String) -> FileKind?)?,
 ) {
     for (block in blocks) {
         when (block) {
             is MdBlock.Heading -> MarkdownHeading(block, colors)
-            is MdBlock.Paragraph -> MarkdownParagraph(block.spans, colors, cwd, exists, touchedPaths, onOpenFile, fileRevision, fileKind)
-            is MdBlock.Bullet -> MarkdownList(block.items, colors, ordered = false, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile, fileRevision = fileRevision, fileKind = fileKind)
-            is MdBlock.Ordered -> MarkdownList(block.items, colors, ordered = true, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile, fileRevision = fileRevision, fileKind = fileKind)
+            is MdBlock.Paragraph -> MarkdownParagraph(block.spans, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind)
+            is MdBlock.Bullet -> MarkdownList(block.items, colors, ordered = false, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile, onOpenUrl = onOpenUrl, fileRevision = fileRevision, fileKind = fileKind)
+            is MdBlock.Ordered -> MarkdownList(block.items, colors, ordered = true, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile, onOpenUrl = onOpenUrl, fileRevision = fileRevision, fileKind = fileKind)
             is MdBlock.Code -> MarkdownCode(block, colors)
         }
     }
@@ -252,6 +259,7 @@ private fun MarkdownParagraph(
     exists: (String) -> Boolean,
     touchedPaths: Set<String>,
     onOpenFile: (String, Int?) -> Unit,
+    onOpenUrl: (String) -> Unit,
     fileRevision: Int,
     fileKind: ((String) -> FileKind?)?,
 ) {
@@ -273,6 +281,7 @@ private fun MarkdownParagraph(
         fontSize = 14.sp,
         lineHeight = 21.sp,
         onOpenFile = onOpenFile,
+        onOpenUrl = onOpenUrl,
     )
 }
 
@@ -285,6 +294,7 @@ private fun MarkdownList(
     exists: (String) -> Boolean,
     touchedPaths: Set<String>,
     onOpenFile: (String, Int?) -> Unit,
+    onOpenUrl: (String) -> Unit,
     fileRevision: Int,
     fileKind: ((String) -> FileKind?)?,
 ) {
@@ -311,6 +321,7 @@ private fun MarkdownList(
                     fontSize = 14.sp,
                     lineHeight = 21.sp,
                     onOpenFile = onOpenFile,
+                    onOpenUrl = onOpenUrl,
                     modifier = Modifier.weight(1f),
                 )
             }
@@ -367,9 +378,14 @@ private fun LinkedText(
     modifier: Modifier = Modifier,
     fontSize: TextUnit = 14.sp,
     lineHeight: TextUnit = 21.sp,
+    onOpenUrl: (String) -> Unit = {},
 ) {
     val refs = text.getStringAnnotations(FILE_TAG, 0, text.length)
+    val urls = text.getStringAnnotations(URL_TAG, 0, text.length)
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+
+    fun urlAt(offset: Int): String? =
+        urls.firstOrNull { offset >= it.start && offset < it.end }?.item
 
     fun refAt(offset: Int): Pair<String, Int?>? {
         // Resolve against the already-scanned reference ranges rather than a
@@ -383,14 +399,20 @@ private fun LinkedText(
     }
 
     val openFirst: () -> Boolean = {
-        val first = refs.firstOrNull()
-        if (first == null) {
-            false
-        } else {
-            val line = text.getStringAnnotations(FILE_LINE_TAG, first.start, first.end)
-                .firstOrNull()?.item?.toIntOrNull()
-            onOpenFile(first.item, line)
+        val url = urls.firstOrNull()
+        if (url != null) {
+            onOpenUrl(url.item)
             true
+        } else {
+            val first = refs.firstOrNull()
+            if (first == null) {
+                false
+            } else {
+                val line = text.getStringAnnotations(FILE_LINE_TAG, first.start, first.end)
+                    .firstOrNull()?.item?.toIntOrNull()
+                onOpenFile(first.item, line)
+                true
+            }
         }
     }
 
@@ -402,17 +424,23 @@ private fun LinkedText(
         lineHeight = lineHeight,
         onTextLayout = { layout = it },
         modifier = modifier.then(
-            if (refs.isEmpty()) {
+            if (refs.isEmpty() && urls.isEmpty()) {
                 Modifier
             } else {
                 Modifier
                     .pointerInput(text) {
                         detectTapGestures { pos ->
                             val l = layout ?: return@detectTapGestures
-                            refAt(l.getOffsetForPosition(pos))?.let { (path, line) -> onOpenFile(path, line) }
+                            val offset = l.getOffsetForPosition(pos)
+                            val url = urlAt(offset)
+                            if (url != null) {
+                                onOpenUrl(url)
+                            } else {
+                                refAt(offset)?.let { (path, line) -> onOpenFile(path, line) }
+                            }
                         }
                     }
-                    .semantics { onClick(label = "open file reference") { openFirst() } }
+                    .semantics { onClick(label = "open link") { openFirst() } }
             },
         ),
     )
@@ -452,6 +480,35 @@ private fun markdownAnnotated(
             textDecoration = if (link) TextDecoration.Underline else null,
         )
         withStyle(style) { append(span.text) }
+        val spanEnd = length
+
+        // External links — a markdown link carries its URL, a bare http(s) token
+        // in prose is found by regex. Both become accent-underlined tap targets
+        // that open in the system browser, independent of the workspace cwd.
+        if (link) {
+            span.linkUrl?.let { url ->
+                addStyle(
+                    SpanStyle(color = colors.accent, textDecoration = TextDecoration.Underline),
+                    spanStart,
+                    spanEnd,
+                )
+                addStringAnnotation(URL_TAG, url, spanStart, spanEnd)
+            }
+        } else if (!span.code) {
+            for (m in UrlRegex.findAll(span.text)) {
+                val url = m.value.trimEnd('.', ',', ';', ':', '!', '?', ')', ']', '}')
+                if (url.length <= "https://".length) continue
+                val from = spanStart + m.range.first
+                val to = from + url.length
+                if (from < 0 || to > length || from >= to) continue
+                addStyle(
+                    SpanStyle(color = colors.accent, textDecoration = TextDecoration.Underline),
+                    from,
+                    to,
+                )
+                addStringAnnotation(URL_TAG, url, from, to)
+            }
+        }
 
         if (cwd.isEmpty() || span.text.isEmpty()) continue
         val kind = fileKind

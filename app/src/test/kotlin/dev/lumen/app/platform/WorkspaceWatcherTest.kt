@@ -128,6 +128,53 @@ class WorkspaceWatcherTest {
     }
 
     @Test
+    fun `snapshotDirs reports directories and never files`() {
+        val root = tempRoot()
+        try {
+            File(root, "src/nested").mkdirs()
+            File(root, "src/Main.kt").writeText("x")
+            File(root, "top.txt").writeText("x")
+
+            val dirs = snapshotDirs(root)
+            assertTrue("src" in dirs, "expected src, got $dirs")
+            assertTrue("src/nested" in dirs, "expected src/nested, got $dirs")
+            assertFalse(dirs.any { it.endsWith(".kt") || it.endsWith(".txt") }, "no files: $dirs")
+            assertFalse(dirs.any { it.contains('\\') }, "paths must be forward-slash only")
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `watcher reports a newly created empty directory`() = runBlocking {
+        val root = tempRoot()
+        val scope = CoroutineScope(Dispatchers.IO)
+        val events = LinkedBlockingQueue<Set<String>>()
+        val watcher = WorkspaceWatcher(root = root, scope = scope, intervalMs = 25) { events.put(it) }
+        try {
+            File(root, "baseline.txt").writeText("baseline")
+            watcher.start()
+
+            delay(60)
+            File(root, "newdir").mkdirs()
+
+            val observed = withTimeout(5_000) {
+                var found: Set<String> = emptySet()
+                while (found.isEmpty()) {
+                    val event = events.poll()
+                    if (event != null && "newdir" in event) found = event else delay(20)
+                }
+                found
+            }
+            assertTrue("newdir" in observed, "an empty new directory must be reported, got $observed")
+        } finally {
+            watcher.stop()
+            scope.cancel()
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `double start does not spawn two loops and stop is idempotent`() = runBlocking {
         val root = tempRoot()
         val scope = CoroutineScope(Dispatchers.IO)

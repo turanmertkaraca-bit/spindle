@@ -218,6 +218,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     },
+                    onOpenUrl = viewModel::openExternalUrl,
                     fileRevision = state.fileRevision,
                     fileKind = viewModel::fileKind,
                     contextWindow = state.contextWindow,

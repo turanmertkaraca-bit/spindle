@@ -532,7 +532,9 @@ class ChatViewModel(
         val sid = current.currentSessionId?.let { SessionId(it) } ?: return
         if (!current.busy) return
         val known = current.changes.byFile().keys
-        val fresh = paths.filter { it !in known }
+        // Only files become change rows; directory paths are carried by the
+        // watcher purely to re-list the Files view.
+        val fresh = paths.filter { it !in known && workspace.resolve(it).toFile().isFile }
         if (fresh.isEmpty()) return
         var next = current.changes
         for (path in fresh) {
@@ -1880,6 +1882,17 @@ class ChatViewModel(
     }
 
     /**
+     * Open an external http(s) link from assistant prose in the system browser.
+     * A refused or failed launch surfaces as [ChatState.error]; on a headless
+     * host (no [actions]) this is a no-op.
+     */
+    fun openExternalUrl(url: String) {
+        if (!url.startsWith("http://") && !url.startsWith("https://")) return
+        val message = actions?.openUrl(url) ?: return
+        _state.value = _state.value.copy(error = message)
+    }
+
+    /**
      * Open the workspace file at [path] in an external app, choosing the MIME
      * type from its extension. A refused or failed launch surfaces as
      * [ChatState.error]; on a headless host (no [actions]) this is a no-op.
@@ -1998,12 +2011,19 @@ class ChatViewModel(
         }
     }
 
-    /** True when any changed [paths] entry is a direct child of workspace-relative [dir]. */
+    /**
+     * True when any changed [paths] entry is the open folder's direct child, or
+     * sits anywhere beneath it. The descendant case is what makes a newly
+     * created directory (whose first file is nested) refresh the parent list.
+     */
     internal fun filesDirAffectedBy(dir: String, paths: Set<String>): Boolean {
         val target = normalizeRel(dir)
         return paths.any { raw ->
             val p = normalizeRel(raw)
-            p.isNotEmpty() && p.substringBeforeLast('/', "") == target
+            if (p.isEmpty()) return@any false
+            target.isEmpty() ||
+                p.substringBeforeLast('/', "") == target ||
+                p.startsWith("$target/")
         }
     }
 

@@ -63,6 +63,38 @@ internal fun snapshot(root: File, skip: Set<String> = HEAVY_DIRS): Map<String, L
 }
 
 /**
+ * Workspace-relative directories under [root] (forward-slash separated),
+ * skipping [skip], symlinks, and trees deeper than [MAX_DEPTH]. Files are
+ * ignored: this exists only so the Files view can re-list when a script creates
+ * a directory that the file-only [snapshot] would otherwise not notice.
+ */
+internal fun snapshotDirs(root: File, skip: Set<String> = HEAVY_DIRS): Set<String> {
+    val out = HashSet<String>()
+    val rootPath = root.absoluteFile.toPath().normalize()
+    if (!rootPath.toFile().isDirectory) return out
+
+    val stack = ArrayDeque<Pair<File, Int>>()
+    stack.addLast(rootPath.toFile() to 0)
+
+    while (stack.isNotEmpty()) {
+        val (dir, depth) = stack.removeLast()
+        if (depth > MAX_DEPTH) continue
+        val children = dir.listFiles() ?: continue
+        for (child in children) {
+            if (!child.isDirectory || Files.isSymbolicLink(child.toPath())) continue
+            if (child.name in skip) continue
+            val rel = rootPath.relativize(child.toPath().normalize())
+                .toString()
+                .replace(File.separatorChar, '/')
+            if (rel.isEmpty()) continue
+            out += rel
+            stack.addLast(child to depth + 1)
+        }
+    }
+    return out
+}
+
+/**
  * Paths that were added, removed, or whose fingerprint changed between two
  * snapshots.
  */
@@ -98,16 +130,26 @@ class WorkspaceWatcher(
     @Volatile
     private var previous: Map<String, Long> = emptyMap()
 
+    @Volatile
+    private var previousDirs: Set<String> = emptySet()
+
     /** Take the baseline snapshot and begin polling. A second call is a no-op. */
     fun start() {
         if (!started.compareAndSet(false, true)) return
         previous = snapshot(root)
+        previousDirs = snapshotDirs(root)
         job = scope.launch {
             while (isActive) {
                 delay(intervalMs)
                 val current = withContext(Dispatchers.IO) { snapshot(root) }
-                val changed = diff(previous, current)
+                val currentDirs = withContext(Dispatchers.IO) { snapshotDirs(root) }
+                // Include directory adds/removes so a newly created (possibly
+                // empty) folder still triggers a Files re-list.
+                val changed = diff(previous, current) +
+                    (currentDirs - previousDirs) +
+                    (previousDirs - currentDirs)
                 previous = current
+                previousDirs = currentDirs
                 if (changed.isNotEmpty()) {
                     runCatching { onChange(changed) }
                 }

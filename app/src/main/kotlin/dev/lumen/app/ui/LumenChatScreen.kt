@@ -299,6 +299,8 @@ fun LumenChatScreen(
     onOpenFile: (String, Int?) -> Unit = { _, _ -> },
     /** Route assistant mention taps here when supplied (e.g. the Files cockpit). */
     onOpenMention: ((String, Int?) -> Unit)? = null,
+    /** Open an external http(s) link from assistant prose in the browser. */
+    onOpenUrl: (String) -> Unit = {},
     /** Revert a changed file to its pre-edit snapshot. */
     onRevert: (FileEdit) -> Unit = {},
     /** A just-applied revert that can still be undone; null hides the banner. */
@@ -601,6 +603,7 @@ fun LumenChatScreen(
                                         touchedPaths = touchedPaths,
                                         onOpenFile = onOpenFile,
                                         onOpenMention = onOpenMention,
+                                        onOpenUrl = onOpenUrl,
                                         fileRevision = fileRevision,
                                         fileKind = fileKind,
                                         onRewind = onRewind,
@@ -823,6 +826,7 @@ private fun MessageRow(
     touchedPaths: Set<String> = emptySet(),
     onOpenFile: (String, Int?) -> Unit = { _, _ -> },
     onOpenMention: ((String, Int?) -> Unit)? = null,
+    onOpenUrl: (String) -> Unit = {},
     fileRevision: Int = 0,
     fileKind: ((String) -> FileKind?)? = null,
     onRewind: (String) -> Unit = {},
@@ -934,6 +938,7 @@ private fun MessageRow(
                             exists = exists,
                             touchedPaths = touchedPaths,
                             onOpenFile = onOpenMention ?: onOpenFile,
+                            onOpenUrl = onOpenUrl,
                             fileRevision = fileRevision,
                             fileKind = fileKind,
                         )

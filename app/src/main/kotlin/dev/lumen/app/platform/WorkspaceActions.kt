@@ -45,6 +45,23 @@ class WorkspaceActions(private val context: Context, private val workspaceRoot: 
     }
 
     /**
+     * Open an external http(s) [url] in the system browser. Returns null on
+     * success, or a short message when the link is not a web URL or the intent
+     * could not be launched.
+     */
+    fun openUrl(url: String): String? {
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            return "not a web link: $url"
+        }
+        return runCatching {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }.exceptionOrNull()?.let { it.message ?: "cannot open $url" }
+    }
+
+    /**
      * Open the workspace file at [absolutePath] in an external app as [mime].
      * Returns null on success, or a short message when the intent could not be
      * launched.
