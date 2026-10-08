@@ -15,7 +15,7 @@ import java.io.File
  * its own transaction and only bumps the stored version on success, so a crash
  * mid-upgrade leaves the previous version intact rather than a half-migrated DB.
  */
-internal class AndroidDatabase(context: Context) : AutoCloseable {
+internal class AndroidDatabase(context: Context, private val integrityOverride: ((SQLiteDatabase) -> Boolean)? = null) : AutoCloseable {
 
     private val appContext = context.applicationContext
 
@@ -51,7 +51,7 @@ internal class AndroidDatabase(context: Context) : AutoCloseable {
         candidate?.let {
             runCatching { it.rawQuery("PRAGMA busy_timeout=$BUSY_TIMEOUT_MS", null).use { c -> c.moveToFirst() } }
         }
-        if (candidate != null && quickCheckOk(candidate)) {
+        if (candidate != null && integrityOk(candidate)) {
             configure(candidate)
             return candidate
         }
@@ -216,6 +216,9 @@ internal class AndroidDatabase(context: Context) : AutoCloseable {
                 while (c.moveToNext()) add(c.getString(name))
             }
         }
+
+    /** Delegates to [integrityOverride] when supplied, otherwise the real check. */
+    private fun integrityOk(db: SQLiteDatabase): Boolean = integrityOverride?.invoke(db) ?: quickCheckOk(db)
 
     /**
      * A cheap read that walks the pages without verifying indexes. A healthy

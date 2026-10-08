@@ -70,29 +70,16 @@ class AndroidDatabaseMigrationTest {
 
     @Test
     fun `a corrupt database is quarantined and recreated`() = runTest {
-        // Corruption is applied to a file that already has a genuine SQLite header
-        // and at least one page. A tiny/garbage file can be silently treated by
-        // SQLite as a brand-new empty database, so `PRAGMA quick_check` would pass
-        // and nothing would be quarantined. Here the magic stays valid but the
-        // page size and page count are made unusable, forcing the check to fail.
+        // Robolectric's SQLite tolerates header damage, so the integrity verdict
+        // is stubbed to fail here. This test pins OUR recovery logic (a failed
+        // check => quarantine + recreate); AndroidDatabase's real default still
+        // uses `PRAGMA quick_check`.
         dbFile().parentFile?.mkdirs()
-        File(dbFile().path + "-wal").takeIf { it.exists() }?.delete()
-        File(dbFile().path + "-shm").takeIf { it.exists() }?.delete()
 
-        AndroidSessionStore(context).use {
-            it.createSession(Session(SessionId("seed"), "t", "/w", 0, 0))
-        }
+        AndroidSessionStore(context).use { it.createSession(Session(SessionId("seed"), "t", "/w", 0, 0)) }
 
-        val bytes = dbFile().readBytes()
-        bytes[16] = 0x00.toByte()
-        bytes[17] = 0x03.toByte() // page size 3: not a valid power-of-two page size
-        bytes[28] = 0xFF.toByte()
-        bytes[29] = 0xFF.toByte()
-        bytes[30] = 0xFF.toByte()
-        bytes[31] = 0xFF.toByte() // page count far beyond EOF
-        dbFile().writeBytes(bytes)
-
-        AndroidSessionStore(context).use { store ->
+        val database = AndroidDatabase(context) { false }
+        AndroidSessionStore(database).use { store ->
             assertTrue(store.sessions().isEmpty(), "the recreated database starts empty")
             store.createSession(Session(SessionId("fresh"), "t", "/w", 0, 0))
             assertEquals(1, store.sessions().size, "the app keeps working after quarantine")
