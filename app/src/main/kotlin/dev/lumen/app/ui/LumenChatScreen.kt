@@ -3368,9 +3368,9 @@ private fun QuickChip(
         maxLines = 1,
         modifier = Modifier
             .heightIn(min = 44.dp)
-            .clip(LumenShapes.inset)
+            .clip(LumenShapes.pill)
             .background(if (selected) colors.bg.copy(alpha = 0.35f) else Color.Transparent)
-            .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.inset)
+            .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.pill)
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 9.dp)
             .testTag(tag),
@@ -3393,7 +3393,7 @@ private fun QuickAction(
         fontWeight = FontWeight.Medium,
         modifier = Modifier
             .heightIn(min = 44.dp)
-            .clip(LumenShapes.small)
+            .clip(LumenShapes.pill)
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 9.dp)
             .testTag(tag),
