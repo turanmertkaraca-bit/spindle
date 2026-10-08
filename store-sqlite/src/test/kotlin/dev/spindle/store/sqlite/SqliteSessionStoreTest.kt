@@ -162,6 +162,42 @@ class SqliteSessionStoreTest {
     }
 
     @Test
+    fun updatePartReplacesOnePartWithoutTouchingOthers(@TempDir tmpDir: Path) = runTest {
+        val db = tmpDir.resolve("update-part.db")
+        val s = SqliteSessionStore.open(db)
+        store = s
+        val sid = SessionId("ses_update_part")
+        s.createSession(Session(id = sid, cwd = "/w", createdAt = 1L, updatedAt = 1L))
+        s.appendMessage(
+            Message(
+                id = MessageId("m1"),
+                sessionId = sid,
+                role = Role.ASSISTANT,
+                parts = listOf(text("a", "alpha"), text("b", "beta"), text("c", "gamma")),
+                createdAt = 1L,
+            ),
+        )
+
+        s.updatePart(sid, MessageId("m1"), text("b", "zeta"))
+
+        val loaded = s.messages(sid).single()
+        assertEquals(listOf("a", "b", "c"), loaded.parts.map { it.id.value })
+        assertEquals(listOf("alpha", "zeta", "gamma"), loaded.parts.map { (it as Part.Text).text })
+        // The refreshed FTS row picks up the new text and drops the old.
+        assertEquals(1, s.search("zeta").size)
+        assertTrue(s.search("beta").isEmpty())
+
+        // An unseen part id appends; it never disturbs the existing order.
+        s.updatePart(sid, MessageId("m1"), text("d", "delta"))
+        assertEquals(listOf("a", "b", "c", "d"), s.messages(sid).single().parts.map { it.id.value })
+
+        // An unknown message is a no-op: nothing is created.
+        s.updatePart(sid, MessageId("missing"), text("x", "nope"))
+        assertNull(s.message(sid, MessageId("missing")))
+        assertEquals(listOf("a", "b", "c", "d"), s.messages(sid).single().parts.map { it.id.value })
+    }
+
+    @Test
     fun pruneKeepsMostRecentSessions(@TempDir tmpDir: Path) = runTest {
         val db = tmpDir.resolve("prune.db")
         val s = SqliteSessionStore.open(db)

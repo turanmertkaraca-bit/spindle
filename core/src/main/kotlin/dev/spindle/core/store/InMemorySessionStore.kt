@@ -104,6 +104,22 @@ class InMemorySessionStore : SessionStore, SessionSearch {
         }
     }
 
+    override suspend fun updatePart(sessionId: SessionId, messageId: MessageId, part: Part) {
+        mutex.withLock {
+            val list = messages[sessionId] ?: return@withLock
+            val i = list.indexOfFirst { it.id == messageId }
+            if (i < 0) return@withLock
+            val message = list[i]
+            val j = message.parts.indexOfFirst { it.id == part.id }
+            val parts = if (j >= 0) {
+                message.parts.toMutableList().also { it[j] = part }
+            } else {
+                message.parts + part
+            }
+            list[i] = message.copy(parts = parts)
+        }
+    }
+
     override suspend fun message(sessionId: SessionId, id: MessageId): Message? = mutex.withLock {
         messages[sessionId]?.firstOrNull { it.id == id }
     }

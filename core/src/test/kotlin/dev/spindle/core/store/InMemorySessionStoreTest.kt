@@ -89,6 +89,44 @@ class InMemorySessionStoreTest {
     }
 
     @Test
+    fun `updatePart replaces one part and leaves the others in order`() = runTest {
+        val store = InMemorySessionStore()
+        store.createSession(session("s1"))
+        store.appendMessage(
+            message(
+                "m1",
+                "s1",
+                parts = listOf(
+                    Part.Text(PartId("a"), "alpha"),
+                    Part.Text(PartId("b"), "beta"),
+                    Part.Text(PartId("c"), "gamma"),
+                ),
+            ),
+        )
+
+        store.updatePart(SessionId("s1"), MessageId("m1"), Part.Text(PartId("b"), "BETA"))
+
+        val loaded = store.message(SessionId("s1"), MessageId("m1"))!!
+        assertEquals(listOf("a", "b", "c"), loaded.parts.map { it.id.value })
+        assertEquals(listOf("alpha", "BETA", "gamma"), loaded.parts.filterIsInstance<Part.Text>().map { it.text })
+
+        // An unseen part id appends; it never disturbs the existing order.
+        store.updatePart(SessionId("s1"), MessageId("m1"), Part.Text(PartId("d"), "delta"))
+        assertEquals(
+            listOf("a", "b", "c", "d"),
+            store.message(SessionId("s1"), MessageId("m1"))!!.parts.map { it.id.value },
+        )
+
+        // An unknown message is a no-op: nothing is created.
+        store.updatePart(SessionId("s1"), MessageId("missing"), Part.Text(PartId("x"), "nope"))
+        assertNull(store.message(SessionId("s1"), MessageId("missing")))
+        assertEquals(
+            listOf("a", "b", "c", "d"),
+            store.message(SessionId("s1"), MessageId("m1"))!!.parts.map { it.id.value },
+        )
+    }
+
+    @Test
     fun `search scans text reasoning and tool output`() = runTest {
         val store = InMemorySessionStore()
         store.createSession(session("s1"))

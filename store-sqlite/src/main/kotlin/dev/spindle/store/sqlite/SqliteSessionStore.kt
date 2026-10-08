@@ -362,6 +362,52 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
         }
     }
 
+    /**
+     * Upsert a single part of a message, keyed by `part.id`, without touching
+     * the message's other parts or their order. An existing id keeps its `ord`;
+     * a new id is appended. A missing message is a no-op. The message's FTS row
+     * is refreshed from the resulting parts so search stays current.
+     */
+    override suspend fun updatePart(sessionId: SessionId, messageId: MessageId, part: Part) {
+        mutex.withLock {
+            val known = connection.prepareStatement(
+                "SELECT 1 FROM messages WHERE id=? AND session_id=?",
+            ).use { st ->
+                st.setString(1, messageId.value)
+                st.setString(2, sessionId.value)
+                st.executeQuery().use { it.next() }
+            }
+            if (!known) return@withLock
+            upsertPart(sessionId.value, messageId.value, part)
+            deleteFtsMessage(messageId.value)
+            readMessageRow(sessionId.value, messageId.value)?.let { insertFts(it) }
+        }
+    }
+
+    /** One-row upsert into `parts`; preserves the row's `ord` when it exists. */
+    private fun upsertPart(sessionId: String, messageId: String, part: Part) {
+        val existingOrd = connection.prepareStatement("SELECT ord FROM parts WHERE id=?").use { st ->
+            st.setString(1, part.id.value)
+            st.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else null }
+        }
+        val ord = existingOrd ?: connection.prepareStatement(
+            "SELECT COALESCE(MAX(ord), -1) + 1 FROM parts WHERE message_id=?",
+        ).use { st ->
+            st.setString(1, messageId)
+            st.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else 0 }
+        }
+        connection.prepareStatement(
+            "INSERT OR REPLACE INTO parts(id, message_id, session_id, ord, data) VALUES (?, ?, ?, ?, ?)",
+        ).use { st ->
+            st.setString(1, part.id.value)
+            st.setString(2, messageId)
+            st.setString(3, sessionId)
+            st.setInt(4, ord)
+            st.setString(5, json.encodeToString(Part.serializer(), part))
+            st.executeUpdate()
+        }
+    }
+
     override suspend fun message(sessionId: SessionId, id: MessageId): Message? = mutex.withLock {
         readMessageRow(sessionId.value, id.value)
     }

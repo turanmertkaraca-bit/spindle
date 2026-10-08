@@ -421,6 +421,46 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
         ftsRow(message)
     }
 
+    /**
+     * Upsert a single part of a message, keyed by `part.id`, without deleting or
+     * rewriting the message's other parts. An existing id keeps its `ord`; a new
+     * id is appended. A missing message is a no-op. The message's FTS row is
+     * refreshed from the resulting parts so search stays current. The whole
+     * operation is one transaction so a concurrent reader never sees a half
+     * written message.
+     */
+    override suspend fun updatePart(sessionId: SessionId, messageId: MessageId, part: Part) = locked {
+        transaction {
+            val known = db.rawQuery(
+                "SELECT 1 FROM messages WHERE id=? AND session_id=?",
+                arrayOf(messageId.value, sessionId.value),
+            ).use { c -> c.moveToFirst() }
+            if (!known) return@transaction
+            upsertPart(sessionId.value, messageId.value, part)
+            val row = db.rawQuery("SELECT * FROM messages WHERE id=?", arrayOf(messageId.value)).use { c ->
+                if (c.moveToFirst()) c.toMessageRow() else null
+            }
+            if (row != null) {
+                ftsRow(row.copy(parts = partsFor(listOf(row.id.value))[row.id.value].orEmpty()))
+            }
+        }
+    }
+
+    /** One-row upsert into `parts`; preserves the row's `ord` when it exists. */
+    private fun upsertPart(sessionId: String, messageId: String, part: Part) {
+        val existingOrd = db.rawQuery("SELECT ord FROM parts WHERE id=?", arrayOf(part.id.value)).use { c ->
+            if (c.moveToFirst()) c.getLong(0) else null
+        }
+        val ord = existingOrd ?: db.rawQuery(
+            "SELECT COALESCE(MAX(ord), -1) + 1 FROM parts WHERE message_id=?",
+            arrayOf(messageId),
+        ).use { c -> if (c.moveToFirst()) c.getLong(0) else 0L }
+        db.execSQL(
+            "INSERT OR REPLACE INTO parts VALUES(?,?,?,?,?)",
+            arrayOf(part.id.value, messageId, sessionId, ord, json.encodeToString(Part.serializer(), part)),
+        )
+    }
+
     private fun writeParts(message: Message) {
         db.delete("parts", "message_id=?", arrayOf(message.id.value))
         message.parts.forEachIndexed { i, p ->

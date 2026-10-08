@@ -803,9 +803,7 @@ class AgentLoop(
     }
 
     private suspend fun updatePart(sessionId: SessionId, messageId: MessageId, part: Part) {
-        val message = store.message(sessionId, messageId) ?: return
-        val replaced = message.parts.map { if (it.id == part.id) part else it }
-        store.updateMessage(message.copy(parts = replaced))
+        store.updatePart(sessionId, messageId, part)
         bus.emit(AgentEvent.PartUpdated(sessionId, messageId.value, part))
     }
 

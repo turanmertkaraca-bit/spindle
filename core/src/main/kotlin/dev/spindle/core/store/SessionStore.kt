@@ -2,6 +2,7 @@ package dev.spindle.core.store
 
 import dev.spindle.core.model.Message
 import dev.spindle.core.model.MessageId
+import dev.spindle.core.model.Part
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.model.SessionState
@@ -50,6 +51,17 @@ interface SessionStore {
 
     suspend fun appendMessage(message: Message)
     suspend fun updateMessage(message: Message)
+
+    /**
+     * Upsert a single [part] into the message ([sessionId], [messageId]) keyed by
+     * `part.id`, leaving the message's other parts and their order untouched. A
+     * part whose id already exists is replaced in place; an unknown id is
+     * appended. A message that does not exist is a no-op. Unlike
+     * [updateMessage], this never rewrites (and so cannot clobber) unrelated
+     * parts written by a concurrent updater.
+     */
+    suspend fun updatePart(sessionId: SessionId, messageId: MessageId, part: Part)
+
     suspend fun message(sessionId: SessionId, id: MessageId): Message?
     suspend fun messages(sessionId: SessionId): List<Message>
     suspend fun latestMessage(sessionId: SessionId): Message?
