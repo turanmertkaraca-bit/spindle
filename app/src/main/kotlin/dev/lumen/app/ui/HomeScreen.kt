@@ -860,6 +860,7 @@ private fun SessionCard(
                     .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
                     .clip(LumenShapes.small)
                     .clickable { expanded = !expanded }
+                    .semantics { contentDescription = "Chat actions" }
                     .padding(horizontal = 6.dp)
                     .testTag("more-${session.id}"),
                 contentAlignment = Alignment.Center,

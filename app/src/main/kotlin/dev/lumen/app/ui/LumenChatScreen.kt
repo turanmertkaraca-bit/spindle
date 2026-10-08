@@ -100,6 +100,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -621,6 +623,7 @@ fun LumenChatScreen(
                             BarControl(
                                 label = "\u2039", tag = "home", colors = colors,
                                 tint = colors.dim, fontSize = 17.sp, onClick = onHome,
+                                contentDescription = "Back",
                             )
                             Spacer(Modifier.width(10.dp))
                             Text(
@@ -646,7 +649,7 @@ fun LumenChatScreen(
                                     BarControl("shell", "open-terminal", colors, colors.accent, onClick = onTerminal)
                                 }
                                 if (onQuickSettings != null) {
-                                    BarControl("\u2699", "chat-settings-top", colors, colors.accent, onClick = onQuickSettings)
+                                    BarControl("\u2699", "chat-settings-top", colors, colors.accent, onClick = onQuickSettings, contentDescription = "Settings")
                                 }
                             }
                         }
@@ -873,6 +876,7 @@ private fun BarControl(
     tint: Color,
     fontSize: TextUnit = 12.sp,
     onClick: () -> Unit,
+    contentDescription: String? = null,
 ) {
     val shape = LumenShapes.control
     Box(
@@ -883,6 +887,13 @@ private fun BarControl(
             .background(colors.surface)
             .border(1.dp, colors.outline, shape)
             .clickable { onClick() }
+            .then(
+                if (contentDescription != null) {
+                    Modifier.semantics { this.contentDescription = contentDescription }
+                } else {
+                    Modifier
+                },
+            )
             .padding(horizontal = 11.dp)
             .testTag(tag),
         contentAlignment = Alignment.Center,
@@ -2555,7 +2566,7 @@ private fun Composer(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (onAttach != null) {
-                        ComposerControl("+", "attach-image", colors.dim, onAttach)
+                        ComposerControl("+", "attach-image", colors.dim, onAttach, contentDescription = "Attach image")
                         Spacer(Modifier.width(6.dp))
                     }
                     AgentModeChip("build", "agent-build", agentMode == "build", colors.water, colors, onAgentMode)
@@ -2597,6 +2608,7 @@ private fun Composer(
                             modifier = Modifier
                                 .clip(LumenShapes.small)
                                 .clickable { onQuickSettings() }
+                                .semantics { contentDescription = "Settings" }
                                 .padding(horizontal = 4.dp, vertical = 2.dp)
                                 .testTag("chat-settings"),
                         )
@@ -2607,6 +2619,7 @@ private fun Composer(
                             modifier = Modifier
                                 .clip(LumenShapes.small)
                                 .clickable { onToggleTheme() }
+                                .semantics { contentDescription = "Toggle theme" }
                                 .padding(horizontal = 4.dp)
                                 .testTag("theme"),
                         )
@@ -2638,6 +2651,7 @@ private fun Composer(
                             indication = LocalIndication.current,
                             onClick = { if (busy) onStop() else onSend() },
                         )
+                        .semantics { contentDescription = if (busy) "Stop" else "Send" }
                         .testTag(if (busy) "stop" else "send"),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -2659,6 +2673,7 @@ private fun ComposerControl(
     tag: String,
     tint: Color,
     onClick: () -> Unit,
+    contentDescription: String? = null,
 ) {
     Text(
         glyph,
@@ -2666,6 +2681,13 @@ private fun ComposerControl(
         modifier = Modifier
             .clip(LumenShapes.small)
             .clickable { onClick() }
+            .then(
+                if (contentDescription != null) {
+                    Modifier.semantics { this.contentDescription = contentDescription }
+                } else {
+                    Modifier
+                },
+            )
             .padding(horizontal = 5.dp, vertical = 2.dp)
             .testTag(tag),
     )
@@ -2771,6 +2793,7 @@ private fun AttachmentChip(
             modifier = Modifier
                 .clip(LumenShapes.pill)
                 .clickable { onRemove(index) }
+                .semantics { contentDescription = "Remove attachment" }
                 .padding(horizontal = 5.dp, vertical = 1.dp)
                 .testTag("attachment-remove-$index"),
         )
@@ -2823,6 +2846,7 @@ private fun UndoNotice(path: String, colors: LumenColors, onUndo: () -> Unit, on
             modifier = Modifier
                 .clip(LumenShapes.pill)
                 .clickable { onDismiss() }
+                .semantics { contentDescription = "Dismiss" }
                 .padding(horizontal = 5.dp, vertical = 1.dp)
                 .testTag("changes-undo-dismiss"),
         )
@@ -3323,6 +3347,7 @@ private fun QuickChip(
         fontSize = LumenType.body,
         maxLines = 1,
         modifier = Modifier
+            .heightIn(min = LumenSize.touchMin)
             .clip(LumenShapes.inset)
             .background(if (selected) colors.bg.copy(alpha = 0.35f) else Color.Transparent)
             .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.inset)
@@ -3347,6 +3372,7 @@ private fun QuickAction(
         fontSize = LumenType.body,
         fontWeight = FontWeight.Medium,
         modifier = Modifier
+            .heightIn(min = LumenSize.touchMin)
             .clip(LumenShapes.small)
             .clickable { onClick() }
             .padding(horizontal = 8.dp, vertical = 6.dp)

@@ -35,7 +35,8 @@ import java.io.File
  * Renders the real screens to PNGs so the UI can be inspected without a device.
  * Runs on a plain JVM via Robolectric's native graphics; it draws the decor view
  * directly because Compose's own capture path never sees a draw callback here.
- * Any failure is recorded to a .error.txt instead of failing the build.
+ * The harness is strict: a blank or failed render is written to a `.error.txt`
+ * for inspection and then rethrown, failing the test rather than passing quietly.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w390dp-h844dp-xhdpi")
@@ -179,12 +180,15 @@ class ScreenshotTest {
 
     private fun shoot(name: String, content: @Composable () -> Unit) {
         val dir = File("build/screenshots").apply { mkdirs() }
-        runCatching {
+        try {
             compose.setContent(content)
             compose.waitForIdle()
             ScreenshotSupport.shoot(compose.activity, dir, name)
-        }.onFailure {
-            File(dir, "$name.error.txt").writeText(it.stackTraceToString())
+        } catch (t: Throwable) {
+            // Keep the evidence next to the screenshots, but never swallow the
+            // failure: a blank or failed render must fail the test.
+            File(dir, "$name.error.txt").writeText(t.stackTraceToString())
+            throw t
         }
     }
 
@@ -661,8 +665,9 @@ class ScreenshotTest {
      * The in-chat quick settings sheet over a populated transcript: provider,
      * model, theme and budget chips plus the ask-before-tools switch and the
      * key/full-settings/close footer, in both themes. Rendering the whole chat
-     * with the sheet over it is best-effort under Robolectric; `shoot` records
-     * any failure to a `.error.txt` instead of throwing.
+     * with the sheet over it is best-effort under Robolectric; the strict `shoot`
+     * turns any blank or failed render into a test failure (after writing the
+     * `.error.txt` evidence).
      */
     private fun quickSettingsShot(name: String, colors: LumenColors) = shoot(name) {
         LumenChatScreen(
@@ -765,7 +770,7 @@ class ScreenshotTest {
      * The GitHub screen owns its [KeyStore], so seed a (non-secret) login + repo
      * before rendering to show the connected status card. The screen reads only
      * `colors`/`onBack`, per its real signature. Seeding runs inside `shoot`, so
-     * any failure is recorded as `.error.txt` and never fails the build.
+     * any failure is written to `.error.txt` and rethrown to fail the test.
      */
     private fun githubShot(name: String, colors: LumenColors) = shoot(name) {
         val store = KeyStore(compose.activity)

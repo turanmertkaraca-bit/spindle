@@ -46,16 +46,77 @@ object ScreenshotSupport {
     }
 
     /**
-     * Draw [activity]'s decor view and write it to `[dir]/[name]`. Any failure is
-     * recorded to `[name].error.txt` instead of propagating, so the light/dark
-     * sweep always yields evidence for every screen and never fails the build.
+     * Draw [activity]'s decor view and write it to `[dir]/[name]`. Unlike the old
+     * best-effort version, this fails loudly: a missing, zero-size or wholly blank
+     * frame throws an [AssertionError] naming the scene instead of silently
+     * leaving an `.error.txt` marker. Callers may still catch and record the
+     * failure, but the failure can no longer be swallowed into a passing test.
      */
     fun shoot(activity: Activity, dir: File, name: String, scale: Float = 1f) {
-        runCatching {
-            writePng(captureDecor(activity, scale), File(dir, name))
-        }.onFailure {
-            dir.mkdirs()
-            File(dir, "$name.error.txt").writeText(it.stackTraceToString())
+        val bmp = try {
+            captureDecor(activity, scale)
+        } catch (t: Throwable) {
+            throw AssertionError("screenshot '$name' failed to render", t)
+        }
+        assertNotBlank(bmp, name)
+        try {
+            writePng(bmp, File(dir, name))
+        } catch (t: Throwable) {
+            throw AssertionError("screenshot '$name' failed to write", t)
+        }
+    }
+
+    /**
+     * The largest per-channel spread across the frame that still counts as a
+     * single flat colour. ARGB_8888 is lossless, so a genuinely flat frame has a
+     * spread of exactly 0; the small tolerance absorbs any single stray pixel and
+     * guarantees that a real empty state (which always draws text or a glyph, and
+     * therefore anti-aliased edges) is never mistaken for blank.
+     */
+    private const val BLANK_TOLERANCE = 2
+
+    /**
+     * Fail with the scene name if [bmp] is null, has no pixels, or is effectively
+     * blank. "Blank" is scoped narrowly — every sampled pixel must lie within
+     * [BLANK_TOLERANCE] per channel of every other — so a flat-coloured empty
+     * state still passes as soon as it draws any text, border or glyph.
+     */
+    fun assertNotBlank(bmp: Bitmap?, scene: String) {
+        if (bmp == null) throw AssertionError("screenshot '$scene' captured no bitmap")
+        if (bmp.width <= 0 || bmp.height <= 0) {
+            throw AssertionError("screenshot '$scene' captured a zero-size bitmap (${bmp.width}x${bmp.height})")
+        }
+        var minR = 255
+        var minG = 255
+        var minB = 255
+        var maxR = 0
+        var maxG = 0
+        var maxB = 0
+        val stride = 2
+        var y = 0
+        while (y < bmp.height) {
+            var x = 0
+            while (x < bmp.width) {
+                val c = bmp.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                if (r < minR) minR = r
+                if (r > maxR) maxR = r
+                if (g < minG) minG = g
+                if (g > maxG) maxG = g
+                if (b < minB) minB = b
+                if (b > maxB) maxB = b
+                x += stride
+            }
+            y += stride
+        }
+        val spread = maxOf(maxR - minR, maxG - minG, maxB - minB)
+        if (spread <= BLANK_TOLERANCE) {
+            throw AssertionError(
+                "screenshot '$scene' is blank: every sampled pixel is within $BLANK_TOLERANCE " +
+                    "of a single flat colour (spread=$spread)",
+            )
         }
     }
 
