@@ -1,6 +1,8 @@
 package dev.lumen.app.platform
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.system.Os
 import dev.lumen.sandbox.InAppProxy
 import dev.lumen.sandbox.Linker
@@ -20,6 +22,7 @@ import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 /**
@@ -229,11 +232,32 @@ class DebianEnvironment(private val context: Context) {
                     }
                 }
             }
+            // Verify the layer against the digest the registry advertised before
+            // we trust it as a rootfs; a flipped bit or a swapped blob must not
+            // be extracted and executed.
+            val expected = digest.removePrefix("sha256:").lowercase()
+            if (expected.isNotEmpty() && !sha256(tmp).equals(expected, ignoreCase = true)) {
+                runCatching { tmp.delete() }
+                throw IOException("rootfs digest mismatch")
+            }
             if (dst.exists()) dst.delete()
             if (!tmp.renameTo(dst)) throw IOException("blob rename failed")
         } finally {
             runCatching { conn.disconnect() }
         }
+    }
+
+    private fun sha256(file: File): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        FileInputStream(file).use { input ->
+            val buf = ByteArray(1 shl 16)
+            var n = input.read(buf)
+            while (n > 0) {
+                md.update(buf, 0, n)
+                n = input.read(buf)
+            }
+        }
+        return md.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun httpGet(url: String, token: String?, accept: String?): String {
@@ -399,8 +423,11 @@ class DebianEnvironment(private val context: Context) {
         a += "--bind=/proc"
         a += "--bind=/sys"
         if (cwd.isNotBlank()) a += "--bind=$cwd:$cwd"
+        // Shared Downloads is RW only when the user granted legacy external
+        // storage: otherwise the sandbox cannot touch anything outside the
+        // session workspace + app-private home.
         val dl = File(DOWNLOADS)
-        if (dl.isDirectory) a += "--bind=${dl.absolutePath}:${dl.absolutePath}"
+        if (dl.isDirectory && downloadsAllowed()) a += "--bind=${dl.absolutePath}:${dl.absolutePath}"
         a += "--bind=${homeDir.absolutePath}:${homeDir.absolutePath}"
         a += "/bin/bash"
         a += "-c"
@@ -419,6 +446,8 @@ class DebianEnvironment(private val context: Context) {
         val pb = ProcessBuilder(prootArgv(command, cwd))
         pb.redirectErrorStream(true)
         val e = pb.environment()
+        // Never hand the app process's ambient secrets to a guest command.
+        scrubHostEnv(e)
         e["PROOT_LOADER"] = File(binDir, "loader").absolutePath
         e["PROOT_TMP_DIR"] = tmpDir.absolutePath
         e["LD_LIBRARY_PATH"] = binDir.absolutePath
@@ -517,6 +546,46 @@ class DebianEnvironment(private val context: Context) {
     }
 
     // -------------------------------------------------------------- misc
+
+    /**
+     * Best-effort launch housekeeping: drop stale temp files and any partial
+     * download left by an interrupted install. Never touches the rootfs or the
+     * user's files. Returns a short human-readable summary for the boot screen.
+     */
+    suspend fun maintenance(): String = withContext(Dispatchers.IO) {
+        var freed = 0L
+        try {
+            tmpDir.listFiles()?.forEach { f -> val n = f.length(); if (f.delete()) freed += n }
+            dir.listFiles()?.filter { it.isFile && it.name.endsWith(".part") }?.forEach { f ->
+                val n = f.length()
+                if (f.delete()) freed += n
+            }
+            File(context.cacheDir, "debian-rootfs.tar.gz.part").takeIf { it.isFile }?.let { f ->
+                val n = f.length()
+                if (f.delete()) freed += n
+            }
+        } catch (ignored: Throwable) {
+        }
+        if (freed <= 0) "environment ready" else "reclaimed ${freed / 1024} KiB"
+    }
+
+    /** True when legacy external-storage access was granted (targetSdk 28). */
+    private fun downloadsAllowed(): Boolean = try {
+        context.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
+            PackageManager.PERMISSION_GRANTED
+    } catch (t: Throwable) {
+        false
+    }
+
+    /** Drop host secrets from the inherited env before adding guest vars. */
+    private fun scrubHostEnv(env: MutableMap<String, String>) {
+        val suffixes = listOf("_TOKEN", "_KEY", "_SECRET", "_PASSWORD", "_PASSWD", "_CREDENTIAL")
+        env.keys.removeAll { key ->
+            val upper = key.uppercase()
+            key == "JAVA_TOOL_OPTIONS" || key == "_JAVA_OPTIONS" || key == "GITHUB_TOKEN" ||
+                suffixes.any { upper.endsWith(it) }
+        }
+    }
 
     private fun writeText(f: File, s: String) {
         val tmp = File(f.parentFile, f.name + ".part")

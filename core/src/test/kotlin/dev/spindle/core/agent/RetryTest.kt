@@ -165,6 +165,89 @@ class RetryTest {
     }
 
     @Test
+    fun `connectivity failures are classified as network`() {
+        listOf(
+            "Unable to resolve host \"api.openai.com\"",
+            "java.net.UnknownHostException: api.anthropic.com",
+            "No address associated with hostname",
+            "Network is unreachable",
+            "failed to connect to /10.0.0.1",
+            "connection reset by peer",
+            "Software caused connection abort",
+            "unexpected end of stream on okhttp3",
+            "SSL handshake aborted",
+            "broken pipe",
+        ).forEach { assertTrue(Retry.isNetwork(it), "expected network: $it") }
+
+        listOf(
+            "invalid api key",
+            "context length exceeded",
+            "content filter triggered",
+            "HTTP 400 Bad Request",
+        ).forEach { assertFalse(Retry.isNetwork(it), "expected not-network: $it") }
+    }
+
+    @Test
+    fun `resilient retry waits out a network outage and then recovers`() = runTest {
+        var calls = 0
+        val retries = mutableListOf<Int>()
+        val value = Retry.withResilientRetry(
+            fatalRetries = 2,
+            onRetry = { attempt, _, _ -> retries += attempt },
+        ) {
+            calls++
+            // Far more failures than fatalRetries: a network drop must not end it.
+            if (calls < 12) throw RuntimeException("Network is unreachable")
+            "reconnected"
+        }
+        assertEquals("reconnected", value)
+        assertEquals(12, calls)
+        assertEquals((1..11).toList(), retries)
+    }
+
+    @Test
+    fun `resilient retry gives up on repeated non-network transient errors`() = runTest {
+        var calls = 0
+        val error = capture {
+            Retry.withResilientRetry(
+                fatalRetries = 2,
+                onRetry = { _, _, _ -> },
+            ) {
+                calls++
+                throw RuntimeException("503 unavailable")
+            }
+        }
+        assertIs<RuntimeException>(error)
+        assertEquals(3, calls)
+    }
+
+    @Test
+    fun `resilient retry does not retry a fatal rejection`() = runTest {
+        var calls = 0
+        val error = capture {
+            Retry.withResilientRetry(fatalRetries = 5) {
+                calls++
+                throw RuntimeException("401 unauthorized")
+            }
+        }
+        assertIs<RuntimeException>(error)
+        assertEquals(1, calls)
+    }
+
+    @Test
+    fun `resilient retry propagates cancellation immediately`() = runTest {
+        var calls = 0
+        val error = capture {
+            Retry.withResilientRetry(fatalRetries = 5) {
+                calls++
+                throw CancellationException("stop")
+            }
+        }
+        assertIs<CancellationException>(error)
+        assertEquals(1, calls)
+    }
+
+    @Test
     fun `withRetry honours a custom classifier`() = runTest {
         var calls = 0
         val value = Retry.withRetry(

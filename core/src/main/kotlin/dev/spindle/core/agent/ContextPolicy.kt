@@ -8,7 +8,15 @@ data class ContextBudget(
     val maxCostUsd: Double? = null,
     /** Fraction of [maxCostUsd] at which a one-shot warning is emitted. */
     val warnAtFraction: Double = 0.8,
-)
+) {
+    /**
+     * User-tunable fraction of the model's context window at which automatic
+     * compaction runs; null keeps [Overflow.COMPACT_AT]. Deliberately a body
+     * property (not part of the primary constructor) so the data-class shape
+     * stays stable for callers.
+     */
+    var compactAtFraction: Double? = null
+}
 
 enum class OverflowAction { NONE, TRIM, COMPACT }
 
@@ -44,6 +52,8 @@ object Overflow {
         estimatedTokens: Int,
         contextWindow: Int,
         hasOpenToolCall: Boolean,
+        compactAt: Double = COMPACT_AT,
+        trimAt: Double = TRIM_AT,
     ): OverflowDecision {
         if (hasOpenToolCall) {
             return OverflowDecision(OverflowAction.NONE, estimatedTokens, "open tool call — not touching history")
@@ -53,9 +63,9 @@ object Overflow {
             // Re-evaluated every step: a session that has already compacted once
             // must keep compacting/trimming as new turns arrive, or a long run
             // grows past the window again and can never recover.
-            ratio >= COMPACT_AT ->
+            ratio >= compactAt ->
                 OverflowDecision(OverflowAction.COMPACT, estimatedTokens, "%.0f%% of window".format(ratio * 100))
-            ratio >= TRIM_AT ->
+            ratio >= trimAt ->
                 OverflowDecision(OverflowAction.TRIM, estimatedTokens, "%.0f%% of window".format(ratio * 100))
             else -> OverflowDecision(OverflowAction.NONE, estimatedTokens, "ok")
         }

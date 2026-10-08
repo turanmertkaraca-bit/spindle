@@ -100,10 +100,29 @@ class KeyStore(context: Context) {
         get() = prefs.getString("theme", "system") ?: "system"
         set(value) = prefs.edit().putString("theme", value).apply()
 
-    /** The active primary agent: "build" | "plan". */
+    /** The active primary agent: "build" | "plan" | "delegate". */
     var agentMode: String
         get() = prefs.getString("agentMode", "build") ?: "build"
         set(value) = prefs.edit().putString("agentMode", value).apply()
+
+    /**
+     * Auto-compaction threshold as a percentage of the model's context window
+     * (50..95). 80 matches the historical [Overflow.COMPACT_AT]-ish behaviour;
+     * a lower value compacts earlier.
+     */
+    var autoCompactPercent: Int
+        get() = prefs.getInt("autoCompactPercent", 80).coerceIn(50, 95)
+        set(value) = prefs.edit().putInt("autoCompactPercent", value.coerceIn(50, 95)).apply()
+
+    /** True once the first-run setup wizard has been finished or skipped. */
+    var onboarded: Boolean
+        get() = prefs.getBoolean("onboarded", false)
+        set(value) = prefs.edit().putBoolean("onboarded", value).apply()
+
+    /** True when the user granted shared Downloads access to the sandbox. */
+    var downloadsAccess: Boolean
+        get() = prefs.getBoolean("downloadsAccess", false)
+        set(value) = prefs.edit().putBoolean("downloadsAccess", value).apply()
 
     /**
      * When true, every tool call goes through an interactive ask before it runs.

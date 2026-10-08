@@ -3,6 +3,7 @@ package dev.lumen.app.platform
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -12,6 +13,7 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import dev.lumen.app.MainActivity
 
 /**
  * Foreground service that keeps a long agent run alive while the app is
@@ -116,7 +118,29 @@ class RunService : Service() {
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setContentIntent(openAppIntent())
+            .addAction(0, "Stop", stopIntent())
             .build()
+
+    /** Tapping the ongoing notification returns to the app. */
+    private fun openAppIntent(): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+        return PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
+    /** The notification's Stop action drives the same STOP command as the UI. */
+    private fun stopIntent(): PendingIntent {
+        val intent = Intent(this, RunService::class.java).apply { action = ACTION_STOP }
+        return PendingIntent.getService(
+            this, 1, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
 
     private fun acquireWakeLock() {
         if (wakeLock?.isHeld == true) return

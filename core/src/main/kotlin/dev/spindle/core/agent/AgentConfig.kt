@@ -67,6 +67,24 @@ data class AgentConfig(
             continue. Finish with a short summary of what you did and any files changed.
         """.trimIndent()
 
+        /** Delegation-first primary agent: thinks hard, talks little, fans out. */
+        val DELEGATE_SYSTEM = """
+            You are a delegation-first coding agent. Talk less, think more: lead with
+            reasoning and tool use, keep prose terse, and never narrate obvious steps.
+
+            For any broad, independent or research-heavy subtask, delegate with the
+            task tool instead of doing it inline, then integrate the result. Verify
+            before you claim success, and finish with a short paragraph.
+        """.trimIndent()
+
+        val DELEGATE = AgentConfig(
+            name = "delegate",
+            systemPrompt = DELEGATE_SYSTEM,
+            allowSubagents = true,
+            reasoningEffort = "high",
+            temperature = 0.2,
+        )
+
         fun explore() = AgentConfig(
             name = "explore",
             systemPrompt = EXPLORE_SYSTEM,
@@ -95,6 +113,7 @@ data class AgentConfig(
         val PRIMARY: Map<String, AgentConfig> = linkedMapOf(
             "build" to BUILD,
             "plan" to PLAN,
+            "delegate" to DELEGATE,
             "explore" to explore(),
             "general" to general(),
         )

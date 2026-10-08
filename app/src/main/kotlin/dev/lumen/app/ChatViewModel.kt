@@ -30,6 +30,7 @@ import dev.spindle.core.store.SnapshotStore
 import dev.spindle.core.tool.ShellExecutor
 import dev.spindle.tool.HostShellExecutor
 import dev.spindle.core.agent.AgentLoop
+import dev.spindle.core.agent.Compaction
 import dev.spindle.core.agent.ContextBudget
 import dev.spindle.core.agent.PermissionGate
 import dev.spindle.core.agent.QuestionGate
@@ -43,6 +44,7 @@ import dev.spindle.core.model.Part
 import dev.spindle.core.model.PartId
 import dev.spindle.core.model.Role
 import dev.spindle.core.model.Session
+import dev.spindle.core.model.Snapshot
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.model.SessionState
 import dev.spindle.core.model.TodoItem
@@ -296,6 +298,26 @@ data class ChatState(
     val newTokens: Int = 0,
     /** Non-secret GitHub login, refreshed from [KeyStore.githubLogin]. */
     val githubLogin: String = "",
+    /**
+     * A just-applied revert that can still be undone (the pre-revert file image
+     * plus the change rows it dropped). Null once dismissed, expired or undone.
+     */
+    val lastRevert: RevertUndo? = null,
+    /** Auto-compaction threshold as a percentage of the model's window. */
+    val autoCompactPercent: Int = 80,
+    /** True once first-run setup is done; false shows the onboarding wizard. */
+    val onboarded: Boolean = false,
+)
+
+/**
+ * The pre-revert image of a file plus the change rows that reverting dropped,
+ * so a single tap can be taken back. The whole [Snapshot] is held because the
+ * snapshot store has no lookup-by-id; the explicit object (not `latest`) is what
+ * makes undo correct even if the agent edits the same path in between.
+ */
+data class RevertUndo(
+    val snapshot: Snapshot,
+    val dropped: List<FileEdit>,
 )
 
 /**
@@ -366,6 +388,8 @@ class ChatViewModel(
             askBeforeTools = keys.askBeforeTools,
             agentMode = keys.agentMode,
             maxCostUsd = keys.maxCostUsd,
+            autoCompactPercent = keys.autoCompactPercent,
+            onboarded = keys.onboarded,
             githubLogin = keys.githubLogin,
             models = initialModels,
             contextWindow = initialModels
@@ -375,6 +399,12 @@ class ChatViewModel(
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
     private var runJob: Job? = null
+
+    /** Auto-dismiss timer for the current revert-undo banner. */
+    private var revertUndoExpiry: Job? = null
+
+    /** Reverts are confirm-only until this timestamp (set after an undo). */
+    private var undoCooldownUntil: Long = 0L
 
     /**
      * The live streaming accumulator. Text deltas are appended to per-part
@@ -599,6 +629,61 @@ class ChatViewModel(
         val value = if (usd.isFinite() && usd > 0) usd else 0.0
         keys.maxCostUsd = value
         _state.value = _state.value.copy(maxCostUsd = value)
+    }
+
+    /** Set the auto-compaction threshold (percent of the model window). */
+    fun setAutoCompactPercent(percent: Int) {
+        val value = percent.coerceIn(50, 95)
+        keys.autoCompactPercent = value
+        _state.value = _state.value.copy(autoCompactPercent = value)
+    }
+
+    /** Finish first-run setup (or skip it) and never show the wizard again. */
+    fun completeOnboarding() {
+        keys.onboarded = true
+        _state.value = _state.value.copy(onboarded = true)
+    }
+
+    /** Record whether the user granted shared Downloads access to the sandbox. */
+    fun setDownloadsAccess(granted: Boolean) {
+        keys.downloadsAccess = granted
+    }
+
+    /**
+     * Launch housekeeping shown on the boot screen: prune sandbox temp/partial
+     * files. Best-effort and idempotent; resolves to a short status string.
+     */
+    suspend fun runStartupMaintenance(): String {
+        refreshLinuxEnvironment()
+        val env = debian ?: return "environment ready"
+        return try {
+            env.maintenance()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            "environment ready"
+        }
+    }
+
+    /**
+     * Fold the current session's history into a summary now. A no-op while a run
+     * is live (the loop holds the session mutex) or with no session/key.
+     */
+    fun compactNow() {
+        if (_state.value.busy) return
+        val current = _state.value.currentSessionId ?: return
+        val key = currentApiKey() ?: return
+        viewModelScope.launch {
+            val sid = SessionId(current)
+            try {
+                Compaction.compact(store, sid, keys.model, providersFor(keys.provider, key), bus)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                diag("compact failed: ${t.message}")
+            }
+            requestRebuild(sid)
+        }
     }
 
     /** Drop every pending prompt and wake its waiter with cancellation. */
@@ -1094,6 +1179,7 @@ class ChatViewModel(
                 canvasPath = null,
                 usage = Usage(),
                 changes = RunChanges.EMPTY,
+                lastRevert = null,
                 todos = emptyList(),
             )
             resetUsage()
@@ -1123,6 +1209,7 @@ class ChatViewModel(
                 busy = session?.state == SessionState.RUNNING,
                 usage = messages.fold(Usage()) { acc, m -> acc + m.usage },
                 changes = RunChanges.EMPTY,
+                lastRevert = null,
                 todos = loadTodos(sid),
                 // Restore a gate prompt that was hidden by navigating away mid-run.
                 ask = activeAsk?.ask,
@@ -1280,6 +1367,7 @@ class ChatViewModel(
                 steps = steps,
                 usage = messages.fold(Usage()) { acc, m -> acc + m.usage },
                 changes = RunChanges.EMPTY,
+                lastRevert = null,
                 error = null,
             )
             resetUsage()
@@ -2053,12 +2141,34 @@ class ChatViewModel(
         }
         viewModelScope.launch {
             val session = _state.value.currentSessionId ?: edit.sessionId.value
-            when (val result = Reverter.revertLatest(snapshots, SessionId(session), edit.path, workspace)) {
+            val sid = SessionId(session)
+            // Resolve the pre-edit image we intend to restore BEFORE recording
+            // the undo image: recording first would make `latest` point at the
+            // undo copy and silently turn the restore into a no-op.
+            val pre = snapshots.latest(sid, edit.path)
+            if (pre == null) {
+                _state.value = _state.value.copy(error = "revert failed: no snapshot")
+                return@launch
+            }
+            val dropped = _state.value.changes.edits.filter { it.path == edit.path }
+            val undo = captureUndo(edit, sid)
+            when (val result = Reverter.revert(pre, workspace)) {
                 is RevertResult.Restored -> {
+                    revertUndoExpiry?.cancel()
+                    val offerUndo = undo != null && System.currentTimeMillis() >= undoCooldownUntil
                     _state.value = _state.value.copy(
                         changes = RunChanges(edits = _state.value.changes.edits.filterNot { it.path == edit.path }),
+                        lastRevert = if (offerUndo) undo!!.copy(dropped = dropped) else null,
                         error = null,
                     )
+                    if (offerUndo) {
+                        revertUndoExpiry = viewModelScope.launch {
+                            delay(REVERT_UNDO_WINDOW_MS)
+                            if (_state.value.lastRevert?.snapshot?.id == undo!!.snapshot.id) {
+                                _state.value = _state.value.copy(lastRevert = null)
+                            }
+                        }
+                    }
                     scheduleSurfaceRefresh(setOf(edit.path))
                 }
                 is RevertResult.Failed -> _state.value =
@@ -2066,6 +2176,73 @@ class ChatViewModel(
             }
         }
     }
+
+    /**
+     * Take back the last revert: restore the pre-revert image and put the dropped
+     * change rows back. Uses the explicit [Snapshot] captured at revert time
+     * (never `latest`), so a newer agent edit cannot shadow it. Starts a cooldown
+     * during which further reverts are confirm-only.
+     */
+    fun undoRevert() {
+        val undo = _state.value.lastRevert ?: return
+        viewModelScope.launch {
+            when (val result = Reverter.revert(undo.snapshot, workspace)) {
+                is RevertResult.Restored -> {
+                    revertUndoExpiry?.cancel()
+                    undoCooldownUntil = System.currentTimeMillis() + REVERT_UNDO_COOLDOWN_MS
+                    _state.value = _state.value.copy(
+                        changes = RunChanges(
+                            edits = (_state.value.changes.edits + undo.dropped).sortedBy { it.at },
+                        ).bounded(),
+                        lastRevert = null,
+                        error = null,
+                    )
+                    scheduleSurfaceRefresh(setOf(undo.snapshot.path))
+                }
+                is RevertResult.Failed -> _state.value =
+                    _state.value.copy(error = "undo failed: ${result.reason}")
+            }
+        }
+    }
+
+    /** Dismiss the undo banner without undoing. */
+    fun dismissRevert() {
+        revertUndoExpiry?.cancel()
+        _state.value = _state.value.copy(lastRevert = null)
+    }
+
+    /**
+     * Read the current on-disk bytes of [edit]'s file into a fresh snapshot so a
+     * revert can be undone. Returns null when the file is absent (nothing to
+     * restore to) — never records an empty image that would resurrect a file.
+     */
+    private fun captureUndo(edit: FileEdit, sid: SessionId): RevertUndo? = try {
+        val base = workspace.normalize()
+        val target = base.resolve(edit.path).normalize()
+        if (!target.startsWith(base) || !target.toFile().isFile) {
+            null
+        } else {
+            val content = target.toFile().readText()
+            // Held in memory only: recording it in the shared snapshot store would
+            // make it the newest image for this path and poison the *next* revert.
+            val snap = Snapshot(
+                id = Ids.new("snap"),
+                sessionId = sid,
+                path = edit.path,
+                content = content,
+                sha256 = sha256(content),
+                createdAt = System.currentTimeMillis(),
+            )
+            RevertUndo(snap, emptyList())
+        }
+    } catch (t: Throwable) {
+        null
+    }
+
+    private fun sha256(text: String): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(text.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
 
     /** Open a changed file in the peek sheet (workspace-relative path). */
     fun openChangedFile(path: String) = openFile(path)
@@ -2411,7 +2588,10 @@ class ChatViewModel(
             }
             val loop = AgentLoop(
                 providers = providersFor(keys.provider, key),
-                tools = DefaultTools.registry(shell = shell ?: HostShellExecutor()),
+                // The external-directory tool is only useful when the host has
+                // granted roots; with none it always errors, so don't offer it.
+                tools = DefaultTools.registry(shell = shell ?: HostShellExecutor())
+                    .without(setOf("external-directory")),
                 store = store,
                 bus = bus,
                 permissions = permissionGate,
@@ -2424,7 +2604,9 @@ class ChatViewModel(
                 withContext(Dispatchers.IO) { runCatching { watcher?.start() } }
                 loop.prompt(
                     sid, text, keys.model, _state.value.agentMode,
-                    budget = ContextBudget(maxCostUsd = _state.value.maxCostUsd.takeIf { it > 0 }),
+                    budget = ContextBudget(
+                        maxCostUsd = _state.value.maxCostUsd.takeIf { it > 0 },
+                    ).apply { compactAtFraction = _state.value.autoCompactPercent / 100.0 },
                 )
                 diag("run finished")
             } catch (e: CancellationException) {
@@ -2530,6 +2712,12 @@ class ChatViewModel(
          * Older rows are dropped; the snapshot store keeps revert available.
          */
         const val MAX_RUN_CHANGES = 500
+
+        /** How long the post-revert undo banner stays tappable. */
+        private const val REVERT_UNDO_WINDOW_MS = 8_000L
+
+        /** After an undo, reverts are confirm-only for this long. */
+        private const val REVERT_UNDO_COOLDOWN_MS = 120_000L
 
         /**
          * Upper bound on cached subagent transcripts before the cache resets, so

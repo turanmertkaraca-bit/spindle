@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -32,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.data.ProviderCatalogue
+import kotlin.math.roundToInt
 
 private val Mono = FontFamily.Monospace
 
@@ -53,6 +55,12 @@ fun SettingsScreen(
     /** Per-session cost ceiling in USD; 0 means unlimited. */
     maxCostUsd: Double = 0.0,
     onMaxCost: (Double) -> Unit = {},
+    /** Active primary agent: "build" | "plan" | "delegate". */
+    agentMode: String = "build",
+    onAgentMode: (String) -> Unit = {},
+    /** Auto-compaction threshold percentage (50..95) of the model window. */
+    autoCompactPercent: Int = 80,
+    onAutoCompactPercent: (Int) -> Unit = {},
     /** Open the storage manager. */
     onStorage: () -> Unit = {},
     /** Open the diagnostics screen (Linux environment + event log). */
@@ -169,6 +177,22 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(LumenSpacing.xxl))
+        SectionTitle(colors, "agent")
+        Spacer(Modifier.height(LumenSpacing.sm))
+        Text(
+            "Delegate thinks more and talks less, handing work to subagents",
+            color = colors.dim,
+            fontFamily = Mono,
+            fontSize = LumenType.caption,
+        )
+        Spacer(Modifier.height(LumenSpacing.md))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            chip(colors, "build", agentMode == "build", "agent-build") { onAgentMode("build") }
+            chip(colors, "plan", agentMode == "plan", "agent-plan") { onAgentMode("plan") }
+            chip(colors, "delegate", agentMode == "delegate", "agent-delegate") { onAgentMode("delegate") }
+        }
+
+        Spacer(Modifier.height(LumenSpacing.xxl))
         SectionTitle(colors, "budget")
         Spacer(Modifier.height(LumenSpacing.sm))
         Text(
@@ -189,6 +213,26 @@ fun SettingsScreen(
             chip(colors, "\$2", maxCostUsd == 2.0, "budget-2") { onMaxCost(2.0) }
             chip(colors, "\$5", maxCostUsd == 5.0, "budget-5") { onMaxCost(5.0) }
         }
+
+        Spacer(Modifier.height(LumenSpacing.xxl))
+        SectionTitle(colors, "context")
+        Spacer(Modifier.height(LumenSpacing.sm))
+        Text(
+            "Auto-compact at $autoCompactPercent% of the model's context window",
+            color = colors.dim,
+            fontFamily = Mono,
+            fontSize = LumenType.caption,
+        )
+        Spacer(Modifier.height(LumenSpacing.sm))
+        Slider(
+            value = autoCompactPercent.toFloat(),
+            onValueChange = { onAutoCompactPercent(it.roundToInt()) },
+            valueRange = 50f..95f,
+            steps = 44,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("context-slider"),
+        )
 
         Spacer(Modifier.height(LumenSpacing.xxl))
         SectionTitle(colors, "tools")

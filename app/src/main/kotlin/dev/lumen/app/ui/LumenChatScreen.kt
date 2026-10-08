@@ -56,10 +56,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import dev.lumen.app.RevertUndo
+import kotlin.math.roundToInt
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -69,6 +73,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -296,6 +301,12 @@ fun LumenChatScreen(
     onOpenMention: ((String, Int?) -> Unit)? = null,
     /** Revert a changed file to its pre-edit snapshot. */
     onRevert: (FileEdit) -> Unit = {},
+    /** A just-applied revert that can still be undone; null hides the banner. */
+    lastRevert: RevertUndo? = null,
+    /** Take back the last revert. */
+    onUndoRevert: () -> Unit = {},
+    /** Dismiss the undo banner without undoing. */
+    onDismissRevert: () -> Unit = {},
     /** Workspace root handed to the pure [dev.spindle.core.refs.ReferenceResolver]. */
     cwd: String = "",
     /** Existence gate handed to the resolver: cwd-relative path -> is a file. */
@@ -352,6 +363,12 @@ fun LumenChatScreen(
     onAskBeforeTools: ((Boolean) -> Unit)? = null,
     /** Set the per-session cost ceiling from the quick settings sheet. */
     onMaxCost: ((Double) -> Unit)? = null,
+    /** Auto-compaction threshold percentage (50..95), shown in quick settings. */
+    autoCompactPercent: Int = 80,
+    /** Set the auto-compaction threshold percentage. */
+    onAutoCompactPercent: ((Int) -> Unit)? = null,
+    /** Fold the session's context now; null hides the action. */
+    onCompactNow: (() -> Unit)? = null,
     /** Open the full Settings screen from the quick settings footer. */
     onOpenFullSettings: (() -> Unit)? = null,
     /** Select a model ref (`provider/id`) from the quick settings sheet. */
@@ -373,7 +390,9 @@ fun LumenChatScreen(
             val resolver = context.contentResolver
             val mime = resolver.getType(uri) ?: "image/*"
             val bytes = runCatching { resolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
-            if (bytes != null && bytes.isNotEmpty()) {
+            // Cap the attachment so a huge image can't OOM the process; base64
+            // inflates it another ~33%, so 8 MiB raw is the ceiling.
+            if (bytes != null && bytes.isNotEmpty() && bytes.size <= 8 * 1024 * 1024) {
                 val name = uri.lastPathSegment?.substringAfterLast('/') ?: "image"
                 onAttachImage(name, mime, Base64.encodeToString(bytes, Base64.NO_WRAP))
             }
@@ -425,7 +444,10 @@ fun LumenChatScreen(
     // grows and the reader is already at the bottom. Keying on the last row's
     // body LENGTH (not just its id) is what makes a streaming answer follow: a
     // single assistant Part only grows its body, so id/count alone never change.
-    var followTail by remember { mutableStateOf(true) }
+    // Saveable so a detour to Files/Settings (or process death) restores whether
+    // the reader was following the tail; without this a returned reader is yanked
+    // to the bottom even though they had scrolled up. showNewCue stays ephemeral.
+    var followTail by rememberSaveable { mutableStateOf(true) }
     var showNewCue by remember { mutableStateOf(false) }
     LaunchedEffect(listState) {
         snapshotFlow {
@@ -632,6 +654,9 @@ fun LumenChatScreen(
             if (hint != null) {
                 HintNotice(hint, colors)
             }
+            lastRevert?.let { undo ->
+                UndoNotice(undo.snapshot.path, colors, onUndoRevert, onDismissRevert)
+            }
             if (changes.editCount > 0) {
                 ChangesCard(changes, colors, onRevert, onOpenFile)
             }
@@ -685,6 +710,12 @@ fun LumenChatScreen(
                 onTheme = onTheme,
                 onMaxCost = onMaxCost,
                 onAskBeforeTools = onAskBeforeTools,
+                agentMode = agentMode,
+                onAgentMode = onAgentMode,
+                autoCompactPercent = autoCompactPercent,
+                onAutoCompactPercent = onAutoCompactPercent,
+                onCompactNow = onCompactNow,
+                busy = busy,
                 onEditKey = onEditKey,
                 onOpenFullSettings = onOpenFullSettings,
                 onBrowseModels = onOpenModels,
@@ -1991,6 +2022,7 @@ private fun ChangesCard(
     val clipboard = LocalClipboardManager.current
     var expanded by remember { mutableStateOf(false) }
     var openFile by remember { mutableStateOf<String?>(null) }
+    var confirmRevert by remember { mutableStateOf<FileEdit?>(null) }
     val edge = colors.spectrum.getOrElse(2) { colors.water }
     val shape = LumenShapes.card
 
@@ -2064,7 +2096,7 @@ private fun ChangesCard(
                             color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                             modifier = Modifier
                                 .clip(LumenShapes.small)
-                                .clickable { edits.lastOrNull()?.let(onRevert) }
+                                .clickable { confirmRevert = edits.lastOrNull() }
                                 .padding(horizontal = 6.dp, vertical = 3.dp)
                                 .testTag("changes-revert-$path"),
                         )
@@ -2106,6 +2138,47 @@ private fun ChangesCard(
                 }
             }
         }
+    }
+    confirmRevert?.let { target ->
+        AlertDialog(
+            onDismissRequest = { confirmRevert = null },
+            containerColor = colors.surface,
+            titleContentColor = colors.fg,
+            textContentColor = colors.dim,
+            title = { Text("revert file?", fontFamily = Mono, fontSize = 14.sp, fontWeight = FontWeight.Medium) },
+            text = {
+                Text(
+                    "Restore ${target.path} to its snapshot and drop its change rows? " +
+                        "You can undo this for a few seconds.",
+                    fontFamily = Mono, fontSize = 12.sp, lineHeight = 17.sp,
+                )
+            },
+            confirmButton = {
+                Text(
+                    "revert",
+                    color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(LumenShapes.small)
+                        .clickable {
+                            onRevert(target)
+                            confirmRevert = null
+                        }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .testTag("changes-revert-confirm"),
+                )
+            },
+            dismissButton = {
+                Text(
+                    "cancel",
+                    color = colors.dim, fontFamily = Mono, fontSize = 12.sp,
+                    modifier = Modifier
+                        .clip(LumenShapes.small)
+                        .clickable { confirmRevert = null }
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .testTag("changes-revert-cancel"),
+                )
+            },
+        )
     }
 }
 
@@ -2400,6 +2473,11 @@ private fun Composer(
                     AgentModeChip("build", "agent-build", agentMode == "build", colors.water, colors, onAgentMode)
                     Spacer(Modifier.width(5.dp))
                     AgentModeChip("plan", "agent-plan", agentMode == "plan", colors.accent, colors, onAgentMode)
+                    Spacer(Modifier.width(5.dp))
+                    AgentModeChip(
+                        "delegate", "agent-delegate", agentMode == "delegate",
+                        colors.spectrum.getOrElse(3) { colors.accent }, colors, onAgentMode,
+                    )
                     val modelLabel = model.substringAfterLast('/')
                     if (onModel != null && modelLabel.isNotBlank()) {
                         Spacer(Modifier.width(5.dp))
@@ -2624,6 +2702,41 @@ private fun HintNotice(message: String, colors: LumenColors) {
             message, color = colors.faint, fontFamily = FontFamily.Default, fontSize = 11.5.sp,
             maxLines = 2, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f).testTag("composer-notice"),
+        )
+    }
+}
+
+/** A brief, post-revert offer to take the revert back. */
+@Composable
+private fun UndoNotice(path: String, colors: LumenColors, onUndo: () -> Unit, onDismiss: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "reverted $path",
+            color = colors.dim, fontFamily = Mono, fontSize = 11.5.sp,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).testTag("changes-undo"),
+        )
+        Text(
+            "undo",
+            color = colors.accent, fontFamily = Mono, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
+            modifier = Modifier
+                .clip(LumenShapes.small)
+                .clickable { onUndo() }
+                .padding(horizontal = 6.dp, vertical = 3.dp)
+                .testTag("changes-undo-action"),
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            "\u00d7",
+            color = colors.faint, fontFamily = Mono, fontSize = 13.sp,
+            modifier = Modifier
+                .clip(LumenShapes.pill)
+                .clickable { onDismiss() }
+                .padding(horizontal = 5.dp, vertical = 1.dp)
+                .testTag("changes-undo-dismiss"),
         )
     }
 }
@@ -2862,6 +2975,12 @@ private fun QuickSettingsSheet(
     onTheme: ((String) -> Unit)?,
     onMaxCost: ((Double) -> Unit)?,
     onAskBeforeTools: ((Boolean) -> Unit)?,
+    agentMode: String = "build",
+    onAgentMode: ((String) -> Unit)? = null,
+    autoCompactPercent: Int = 80,
+    onAutoCompactPercent: ((Int) -> Unit)? = null,
+    onCompactNow: (() -> Unit)? = null,
+    busy: Boolean = false,
     onEditKey: (() -> Unit)?,
     onOpenFullSettings: (() -> Unit)?,
     onBrowseModels: (() -> Unit)? = null,
@@ -2967,12 +3086,48 @@ private fun QuickSettingsSheet(
             }
 
             Spacer(Modifier.height(18.dp))
+            QuickLabel("agent", colors)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                QuickChip("build", agentMode == "build", "quick-agent-build", colors) { onAgentMode?.invoke("build") }
+                QuickChip("plan", agentMode == "plan", "quick-agent-plan", colors) { onAgentMode?.invoke("plan") }
+                QuickChip("delegate", agentMode == "delegate", "quick-agent-delegate", colors) {
+                    onAgentMode?.invoke("delegate")
+                }
+            }
+
+            Spacer(Modifier.height(18.dp))
             QuickLabel("budget", colors)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 QuickChip("off", budgetUsd <= 0.0, "quick-budget-off", colors) { onMaxCost?.invoke(0.0) }
                 QuickChip("\$0.50", budgetUsd == 0.5, "quick-budget-050", colors) { onMaxCost?.invoke(0.5) }
                 QuickChip("\$2", budgetUsd == 2.0, "quick-budget-2", colors) { onMaxCost?.invoke(2.0) }
                 QuickChip("\$5", budgetUsd == 5.0, "quick-budget-5", colors) { onMaxCost?.invoke(5.0) }
+            }
+
+            Spacer(Modifier.height(18.dp))
+            QuickLabel("context", colors)
+            Text(
+                "auto-compact at $autoCompactPercent% of the model window",
+                color = colors.dim, fontFamily = Mono, fontSize = LumenType.caption,
+            )
+            Slider(
+                value = autoCompactPercent.toFloat(),
+                onValueChange = { onAutoCompactPercent?.invoke(it.roundToInt()) },
+                valueRange = 50f..95f,
+                steps = 44,
+                modifier = Modifier.fillMaxWidth().testTag("quick-context-compact"),
+            )
+            if (onCompactNow != null && !busy) {
+                Text(
+                    "compact now",
+                    color = colors.accent, fontFamily = Mono, fontSize = LumenType.body,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier
+                        .clip(LumenShapes.small)
+                        .clickable { onCompactNow() }
+                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                        .testTag("quick-compact-now"),
+                )
             }
 
             Spacer(Modifier.height(18.dp))

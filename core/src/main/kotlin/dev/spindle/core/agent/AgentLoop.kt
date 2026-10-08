@@ -183,7 +183,7 @@ class AgentLoop(
                 step++
 
                 // ---- context policy: trim/compact before we build the request ----
-                val decision = evaluateOverflow(sessionId, model.contextWindow, active, system)
+                val decision = evaluateOverflow(sessionId, model.contextWindow, budget, active, system)
                 if (decision.action != OverflowAction.NONE) {
                     bus.emit(AgentEvent.StateChanged(sessionId, SessionState.RUNNING))
                 }
@@ -239,9 +239,9 @@ class AgentLoop(
 
                 // ---- stream with retry on transient failures ----
                 try {
-                    Retry.withRetry(
-                        maxRetries = agent.maxRetries,
-                        onRetry = { attempt, err ->
+                    Retry.withResilientRetry(
+                        fatalRetries = agent.maxRetries,
+                        onRetry = { attempt, err, _ ->
                             // The previous attempt already streamed deltas for the
                             // text/reasoning parts into the UI. Retract them before
                             // the next attempt emits anything, otherwise the UI
@@ -250,12 +250,15 @@ class AgentLoop(
                             // the bus ahead of the retried attempt's first delta.
                             bus.emit(AgentEvent.PartReset(sessionId, assistant.id.value, textPartId))
                             bus.emit(AgentEvent.PartReset(sessionId, assistant.id.value, reasoningPartId))
-                            bus.emit(
-                                AgentEvent.Error(
-                                    sessionId,
-                                    "retrying (${attempt}/${agent.maxRetries}) after: ${err.message}",
-                                ),
-                            )
+                            // A dropped link is not the user's failure: say we are
+                            // waiting to reconnect, not that the run errored.
+                            val network = Retry.isNetwork(err.message ?: "")
+                            val note = if (network) {
+                                "network unavailable — waiting to reconnect (attempt $attempt)"
+                            } else {
+                                "retrying (attempt $attempt/${agent.maxRetries}) after: ${err.message}"
+                            }
+                            bus.emit(AgentEvent.Error(sessionId, note))
                         },
                     ) {
                         text.setLength(0); reasoning.setLength(0); calls.clear()
@@ -435,6 +438,7 @@ class AgentLoop(
     private suspend fun evaluateOverflow(
         sessionId: SessionId,
         contextWindow: Int,
+        budget: ContextBudget,
         active: ToolRegistry,
         system: String,
     ): OverflowDecision {
@@ -457,7 +461,9 @@ class AgentLoop(
         }
         val schemaChars = active.specs.sumOf { it.parametersJson.length + it.description.length }
         val est = TokenEstimator.estimate("x".repeat(sysChars), msgChars.map { "x".repeat(it) }, schemaChars)
-        return Overflow.decide(est, contextWindow, open)
+        val compactAt = (budget.compactAtFraction ?: Overflow.COMPACT_AT).coerceIn(0.5, 0.98)
+        val trimAt = (compactAt - 0.12).coerceAtLeast(0.4)
+        return Overflow.decide(est, contextWindow, open, compactAt, trimAt)
     }
 
     private suspend fun budgetCheck(
@@ -659,6 +665,7 @@ class AgentLoop(
      */
     private fun systemPrompt(base: String, cwd: Path, extraRules: String?): String {
         val builder = StringBuilder(base)
+        builder.append("\n\n").append(FILE_ACCESS_NOTICE)
         val projectRules = readProjectRules(cwd)
         if (projectRules.isNotBlank()) {
             builder.append("\n\n## Project rules\n\n").append(projectRules)
@@ -764,6 +771,11 @@ class AgentLoop(
     internal companion object {
         const val COMPACT_MARKER = "[compacted]"
         const val AGENTS_FILE = "AGENTS.md"
+        /** Injected into every agent's system prompt (incl. subagents). */
+        const val FILE_ACCESS_NOTICE =
+            "File access is limited to the current working directory and its " +
+                "subdirectories. If you need the user to see or use a specific file, " +
+                "ensure it is placed within this accessible directory."
         const val MAX_RULES_CHARS = 8_192
         const val MAX_METADATA_VALUE_CHARS = 8_192
         const val DURATION_KEY = "durationMs"

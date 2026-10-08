@@ -72,8 +72,7 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
                 .redirectErrorStream(true)
 
             builder.environment().apply {
-                remove("JAVA_TOOL_OPTIONS")
-                remove("_JAVA_OPTIONS")
+                scrubHostEnv(this)
                 put("TERM", "dumb")
                 if (ready) {
                     put("PATH", environment.shellPath())
@@ -130,8 +129,7 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
                 .redirectErrorStream(true)
 
             builder.environment().apply {
-                remove("JAVA_TOOL_OPTIONS")
-                remove("_JAVA_OPTIONS")
+                scrubHostEnv(this)
                 put("TERM", "xterm-256color")
                 if (ready) {
                     put("PATH", environment.shellPath())
@@ -146,6 +144,16 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
             ProcessPtySession(builder.start())
         } catch (t: Throwable) {
             null
+        }
+    }
+
+    /** Drop Java/host secrets the app process may carry before spawning a shell. */
+    private fun scrubHostEnv(env: MutableMap<String, String>) {
+        val suffixes = listOf("_TOKEN", "_KEY", "_SECRET", "_PASSWORD", "_PASSWD", "_CREDENTIAL")
+        env.keys.removeAll { key ->
+            val upper = key.uppercase()
+            key == "JAVA_TOOL_OPTIONS" || key == "_JAVA_OPTIONS" || key == "GITHUB_TOKEN" ||
+                suffixes.any { upper.endsWith(it) }
         }
     }
 

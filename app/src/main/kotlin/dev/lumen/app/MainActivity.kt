@@ -1,10 +1,18 @@
 package dev.lumen.app
 
+import android.Manifest
 import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -16,13 +24,17 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.lumen.app.ui.BootScreen
 import dev.lumen.app.ui.CanvasScreen
 import dev.lumen.app.ui.DiagnosticsScreen
 import dev.lumen.app.ui.FilesScreen
@@ -32,6 +44,7 @@ import dev.lumen.app.ui.KeyScreen
 import dev.lumen.app.ui.LumenChatScreen
 import dev.lumen.app.ui.LumenColors
 import dev.lumen.app.ui.ModelPickerScreen
+import dev.lumen.app.ui.OnboardingScreen
 import dev.lumen.app.ui.SettingsScreen
 import dev.lumen.app.ui.StorageScreen
 import dev.lumen.app.ui.TerminalScreen
@@ -75,6 +88,30 @@ class MainActivity : ComponentActivity() {
             var canvasReturn by rememberSaveable { mutableStateOf("chat") }
             // The route to return to when leaving the full model picker.
             var modelsReturn by rememberSaveable { mutableStateOf("settings") }
+            // Preserves per-screen rememberSaveable state while the exclusive
+            // `when` below swaps branches, so the chat timeline keeps its scroll
+            // offset when the user detours to Files/Settings and back. Chat is
+            // keyed by session so each conversation keeps its own position.
+            val saveableStateHolder = rememberSaveableStateHolder()
+            // Launch maintenance splash: prune the sandbox, then show the app.
+            var booted by rememberSaveable { mutableStateOf(false) }
+            var bootMessage by remember { mutableStateOf("preparing environment…") }
+            val appContext = LocalContext.current
+            val storagePermission = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission(),
+            ) { granted -> viewModel.setDownloadsAccess(granted) }
+            val requestBatteryExemption: () -> Unit = {
+                runCatching {
+                    val pm = appContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                    if (pm != null && !pm.isIgnoringBatteryOptimizations(appContext.packageName)) {
+                        appContext.startActivity(
+                            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                                .setData(Uri.parse("package:${appContext.packageName}")),
+                        )
+                    }
+                }
+                Unit
+            }
             val onChat = route == "chat" && state.currentSessionId != null
 
             // Open the canvas only when the page resolved; a refused path stays put.
@@ -89,6 +126,11 @@ class MainActivity : ComponentActivity() {
             // Pull the live catalogue once on start; the embedded snapshot is
             // already seeded in state so the UI is never empty offline.
             LaunchedEffect(Unit) { viewModel.refreshModels() }
+            // Boot housekeeping once per launch; idempotent and never fatal.
+            LaunchedEffect(Unit) {
+                bootMessage = viewModel.runStartupMaintenance()
+                booted = true
+            }
 
             BackHandler(enabled = route != "home" || state.currentSessionId != null) {
                 when {
@@ -121,19 +163,39 @@ class MainActivity : ComponentActivity() {
             }
 
             val modifier = Modifier.fillMaxSize().systemBarsPadding()
-            if (state.needsKey) {
-                KeyScreen(
+            if (!booted) {
+                BootScreen(colors, bootMessage, modifier)
+            } else if (!state.onboarded) {
+                OnboardingScreen(
                     colors = colors,
-                    onSubmit = { provider, key ->
-                        viewModel.saveKey(provider, key)
+                    linux = state.linux,
+                    onInstallDebian = viewModel::installDebian,
+                    onRequestBattery = requestBatteryExemption,
+                    onRequestDownloads = {
+                        storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    },
+                    onAddKey = {
+                        viewModel.completeOnboarding()
+                        route = "key"
+                    },
+                    onFinish = {
+                        viewModel.completeOnboarding()
                         route = "home"
                     },
+                    modifier = modifier,
+                )
+            } else {
+                val screenKey = if (onChat) "chat:${state.currentSessionId}" else route
+                saveableStateHolder.SaveableStateProvider(screenKey) {
+                    when {
+                onChat && state.needsKey -> KeyScreen(
+                    colors = colors,
+                    onSubmit = { provider, key -> viewModel.saveKey(provider, key) },
                     modifier = modifier,
                     onToggleTheme = toggleTheme,
                     initialProvider = state.provider,
                     initialKey = viewModel.currentApiKey(),
                 )
-            } else when {
                 onChat -> LumenChatScreen(
                     steps = state.steps,
                     input = state.input,
@@ -197,6 +259,9 @@ class MainActivity : ComponentActivity() {
                     onClosePeek = viewModel::closePeek,
                     onOpenFile = viewModel::openFile,
                     onRevert = viewModel::revert,
+                    lastRevert = state.lastRevert,
+                    onUndoRevert = viewModel::undoRevert,
+                    onDismissRevert = viewModel::dismissRevert,
                     cwd = viewModel.workspacePath,
                     exists = viewModel::fileExists,
                     touchedPaths = state.changes.byFile().keys,
@@ -221,6 +286,9 @@ class MainActivity : ComponentActivity() {
                     askBeforeTools = state.askBeforeTools,
                     onAskBeforeTools = viewModel::setAskBeforeTools,
                     onMaxCost = viewModel::setMaxCost,
+                    autoCompactPercent = state.autoCompactPercent,
+                    onAutoCompactPercent = viewModel::setAutoCompactPercent,
+                    onCompactNow = viewModel::compactNow,
                     onOpenFullSettings = {
                         quickSettings = false
                         route = "settings"
@@ -344,6 +412,10 @@ class MainActivity : ComponentActivity() {
                     onAskBeforeTools = viewModel::setAskBeforeTools,
                     maxCostUsd = state.maxCostUsd,
                     onMaxCost = viewModel::setMaxCost,
+                    autoCompactPercent = state.autoCompactPercent,
+                    onAutoCompactPercent = viewModel::setAutoCompactPercent,
+                    agentMode = state.agentMode,
+                    onAgentMode = viewModel::setAgentMode,
                     onStorage = { route = "storage" },
                     onDiagnostics = { route = "diagnostics" },
                     onGitHub = { route = "github" },
@@ -423,7 +495,9 @@ class MainActivity : ComponentActivity() {
                     onStorage = { route = "storage" },
                     onGitHub = { route = "github" },
                 )
-            }
+                    }             // close when
+                }                 // close SaveableStateProvider
+            }                     // close else
         }
     }
 }

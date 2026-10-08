@@ -146,6 +146,8 @@ class LumenChatScreenTest {
 
         compose.onNodeWithTag("changes-revert-RopeLayout.kt", useUnmergedTree = true).performClick()
         compose.waitForIdle()
+        compose.onNodeWithTag("changes-revert-confirm", useUnmergedTree = true).performClick()
+        compose.waitForIdle()
         assertEquals("RopeLayout.kt", reverted?.path)
 
         compose.onNodeWithTag("changes-file-StepMapper.kt", useUnmergedTree = true).performClick()
