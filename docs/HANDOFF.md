@@ -2,11 +2,11 @@
 
 Native Android agent app on the `spindle` engine. Repo
 `turanmertkaraca-bit/spindle`, branch `main`, package `dev.lumen.app`.
-Latest code HEAD = `7208586`, version **0.1.3** (`versionCode 4`). CI
-(`.github/workflows/ci.yml`) is **green at `7208586`** on both jobs (`jvm
-backend` + `android app (robolectric)`). A docs-only commit may sit on top of
-it; always re-verify CI by sha with the `ci.sh` poll in §4 before trusting a
-build. Current debug APK (0.1.3) is on device at
+Latest code HEAD = `8da240e`, version **0.1.3** (`versionCode 4`; not bumped
+this wave). CI (`.github/workflows/ci.yml`) is **green at `8da240e`** on both
+jobs (`jvm backend` + `android app (robolectric)`). A docs-only commit sits on
+top of it; always re-verify CI by sha with the `ci.sh` poll in §4 before
+trusting a build. Current debug APK (0.1.3) is on device at
 `/storage/emulated/0/Download/lumen-debug.apk`.
 
 ```
@@ -17,13 +17,13 @@ build. Current debug APK (0.1.3) is on device at
 
 ## 0. Your task right now
 
-This session finished the 0.1.3 native wave: composer send target, mention
-taps, the live model catalogue + full-screen picker, actionable file mentions,
-the sandbox guest cwd fix, and a non-chat UI rework (§1). No fresh owner
-symptoms were pasted into this handoff. Next steps are the **open gaps in §2** —
-chiefly external-URL mentions are still not tappable, Files does not hot-refresh
-new scripts-created directories, and multi-session-from-UI is unbuilt. First
-confirm CI by sha, then follow the workflow the owner expects:
+The 0.1.3 "resilience + onboarding" wave is landed and CI-green at `8da240e`
+(§1). It closed the biggest owner complaints: chat scroll restoration, revert
+undo, no-interrupt networking, first-run setup + launch maintenance, sandbox
+hardening, tappable external URLs, and Files directory hot-refresh. No fresh
+owner symptoms were pasted into this handoff. Next steps are the **open gaps in
+§2** — chiefly multi-session-from-UI and the on-device perf sweep. First confirm
+CI by sha, then follow the workflow the owner expects:
 
 1. **Reproduce visually first.** Every screen is rendered to PNGs by CI in
    light+dark. Fetch the `lumen-screenshots` artifact, and actually look at the
@@ -35,6 +35,11 @@ confirm CI by sha, then follow the workflow the owner expects:
 4. Commit, push, poll CI to green, fetch screenshots again, iterate.
 
 ### Likely residual issues (verify against screenshots before coding)
+- **Onboarding/boot on a real device.** The wizard and boot splash are verified
+  only by Robolectric screenshots; check the Debian install progress and the
+  battery/storage permission prompts on-device.
+- **Network resilience timing.** `Retry.withResilientRetry` waits out a dropped
+  link indefinitely; verify on-device with a real wifi→hotspot switch.
 - **Dark-theme boundary contrast.** `outline` (dark `0xFF2E2E36`, light
   `0xFFD5D5DC`) and the raised `surface` (`0xFF141418`) were tuned; check panels
   still read as distinct layers, not one flat field. `LumenColors` lives in
@@ -46,7 +51,56 @@ confirm CI by sha, then follow the workflow the owner expects:
 
 ## 1. What's done (recent, in force)
 
-### Last session — `7208586` wave (0.1.3)
+### Last session — `8da240e` wave (0.1.3, unreleased)
+- **Chat scroll restoration** (`MainActivity` + `LumenChatScreen`): the screen
+  `when` is wrapped in a session-keyed `rememberSaveableStateHolder`, and
+  `followTail` is `rememberSaveable`. Leaving to Files/Settings (or backgrounding)
+  and returning restores the reader's position instead of snapping to the top;
+  the streaming/viewport re-pins and the "don't yank a scrolled-up reader"
+  behavior are intact.
+- **No-interrupt networking** (`Retry.withResilientRetry`, `AgentLoop`): a
+  connectivity failure (wifi drop, hotspot switch, DNS gone) is retried
+  indefinitely with capped backoff and a "network unavailable — waiting to
+  reconnect" notice; only a fatal provider rejection (auth/context/filter) or
+  the user's stop ends a run. New `RetryTest` cases cover classification and the
+  patient loop.
+- **Revert safety** (`ChatViewModel.revert`/`undoRevert`/`dismissRevert`,
+  `ChangesCard` + `UndoNotice`): a confirm dialog, then an 8s undo banner; after
+  an undo, reverts are confirm-only for 2 minutes. The undo image is held in
+  memory, never `SnapshotStore.record`ed, so it cannot poison the next revert.
+- **First-run onboarding + launch maintenance** (`ui/OnboardingScreen.kt`,
+  `BootScreen`, `DebianEnvironment.maintenance`): a per-launch boot splash
+  prunes proot temp/partials; the wizard walks welcome → sandbox install →
+  battery/storage permissions → API key last (the only skippable step). The hard
+  API-key wall is relaxed: Files/Terminal/Settings work without a key; only chat
+  asks for one (`onChat && state.needsKey -> KeyScreen`).
+- **Sandbox hardening** (`DebianEnvironment`): shared Downloads is bound only
+  when the runtime storage permission is granted; inherited process env is
+  scrubbed of host secrets; the downloaded rootfs SHA-256 is verified before
+  extraction.
+- **Delegate agent mode + auto-compaction slider** (`AgentConfig.DELEGATE`,
+  `ContextBudget.compactAtFraction`): build/plan/delegate chips in the composer
+  and quick settings; a percentage slider (50–95) sets auto-compaction as a
+  fraction of the model window; plus a "compact now" action.
+- **GitHub activity view** (`platform/GitActivity.kt`,
+  `GitRunner.activity`/`commitDiff`, `ChatState.gitActivity`): read-only local
+  repo branch/remote/dirty/recent commits with tap-to-expand diffs; the token is
+  never passed to the read commands.
+- **Tappable external URLs** (`MarkdownText` `URL_TAG` + `onOpenUrl` →
+  `WorkspaceActions.openUrl` → `ChatViewModel.openExternalUrl`): markdown links
+  and bare http(s) URLs open in the browser; inline-code URLs stay inert.
+- **Files directory hot-refresh** (`WorkspaceWatcher.snapshotDirs`,
+  `ChatViewModel.filesDirAffectedBy`): a newly created (even empty) directory
+  refreshes the open folder without re-entering the tab; directory paths are
+  refresh signals only and never become change rows.
+- **Settings/Quick-settings/Home grounding** (`LumenTokens.LumenSectionHeader`):
+  one shared header treatment + captions across both settings surfaces; Home
+  section labels; screenshot scenes for onboarding/boot.
+- **App-wide fixes**: run notification opens the app and has a Stop action; the
+  inert `external-directory` tool is no longer offered; image attach capped at
+  8 MiB; `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` + an onboarding action.
+
+### Previous session — `7208586` wave (0.1.3)
 - **Composer send target** (`38692fa`): the composer's secondary controls
   (attach, build/plan, model chip, key/gear/theme) now live in a weighted,
   horizontally scrollable track, so the send/stop button is measured first and
@@ -105,25 +159,26 @@ confirm CI by sha, then follow the workflow the owner expects:
 
 ## 2. What's left (open work / known gaps, honest)
 
-- **External-URL mentions are still not tappable.** The `:core` resolver ignores
-  any token containing `://` (`ReferenceResolver.kt:151` rejects `//` and
-  `://`), so `https://…` in assistant text never becomes a link.
-- **Files does not hot-refresh new *directories* created by scripts while the
-  tab is open.** Entries refresh on direct/indirect writes, but the parent list
-  only re-lists when the tab is re-entered. New files show; new directories need
-  a re-list.
-- **Multi-session from the UI** — engine allows it (per-session mutex); UI still
-  drives one chat at a time.
+- **Multi-session from the UI** — the engine allows it (per-session mutex) and a
+  run keeps going when you leave its chat, but the UI drives one chat at a time
+  and only the *current* session receives live streaming deltas; returning to a
+  running session rebuilds from the store rather than resuming the live stream.
+  Watching/streaming two sessions at once is unbuilt.
+- **On-device verification of the new flows** — the boot splash, onboarding
+  wizard, battery/storage permission prompts, the resilient-retry behavior on a
+  real wifi→hotspot switch, and the revert undo banner are only CI/Robolectric
+  verified so far.
 - **APK install requires "install unknown apps"** granted at runtime; the first
   tap routes to `ACTION_MANAGE_UNKNOWN_APP_SOURCES` and the user must tap again
   (`WorkspaceActions.installApk`).
 - **`m15` on-device perf/ANR sweep** — JVM stress is PASS; on-device
   (ART/ANR/thermal, long-session heap/fd/DB/WAL) is **pending/unverified**.
-- **Host opt-in for `json_schema`** and **`external-directory`** — engine works,
-  but no host (`:cli`/`:app`/`:server`) sets `responseFormat` or granted roots,
-  so neither is reachable from the UI yet.
+- **Host opt-in for `json_schema`** — engine works, but no host
+  (`:cli`/`:app`/`:server`) sets `responseFormat`, so it is not reachable from the
+  UI yet. (`external-directory` is now simply not offered by the app, since no
+  roots are ever granted.)
 - **Git commit/push automation is NOT built** (GitHub = PAT connect + status +
-  clone/open only; no OAuth).
+  clone/open + the new read-only local activity view; no OAuth).
 - Non-goals: OAuth, local models, MCP, LSP, plugins/marketplace.
 
 ## 3. How to work here (saves tokens)
@@ -166,17 +221,31 @@ confirm CI by sha, then follow the workflow the owner expects:
   `data/ProviderCatalogue.kt` (embedded snapshot), `ui/ModelPickerScreen.kt`
   (route `"models"`), wired in `ChatViewModel` (`ChatState.models`,
   `refreshModels`) and `LumenApp` (`applicationScope.refreshAll()`).
-- Mentions: `:core` `refs/ReferenceResolver.kt`; app render/tap in
-  `ui/MarkdownText.kt`; dispatch in `MainActivity.kt`; system actions in
-  `platform/WorkspaceActions.kt`.
-- Files/editor/changes: `ui/FilesScreen.kt`, `platform/WorkspaceWatcher.kt`,
-  `ChatViewModel.kt` (`fileKind`, `openFileInFiles`, `editFile`, `scheduleSurfaceRefresh`).
+- Mentions + links: `:core` `refs/ReferenceResolver.kt` (file refs; still
+  rejects `://`); app render/tap in `ui/MarkdownText.kt` (`FILE_TAG` for file
+  refs, `URL_TAG` for external links; `onOpenFile` vs `onOpenUrl`); dispatch in
+  `MainActivity.kt`; system actions in `platform/WorkspaceActions.kt`
+  (`installApk`, `openExternally`, `openUrl`).
+- Files/editor/changes: `ui/FilesScreen.kt`, `platform/WorkspaceWatcher.kt`
+  (`snapshot` = files, `snapshotDirs` = directories),
+  `ChatViewModel.kt` (`fileKind`, `openFileInFiles`, `editFile`,
+  `filesDirAffectedBy` (folder + descendants), `scheduleSurfaceRefresh`).
+- Resilience: `:core` `agent/Retry.kt` (`isRetryable`, `isNetwork`,
+  `withResilientRetry`), used in `AgentLoop` around `provider.stream`.
+- Onboarding/maintenance: `ui/OnboardingScreen.kt` (`OnboardingScreen`,
+  `BootScreen`), `ChatViewModel.runStartupMaintenance`/`completeOnboarding`,
+  `DebianEnvironment.maintenance`, `KeyStore.onboarded`.
+- GitHub activity: `platform/GitActivity.kt`, `GitRunner.activity`/`commitDiff`,
+  `ui/GitHubScreen.kt` `ActivitySection`, `ChatViewModel.refreshGitActivity`.
 - Sandbox guest cwd: `platform/DebianEnvironment.kt` (`prootArgv`, `guestProcess`)
   — the guest starts in the bound session cwd.
 - Tests that pin behavior live under `app/src/test/kotlin/dev/lumen/app/**`
   (`LumenChatScreenTest`, `StepMapper*`, `KeyScreenTest`, `ScreenshotTest`,
   `ModelCatalogueTest`, `ModelPickerScreenTest`, `MentionActionTest`,
-  `WorkspaceActionsTest`, `DebianEnvironmentTest`, …).
+  `MarkdownMentionTest`, `RevertTest`, `SurfaceRefreshTest`,
+  `WorkspaceWatcherTest`, `GitRunnerTest`, `GitHubScreenTest`,
+  `GitActivityViewModelTest`, `WorkspaceActionsTest`, `DebianEnvironmentTest`,
+  …) plus core `agent/RetryTest` for the resilient retry.
 
 ## 4. Build / test / CI / artifacts (exact)
 
@@ -238,6 +307,17 @@ Stress: `OPENROUTER_API_KEY=… ./gradlew :cli:stress --args="--turns 25 --max-s
   `resetMain()`, then drain the Robolectric main looper (`6e62605`).
 - **`outline` vs `rule`:** `outline` is the opaque boundary; `rule` is a
   translucent wash/fill. Don't use `rule` for borders.
+- **Runs are never interrupted by the app** — only the user's stop (or a fatal
+  provider rejection) ends a run. Transient/connectivity failures go through
+  `Retry.withResilientRetry`; never downgrade this to a bounded retry that gives
+  up on a dropped link.
+- **Revert undo images stay in memory** (`RevertUndo`), never
+  `SnapshotStore.record`ed, or they become the newest `(session, path)` image and
+  poison the next revert.
+- **External URLs are annotated separately** (`URL_TAG`) from file references, so
+  `ReferenceResolver` keeps rejecting `://` and file refs stay cwd-gated.
+- **Watcher directory paths are refresh signals only** — `absorbIndirect` must
+  filter them out of change rows (`File.isFile` gate).
 - `PartReset` must stay mirrored in `:server` `WireEvent` + app `StepMapper`.
 
 ## 6. Docs index
