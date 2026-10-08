@@ -45,6 +45,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -439,7 +440,7 @@ fun LumenChatScreen(
     /** Switch theme from the quick settings sheet. */
     onTheme: ((String) -> Unit)? = null,
     /** Active palette: "prism" | "ember" | "phosphor" | "abyss". */
-    palette: String = "prism",
+    palette: String = "abyss",
     /** Switch palette from the quick settings sheet. */
     onPalette: (String) -> Unit = {},
     /** Whether every tool asks for confirmation first. */
@@ -2542,7 +2543,8 @@ private fun Composer(
                 BasicTextField(
                     value = input,
                     onValueChange = onInput,
-                    singleLine = true,
+                    singleLine = false,
+                    maxLines = 6,
                     textStyle = LocalTextStyle.current.copy(color = colors.fg, fontFamily = Mono, fontSize = 14.sp),
                     cursorBrush = SolidColor(colors.water),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
@@ -2572,11 +2574,6 @@ private fun Composer(
                     AgentModeChip("build", "agent-build", agentMode == "build", colors.water, colors, onAgentMode)
                     Spacer(Modifier.width(5.dp))
                     AgentModeChip("plan", "agent-plan", agentMode == "plan", colors.accent, colors, onAgentMode)
-                    Spacer(Modifier.width(5.dp))
-                    AgentModeChip(
-                        "delegate", "agent-delegate", agentMode == "delegate",
-                        colors.spectrum.getOrElse(3) { colors.accent }, colors, onAgentMode,
-                    )
                     val modelLabel = model.substringAfterLast('/')
                     if (onModel != null && modelLabel.isNotBlank()) {
                         Spacer(Modifier.width(5.dp))
@@ -2593,36 +2590,48 @@ private fun Composer(
                     }
                     Spacer(Modifier.width(6.dp))
                     if (onEditKey != null) {
-                        Text(
-                            "key", color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp,
-                            modifier = Modifier
+                        Box(
+                            Modifier
+                                .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
                                 .clip(LumenShapes.small)
                                 .clickable { onEditKey() }
-                                .padding(horizontal = 4.dp, vertical = 2.dp)
                                 .testTag("key"),
-                        )
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "key", color = colors.faint, fontFamily = Mono, fontSize = 11.5.sp,
+                            )
+                        }
                     }
                     if (onQuickSettings != null) {
-                        Text(
-                            "\u2699", color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
-                            modifier = Modifier
+                        Box(
+                            Modifier
+                                .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
                                 .clip(LumenShapes.small)
                                 .clickable { onQuickSettings() }
                                 .semantics { contentDescription = "Settings" }
-                                .padding(horizontal = 4.dp, vertical = 2.dp)
                                 .testTag("chat-settings"),
-                        )
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "\u2699", color = colors.faint, fontFamily = Mono, fontSize = 15.sp,
+                            )
+                        }
                     }
                     if (onToggleTheme != null) {
-                        Text(
-                            "◐", color = colors.faint, fontFamily = Mono, fontSize = 13.sp,
-                            modifier = Modifier
+                        Box(
+                            Modifier
+                                .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
                                 .clip(LumenShapes.small)
                                 .clickable { onToggleTheme() }
                                 .semantics { contentDescription = "Toggle theme" }
-                                .padding(horizontal = 4.dp)
                                 .testTag("theme"),
-                        )
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "◐", color = colors.faint, fontFamily = Mono, fontSize = 15.sp,
+                            )
+                        }
                     }
                 }
                 Spacer(Modifier.width(6.dp))
@@ -2675,10 +2684,9 @@ private fun ComposerControl(
     onClick: () -> Unit,
     contentDescription: String? = null,
 ) {
-    Text(
-        glyph,
-        color = tint, fontFamily = Mono, fontSize = 14.sp, fontWeight = FontWeight.Medium,
-        modifier = Modifier
+    Box(
+        Modifier
+            .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
             .clip(LumenShapes.small)
             .clickable { onClick() }
             .then(
@@ -2688,9 +2696,14 @@ private fun ComposerControl(
                     Modifier
                 },
             )
-            .padding(horizontal = 5.dp, vertical = 2.dp)
             .testTag(tag),
-    )
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            glyph,
+            color = tint, fontFamily = Mono, fontSize = 16.sp, fontWeight = FontWeight.Medium,
+        )
+    }
 }
 
 /**
@@ -2699,19 +2712,24 @@ private fun ComposerControl(
  */
 @Composable
 private fun ModelChip(label: String, colors: LumenColors, onClick: () -> Unit) {
-    Text(
-        label,
-        color = colors.dim, fontFamily = Mono, fontSize = 9.5.sp, fontWeight = FontWeight.Medium,
-        maxLines = 1, overflow = TextOverflow.Ellipsis,
-        modifier = Modifier
-            .widthIn(max = 96.dp)
+    Box(
+        Modifier
+            .heightIn(min = 34.dp)
+            .widthIn(max = 112.dp)
             .clip(LumenShapes.pill)
             .background(colors.water.copy(alpha = 0.10f))
             .border(1.dp, colors.outline, LumenShapes.pill)
             .clickable { onClick() }
-            .padding(horizontal = 7.dp, vertical = 2.dp)
+            .padding(horizontal = 9.dp, vertical = 4.dp)
             .testTag("model-chip"),
-    )
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = colors.dim, fontFamily = Mono, fontSize = 10.5.sp, fontWeight = FontWeight.Medium,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+    }
 }
 
 /** The trailing `@path` token the composer completes, if any. */
@@ -2885,18 +2903,23 @@ private fun AgentModeChip(
     colors: LumenColors,
     onSelect: (String) -> Unit,
 ) {
-    Text(
-        label,
-        color = if (selected) tint else colors.faint,
-        fontFamily = Mono, fontSize = 10.sp, fontWeight = FontWeight.Medium,
-        modifier = Modifier
+    Box(
+        Modifier
+            .heightIn(min = 34.dp)
             .clip(LumenShapes.pill)
             .background(if (selected) tint.copy(alpha = 0.16f) else Color.Transparent)
             .border(1.dp, if (selected) tint.copy(alpha = 0.45f) else colors.outline, LumenShapes.pill)
             .clickable { onSelect(label) }
-            .padding(horizontal = 9.dp, vertical = 3.dp)
+            .padding(horizontal = 11.dp, vertical = 5.dp)
             .testTag(tag),
-    )
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = if (selected) tint else colors.faint,
+            fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+        )
+    }
 }
 
 /**
@@ -3229,15 +3252,12 @@ private fun QuickSettingsSheet(
             LumenSectionHeader(
                 colors,
                 "agent",
-                caption = "build acts directly; delegate hands work to subagents",
+                caption = "build acts directly; plan stays read-only",
             )
             Spacer(Modifier.height(LumenSpacing.md))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 QuickChip("build", agentMode == "build", "quick-agent-build", colors) { onAgentMode?.invoke("build") }
                 QuickChip("plan", agentMode == "plan", "quick-agent-plan", colors) { onAgentMode?.invoke("plan") }
-                QuickChip("delegate", agentMode == "delegate", "quick-agent-delegate", colors) {
-                    onAgentMode?.invoke("delegate")
-                }
             }
 
             Spacer(Modifier.height(LumenSpacing.xl))
@@ -3347,12 +3367,12 @@ private fun QuickChip(
         fontSize = LumenType.body,
         maxLines = 1,
         modifier = Modifier
-            .heightIn(min = LumenSize.touchMin)
+            .heightIn(min = 44.dp)
             .clip(LumenShapes.inset)
             .background(if (selected) colors.bg.copy(alpha = 0.35f) else Color.Transparent)
             .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.inset)
             .clickable { onClick() }
-            .padding(horizontal = 13.dp, vertical = 8.dp)
+            .padding(horizontal = 14.dp, vertical = 9.dp)
             .testTag(tag),
     )
 }
@@ -3372,10 +3392,10 @@ private fun QuickAction(
         fontSize = LumenType.body,
         fontWeight = FontWeight.Medium,
         modifier = Modifier
-            .heightIn(min = LumenSize.touchMin)
+            .heightIn(min = 44.dp)
             .clip(LumenShapes.small)
             .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .padding(horizontal = 14.dp, vertical = 9.dp)
             .testTag(tag),
     )
 }

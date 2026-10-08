@@ -251,8 +251,8 @@ data class ChatState(
     val runningSessionIds: Set<String> = emptySet(),
     /** "system" | "light" | "dark". */
     val theme: String = "system",
-    /** "prism" | "ember" | "phosphor" | "abyss". */
-    val palette: String = "prism",
+    /** "abyss" | "prism" | "ember" | "phosphor". */
+    val palette: String = "abyss",
     /** Running session token/cost totals, rolled up from each message. */
     val usage: Usage = Usage(),
 
@@ -400,7 +400,7 @@ class ChatViewModel(
             palette = keys.palette,
             askBeforeTools = keys.askBeforeTools,
             notifyOnComplete = keys.notifyOnComplete,
-            agentMode = keys.agentMode,
+            agentMode = if (keys.agentMode == "delegate") "build" else keys.agentMode,
             maxCostUsd = keys.maxCostUsd,
             autoCompactPercent = keys.autoCompactPercent,
             onboarded = keys.onboarded,
@@ -1240,8 +1240,9 @@ class ChatViewModel(
 
     /** Switch the active primary agent (build/plan) and persist the choice. */
     fun setAgentMode(mode: String) {
-        keys.agentMode = mode
-        _state.value = _state.value.copy(agentMode = mode)
+        val value = if (mode == "delegate") "build" else mode
+        keys.agentMode = value
+        _state.value = _state.value.copy(agentMode = value)
     }
 
     // ---- sessions ----
