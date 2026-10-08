@@ -143,11 +143,13 @@ class SurfaceRefreshTest {
     }
 
     @Test
-    fun `filesDirAffectedBy matches only direct children`() {
+    fun `filesDirAffectedBy matches the folder and its descendants`() {
         assertTrue(vm.filesDirAffectedBy("src", setOf("src/a.txt")))
         assertTrue(vm.filesDirAffectedBy("", setOf("a.txt")))
-        assertFalse(vm.filesDirAffectedBy("src", setOf("src/deep/a.txt")))
-        assertFalse(vm.filesDirAffectedBy("", setOf("src/a.txt")))
+        // A new directory's first file is nested; the parent list must still refresh.
+        assertTrue(vm.filesDirAffectedBy("src", setOf("src/deep/a.txt")))
+        assertTrue(vm.filesDirAffectedBy("", setOf("src/a.txt")))
+        assertFalse(vm.filesDirAffectedBy("src", setOf("other/a.txt")))
         assertFalse(vm.filesDirAffectedBy("src", emptySet()))
     }
 
