@@ -272,6 +272,8 @@ data class ChatState(
     val ask: PendingAsk? = null,
     /** Whether tools are confirmed interactively before running. */
     val askBeforeTools: Boolean = false,
+    /** Whether a finished/failed run posts a system notification. */
+    val notifyOnComplete: Boolean = true,
     /** The self-contained HTML page shown in the canvas, or null when closed. */
     val canvas: String? = null,
     /** Workspace-relative name of the page in the canvas, for the top bar. */
@@ -395,6 +397,7 @@ class ChatViewModel(
             theme = keys.theme,
             palette = keys.palette,
             askBeforeTools = keys.askBeforeTools,
+            notifyOnComplete = keys.notifyOnComplete,
             agentMode = keys.agentMode,
             maxCostUsd = keys.maxCostUsd,
             autoCompactPercent = keys.autoCompactPercent,
@@ -448,6 +451,14 @@ class ChatViewModel(
      * `finally`.
      */
     private var runGeneration = 0
+
+    /**
+     * Set by [stop] so a deliberate cancellation never posts a "run finished"
+     * notification: the run's own `finally` still executes after cancel, and a
+     * user stop is not a completion. Cleared by [send] when a new run starts.
+     */
+    @Volatile
+    private var completionSuppressed = false
 
     /**
      * The run generation that currently owns [perf], or 0 when none. Guarded by
@@ -636,6 +647,12 @@ class ChatViewModel(
     fun setAskBeforeTools(on: Boolean) {
         keys.askBeforeTools = on
         _state.value = _state.value.copy(askBeforeTools = on)
+    }
+
+    /** Toggle completion/error notifications and persist it. */
+    fun setNotifyOnComplete(on: Boolean) {
+        keys.notifyOnComplete = on
+        _state.value = _state.value.copy(notifyOnComplete = on)
     }
 
     /** Set the per-session cost ceiling in USD (0 = unlimited) and persist it. */
@@ -2583,6 +2600,7 @@ class ChatViewModel(
         }
 
         val generation = ++runGeneration
+        completionSuppressed = false
         runningSessionId = currentId
         runningSessions?.add(currentId)
         syncRunningSessions()
@@ -2658,6 +2676,18 @@ class ChatViewModel(
                     syncRunningSessions()
                     watcher?.stop()
                     context?.let { ctx -> runCatching { RunService.stop(ctx) } }
+                    // A run that ends on its own (not a user stop, not a
+                    // superseded run) announces its outcome. The body is
+                    // deliberately omitted: agent output is long and reads
+                    // badly in the shade. `failed` follows the terminal state.
+                    if (!completionSuppressed && _state.value.notifyOnComplete) {
+                        context?.let { ctx ->
+                            val failed = _state.value.error != null
+                            val title = runCatching { store.session(sid)?.title }
+                                .getOrNull().orEmpty().ifBlank { "Lumen run" }
+                            runCatching { RunService.notifyComplete(ctx, sid.value, title, failed) }
+                        }
+                    }
                 }
                 // The sampler is stopped on EVERY end path (normal finish, stop,
                 // cancellation, superseding send). A superseded run no longer
@@ -2671,6 +2701,7 @@ class ChatViewModel(
 
     fun stop() {
         runGeneration++
+        completionSuppressed = true
         runJob?.cancel()
         runningSessionId?.let { runningSessions?.remove(it) }
         syncRunningSessions()

@@ -138,6 +138,15 @@ class KeyStore(context: Context) {
         set(value) = prefs.edit().putBoolean("askBeforeTools", value).apply()
 
     /**
+     * Whether finishing (or failing) a run posts a title-only system
+     * notification. Default true so a backgrounded run still announces itself;
+     * a user who finds the noise unwanted can switch it off in Settings.
+     */
+    var notifyOnComplete: Boolean
+        get() = prefs.getBoolean("notify_on_complete", true)
+        set(value) = prefs.edit().putBoolean("notify_on_complete", value).apply()
+
+    /**
      * Per-session cost ceiling in USD. `0.0` means unlimited (the default), so
      * the loop runs year-round unless the user opts into a budget. When set, the
      * loop emits a `BudgetWarning` as spend approaches it and stops a run that

@@ -55,6 +55,9 @@ fun SettingsScreen(
     onPalette: (String) -> Unit = {},
     askBeforeTools: Boolean = false,
     onAskBeforeTools: (Boolean) -> Unit = {},
+    /** Whether a finished/failed run posts a title-only notification. */
+    notifyOnComplete: Boolean = true,
+    onNotifyOnComplete: (Boolean) -> Unit = {},
     /** Per-session cost ceiling in USD; 0 means unlimited. */
     maxCostUsd: Double = 0.0,
     onMaxCost: (Double) -> Unit = {},
@@ -288,6 +291,50 @@ fun SettingsScreen(
                     uncheckedBorderColor = colors.outline,
                 ),
                 modifier = Modifier.testTag("ask-before-tools"),
+            )
+        }
+
+        Spacer(Modifier.height(LumenSpacing.xxl))
+        LumenSectionHeader(colors, "notifications", caption = "what Lumen tells you when a run ends")
+        Spacer(Modifier.height(LumenSpacing.md))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(LumenShapes.card)
+                .background(colors.surface)
+                .border(1.dp, colors.outline, LumenShapes.card)
+                .clickable { onNotifyOnComplete(!notifyOnComplete) }
+                .padding(horizontal = 14.dp, vertical = 13.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Notify when a run finishes",
+                    color = colors.fg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.bodyLarge,
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    "A notification when a background run finishes or fails",
+                    color = colors.dim,
+                    fontFamily = Mono,
+                    fontSize = LumenType.caption,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Switch(
+                checked = notifyOnComplete,
+                onCheckedChange = onNotifyOnComplete,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = colors.bg,
+                    checkedTrackColor = colors.water,
+                    uncheckedThumbColor = colors.dim,
+                    uncheckedTrackColor = colors.surface,
+                    uncheckedBorderColor = colors.outline,
+                ),
+                modifier = Modifier.testTag("notify-on-complete"),
             )
         }
 

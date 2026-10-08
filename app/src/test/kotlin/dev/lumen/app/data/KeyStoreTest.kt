@@ -37,6 +37,16 @@ class KeyStoreTest {
     }
 
     @Test
+    fun `notify on complete defaults on and round-trips`() {
+        val store = newStore()
+        assertTrue(store.notifyOnComplete, "notifications are on by default")
+        store.notifyOnComplete = false
+        assertFalse(newStore().notifyOnComplete, "a new instance sees the persisted value")
+        store.notifyOnComplete = true
+        assertTrue(newStore().notifyOnComplete)
+    }
+
+    @Test
     fun `allowed patterns default empty and round-trip as a set`() {
         val store = newStore()
         assertEquals(emptySet(), store.allowedPatterns)

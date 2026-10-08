@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.lumen.app.platform.RunService
 import dev.lumen.app.ui.BootScreen
 import dev.lumen.app.ui.CanvasScreen
 import dev.lumen.app.ui.DiagnosticsScreen
@@ -56,8 +57,17 @@ class MainActivity : ComponentActivity() {
         ChatViewModel.Factory(applicationContext, File(filesDir, "workspace").apply { mkdirs() })
     }
 
+    /**
+     * A session id delivered by a completion-notification tap. Held as Compose
+     * state (not a plain field) so the effect inside setContent reacts whether
+     * it arrived in [onCreate] (cold start) or [onNewIntent] (singleTask
+     * re-entry).
+     */
+    private var pendingSessionId by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        consumeSessionIntent(intent)
         setContent {
             val state by viewModel.state.collectAsStateWithLifecycle()
             val systemDark = isSystemInDarkTheme()
@@ -130,6 +140,17 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(Unit) {
                 bootMessage = viewModel.runStartupMaintenance()
                 booted = true
+            }
+
+            // A completion-notification tap asks us to open one session. The id
+            // arrives as activity state (cold start or singleTask re-entry), so
+            // this fires in both cases; it is cleared after being consumed.
+            val deepLinkSession = pendingSessionId
+            LaunchedEffect(deepLinkSession) {
+                val id = deepLinkSession ?: return@LaunchedEffect
+                viewModel.openSession(id)
+                route = "chat"
+                pendingSessionId = null
             }
 
             BackHandler(enabled = route != "home" || state.currentSessionId != null) {
@@ -416,6 +437,8 @@ class MainActivity : ComponentActivity() {
                     modifier = modifier,
                     askBeforeTools = state.askBeforeTools,
                     onAskBeforeTools = viewModel::setAskBeforeTools,
+                    notifyOnComplete = state.notifyOnComplete,
+                    onNotifyOnComplete = viewModel::setNotifyOnComplete,
                     maxCostUsd = state.maxCostUsd,
                     onMaxCost = viewModel::setMaxCost,
                     autoCompactPercent = state.autoCompactPercent,
@@ -512,6 +535,28 @@ class MainActivity : ComponentActivity() {
                 }                 // close SaveableStateProvider
             }                     // close else
         }
+    }
+
+    /**
+     * The activity is `singleTask`, so tapping a completion notification while
+     * Lumen is already alive lands here instead of [onCreate]. The new intent
+     * becomes the activity's intent, and the session id is consumed by the
+     * effect inside the composition.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeSessionIntent(intent)
+    }
+
+    /** Pull a deep-linked session id out of [intent], consuming it once. */
+    private fun consumeSessionIntent(intent: Intent?) {
+        if (intent == null) return
+        val id = intent.getStringExtra(RunService.EXTRA_SESSION_ID)
+            ?.takeIf { it.isNotBlank() } ?: return
+        // Consume it so an Activity recreation does not re-open the same chat.
+        intent.removeExtra(RunService.EXTRA_SESSION_ID)
+        pendingSessionId = id
     }
 }
 

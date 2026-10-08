@@ -7,6 +7,8 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -14,6 +16,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import dev.lumen.app.MainActivity
+import dev.lumen.app.R
 
 /**
  * Foreground service that keeps a long agent run alive while the app is
@@ -168,6 +171,16 @@ class RunService : Service() {
         private const val NOTIFICATION_TITLE = "Lumen"
         private const val WAKE_LOCK_TAG = "lumen:run"
 
+        /** Result channels are created on demand, one per outcome/sound. */
+        private const val CHANNEL_ID_DONE = "lumen_run_done"
+        private const val CHANNEL_ID_ERROR = "lumen_run_error"
+        private const val CHANNEL_NAME_DONE = "Run finished"
+        private const val CHANNEL_NAME_ERROR = "Run failed"
+
+        /** Title-only result notifications: never carry agent output. */
+        private const val NOTIFICATION_TITLE_DONE = "Run finished"
+        private const val NOTIFICATION_TITLE_FAILED = "Run failed"
+
         internal const val ACTION_START = "dev.lumen.app.action.RUN_START"
         internal const val ACTION_UPDATE = "dev.lumen.app.action.RUN_UPDATE"
         internal const val ACTION_STOP = "dev.lumen.app.action.RUN_STOP"
@@ -204,6 +217,93 @@ class RunService : Service() {
          */
         fun stop(context: Context) {
             context.stopService(Intent(context, RunService::class.java))
+        }
+
+        /**
+         * Post a title-only notification when a run ends on its own: "Run
+         * finished" on success or "Run failed" when the run ended in error. No
+         * body text is ever attached (agent output is long and reads badly in
+         * the shade). Tapping it opens [MainActivity] at [sessionId] via
+         * [EXTRA_SESSION_ID].
+         *
+         * The error outcome uses a distinct channel whose sound is the bundled
+         * [R.raw.error_dong] water-drop, so a failure is audibly different from a
+         * normal completion. The channels are created lazily here rather than in
+         * [ensureChannel] so an install that never finishes a run never creates
+         * them. Best-effort: a missing notification permission degrades to a
+         * no-op instead of crashing the process that just finished a run.
+         *
+         * [title] is the session title, carried only as the (non-body) ticker so
+         * the notification itself stays title-only.
+         */
+        fun notifyComplete(context: Context, sessionId: String, title: String, failed: Boolean) {
+            runCatching {
+                val manager = context.getSystemService(NotificationManager::class.java) ?: return
+                ensureResultChannel(context, manager, failed)
+                val channelId = if (failed) CHANNEL_ID_ERROR else CHANNEL_ID_DONE
+                val notification = NotificationCompat.Builder(context, channelId)
+                    .setContentTitle(if (failed) NOTIFICATION_TITLE_FAILED else NOTIFICATION_TITLE_DONE)
+                    .setSmallIcon(SMALL_ICON)
+                    .setContentIntent(sessionIntent(context, sessionId))
+                    .setTicker(title)
+                    .setAutoCancel(true)
+                    .setOnlyAlertOnce(false)
+                    .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                    .apply {
+                        // Pre-channel platforms need the sound on the builder too.
+                        if (failed && Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                            setSound(errorSound(context))
+                        }
+                    }
+                    .build()
+                manager.notify(resultNotificationId(sessionId), notification)
+            }
+        }
+
+        /** Tap target that opens the app at [sessionId] (singleTask -> onNewIntent). */
+        private fun sessionIntent(context: Context, sessionId: String): PendingIntent {
+            val intent = Intent(context, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra(EXTRA_SESSION_ID, sessionId)
+            }
+            return PendingIntent.getActivity(
+                context, resultNotificationId(sessionId), intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
+
+        /**
+         * Stable per-session id so two sessions finishing at once post two
+         * notifications instead of overwriting each other. Kept clear of the
+         * ongoing run id.
+         */
+        private fun resultNotificationId(sessionId: String): Int =
+            sessionId.hashCode().let { if (it == NOTIFICATION_ID) it + 1 else it }
+
+        /** The bundled water-drop sound for the error channel. */
+        private fun errorSound(context: Context): Uri =
+            Uri.parse("android.resource://" + context.packageName + "/" + R.raw.error_dong)
+
+        /** Lazily create the done/error channel, with the custom sound on error. */
+        private fun ensureResultChannel(context: Context, manager: NotificationManager, failed: Boolean) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+            val id = if (failed) CHANNEL_ID_ERROR else CHANNEL_ID_DONE
+            if (manager.getNotificationChannel(id) != null) return
+            val channel = NotificationChannel(
+                id,
+                if (failed) CHANNEL_NAME_ERROR else CHANNEL_NAME_DONE,
+                NotificationManager.IMPORTANCE_DEFAULT,
+            ).apply {
+                description = if (failed) "A background run failed" else "A background run finished"
+                if (failed) {
+                    val attrs = AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                    setSound(errorSound(context), attrs)
+                }
+            }
+            manager.createNotificationChannel(channel)
         }
     }
 }
