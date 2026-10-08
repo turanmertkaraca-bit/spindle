@@ -208,6 +208,18 @@ class ScreenshotTest {
 
     @Test fun dark_assistant() = chat(LumenColors.Dark, "dark_assistant.png")
 
+    @Test fun ember_light() = chat(LumenColors.EmberLight, "ember_light.png")
+
+    @Test fun ember_dark() = chat(LumenColors.EmberDark, "ember_dark.png")
+
+    @Test fun phosphor_light() = chat(LumenColors.PhosphorLight, "phosphor_light.png")
+
+    @Test fun phosphor_dark() = chat(LumenColors.PhosphorDark, "phosphor_dark.png")
+
+    @Test fun abyss_light() = chat(LumenColors.AbyssLight, "abyss_light.png")
+
+    @Test fun abyss_dark() = chat(LumenColors.AbyssDark, "abyss_dark.png")
+
     /** Tools at rest: compact collapsed cards inside the transcript. */
     @Test fun light_merged_tools() = chat(LumenColors.Light, "light_merged_tools.png")
 
