@@ -571,8 +571,7 @@ class AgentLoop(
 
     /** Persist a run-state transition; a missing session is a no-op. */
     private suspend fun persistState(store: SessionStore, sessionId: SessionId, state: SessionState) {
-        val session = store.session(sessionId) ?: return
-        store.updateSession(session.copy(state = state, updatedAt = clock()))
+        store.updateSessionState(sessionId, state)
     }
 
     private suspend fun executeTool(

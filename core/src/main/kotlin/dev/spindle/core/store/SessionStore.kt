@@ -4,6 +4,7 @@ import dev.spindle.core.model.Message
 import dev.spindle.core.model.MessageId
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
+import dev.spindle.core.model.SessionState
 import dev.spindle.core.model.TodoItem
 
 /**
@@ -13,6 +14,14 @@ import dev.spindle.core.model.TodoItem
 interface SessionStore {
     suspend fun createSession(session: Session)
     suspend fun updateSession(session: Session)
+
+    /**
+     * Update ONLY the run [state] of session [id] (and its `updated_at` where the
+     * storage has that column). A missing session is a no-op. Callers that only
+     * move the run state use this instead of reading and rewriting a whole row.
+     */
+    suspend fun updateSessionState(id: SessionId, state: SessionState)
+
     suspend fun session(id: SessionId): Session?
 
     /** Most recently updated first. Hidden children/archived sessions are opt-in. */

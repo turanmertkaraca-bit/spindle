@@ -231,6 +231,15 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
 
     override suspend fun updateSession(session: Session) = createSession(session)
 
+    override suspend fun updateSessionState(id: SessionId, state: SessionState) = locked {
+        transaction {
+            db.execSQL(
+                "UPDATE sessions SET state=?, updated_at=? WHERE id=?",
+                arrayOf(state.name, System.currentTimeMillis(), id.value),
+            )
+        }
+    }
+
     override suspend fun session(id: SessionId): Session? = locked { sessionUnlocked(id) }
 
     private fun sessionUnlocked(id: SessionId): Session? =

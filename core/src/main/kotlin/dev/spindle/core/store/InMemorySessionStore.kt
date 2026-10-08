@@ -7,6 +7,7 @@ import dev.spindle.core.model.Part
 import dev.spindle.core.model.PartId
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
+import dev.spindle.core.model.SessionState
 import dev.spindle.core.model.TodoItem
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -27,6 +28,13 @@ class InMemorySessionStore : SessionStore, SessionSearch {
 
     override suspend fun updateSession(session: Session) {
         mutex.withLock { sessions[session.id] = session }
+    }
+
+    override suspend fun updateSessionState(id: SessionId, state: SessionState) {
+        mutex.withLock {
+            val existing = sessions[id] ?: return@withLock
+            sessions[id] = existing.copy(state = state)
+        }
     }
 
     override suspend fun session(id: SessionId): Session? = mutex.withLock { sessions[id] }

@@ -156,6 +156,17 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
         mutex.withLock { upsertSession(session) }
     }
 
+    override suspend fun updateSessionState(id: SessionId, state: SessionState) {
+        mutex.withLock {
+            connection.prepareStatement("UPDATE sessions SET state=?, updated_at=? WHERE id=?").use { st ->
+                st.setString(1, state.name)
+                st.setLong(2, System.currentTimeMillis())
+                st.setString(3, id.value)
+                st.executeUpdate()
+            }
+        }
+    }
+
     private fun upsertSession(session: Session) {
         connection.prepareStatement(
             "INSERT INTO sessions(id, title, cwd, created_at, updated_at, model, provider_id, agent, parent_id, " +

@@ -21,10 +21,7 @@ import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
 import dev.spindle.core.model.FileEdit
-import dev.spindle.core.model.FinishReason
 import dev.spindle.core.model.RunChanges
-import dev.spindle.core.model.ToolResult
-import dev.spindle.core.model.ToolState
 import dev.spindle.core.model.Usage
 import dev.spindle.core.store.RevertResult
 import dev.spindle.core.store.Reverter
@@ -36,6 +33,7 @@ import dev.spindle.core.agent.Compaction
 import dev.spindle.core.agent.ContextBudget
 import dev.spindle.core.agent.PermissionGate
 import dev.spindle.core.agent.QuestionGate
+import dev.spindle.core.agent.RunRecovery
 import dev.spindle.core.event.AgentEvent
 import dev.spindle.core.event.DeltaKind
 import dev.spindle.core.event.EventBus
@@ -737,43 +735,7 @@ class ChatViewModel(
      * assistant message is finalized.
      */
     private suspend fun reconcileOrphanRuns() {
-        runCatching {
-            val live = runningSessions ?: emptySet()
-            val stale = store.sessions(limit = Int.MAX_VALUE, includeChildren = true, includeArchived = true)
-                .filter { it.state == SessionState.RUNNING && it.id.value !in live }
-            for (session in stale) {
-                abortStaleRun(session.id)
-                store.updateSession(session.copy(state = SessionState.IDLE))
-            }
-        }
-    }
-
-    /** Rewrite a stale run's in-flight tool parts to ERROR and close open messages. */
-    private suspend fun abortStaleRun(sid: SessionId) {
-        val messages = runCatching { store.messages(sid) }.getOrDefault(emptyList())
-        for (message in messages) {
-            var rewroteTool = false
-            val parts = message.parts.map { part ->
-                if (part is Part.Tool && (part.state == ToolState.PENDING || part.state == ToolState.RUNNING)) {
-                    rewroteTool = true
-                    part.copy(
-                        state = ToolState.ERROR,
-                        result = ToolResult(part.call.id, "aborted", isError = true),
-                    )
-                } else {
-                    part
-                }
-            }
-            val openAssistant = message.role == Role.ASSISTANT && message.finish == null
-            if (!rewroteTool && !openAssistant) continue
-            store.updateMessage(
-                message.copy(
-                    parts = parts,
-                    finish = if (openAssistant) FinishReason.ERROR else message.finish,
-                    error = message.error ?: if (openAssistant) "aborted" else null,
-                ),
-            )
-        }
+        runCatching { RunRecovery.reconcile(store, runningSessions ?: emptySet()) }
     }
 
     // ---- diagnostics ----
