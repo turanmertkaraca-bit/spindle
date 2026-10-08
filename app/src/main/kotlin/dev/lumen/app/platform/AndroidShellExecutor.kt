@@ -348,8 +348,11 @@ private fun killProcessTree(process: Process) {
     }
     runCatching { process.destroy() }
     runCatching { process.waitFor(TERM_GRACE_MS, TimeUnit.MILLISECONDS) }
-    runCatching {
-        process.toHandle().descendants().forEach { runCatching { it.destroyForcibly() } }
+    if (pid > 0) {
+        runCatching {
+            Runtime.getRuntime().exec(arrayOf("kill", "-KILL", "-$pid"))
+                .waitFor(TERM_GRACE_MS, TimeUnit.MILLISECONDS)
+        }
     }
     runCatching { process.destroyForcibly() }
     runCatching { process.waitFor(1, TimeUnit.SECONDS) }
