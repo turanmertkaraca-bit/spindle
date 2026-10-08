@@ -1,5 +1,6 @@
 package dev.spindle.core.agent
 
+import dev.spindle.core.provider.ProviderErrors
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -260,5 +261,103 @@ class RetryTest {
         }
         assertEquals("ok", value)
         assertEquals(2, calls)
+    }
+
+    @Test
+    fun `backoff never collapses to zero or negative for huge attempts`() {
+        val base = 500L
+        val cap = 8_000L
+        val ceiling = cap + cap / 4
+
+        for (attempt in listOf(63, 64, 65, 100, 1_000, Int.MAX_VALUE)) {
+            repeat(20) {
+                val v = Retry.backoffMs(attempt, base, cap)
+                assertTrue(v > 0, "attempt=$attempt value=$v must stay positive")
+                assertTrue(v >= base, "attempt=$attempt value=$v below base")
+                assertTrue(v <= ceiling, "attempt=$attempt value=$v above ceiling")
+            }
+        }
+        // Degenerate attempts still yield a usable, positive delay.
+        assertTrue(Retry.backoffMs(0) > 0)
+        assertTrue(Retry.backoffMs(-5) > 0)
+    }
+
+    @Test
+    fun `structured retry classification uses status and declared override`() {
+        assertTrue(Retry.isRetryable(429, null, "whatever"))
+        assertTrue(Retry.isRetryable(500, null, "whatever"))
+        assertTrue(Retry.isRetryable(503, null, "whatever"))
+        assertFalse(Retry.isRetryable(400, null, "whatever"))
+        assertFalse(Retry.isRetryable(401, null, "whatever"))
+        assertFalse(Retry.isRetryable(403, null, "whatever"))
+        assertFalse(Retry.isRetryable(404, null, "whatever"))
+        // An unknown status falls back to the legacy message markers.
+        assertTrue(Retry.isRetryable(418, null, "429 rate limit"))
+        assertFalse(Retry.isRetryable(418, null, "context length exceeded"))
+        // A declared verdict wins over both status and message.
+        assertTrue(Retry.isRetryable(401, true, "401 unauthorized"))
+        assertFalse(Retry.isRetryable(429, false, "429 too many requests"))
+    }
+
+    @Test
+    fun `context overflow detection matches markers and status 413`() {
+        assertTrue(ProviderErrors.isContextOverflow("This model's maximum context length is 8192 tokens"))
+        assertTrue(ProviderErrors.isContextOverflow("context_length_exceeded"))
+        assertTrue(ProviderErrors.isContextOverflow("Prompt is too long"))
+        assertTrue(ProviderErrors.isContextOverflow("too many tokens"))
+        assertTrue(ProviderErrors.isContextOverflow("anything at all", statusCode = 413))
+        assertFalse(ProviderErrors.isContextOverflow("rate limit exceeded"))
+        assertFalse(ProviderErrors.isContextOverflow("boom"))
+        assertFalse(ProviderErrors.isContextOverflow("server error", statusCode = 500))
+    }
+
+    @Test
+    fun `resilient retry honours a provider retry-after hint`() = runTest {
+        var calls = 0
+        val waits = mutableListOf<Long>()
+        val value = Retry.withResilientRetry(
+            fatalRetries = 3,
+            retryAfterMs = { 2_500L },
+            onRetry = { _, _, wait -> waits += wait },
+        ) {
+            calls++
+            if (calls < 2) throw RuntimeException("429 too many requests")
+            "ok"
+        }
+        assertEquals("ok", value)
+        assertEquals(listOf(2_500L), waits)
+    }
+
+    @Test
+    fun `retry-after hint is capped at one minute`() = runTest {
+        val waits = mutableListOf<Long>()
+        val error = capture {
+            Retry.withResilientRetry(
+                fatalRetries = 1,
+                retryAfterMs = { 120_000L },
+                onRetry = { _, _, wait -> waits += wait },
+            ) {
+                throw RuntimeException("503 unavailable")
+            }
+        }
+        assertIs<RuntimeException>(error)
+        assertEquals(listOf(60_000L), waits)
+    }
+
+    @Test
+    fun `resilient retry uses the structured retryable override`() = runTest {
+        var calls = 0
+        val error = capture {
+            Retry.withResilientRetry(
+                fatalRetries = 5,
+                retryable = { false },
+                classify = { true },
+            ) {
+                calls++
+                throw RuntimeException("looks retryable by message")
+            }
+        }
+        assertIs<RuntimeException>(error)
+        assertEquals(1, calls, "a declared non-retryable verdict must not be retried")
     }
 }

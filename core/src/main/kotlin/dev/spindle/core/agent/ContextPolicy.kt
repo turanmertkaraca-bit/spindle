@@ -39,6 +39,17 @@ object TokenEstimator {
         return chars / 4
     }
 
+    /**
+     * Same arithmetic as [estimate] but from pre-computed character counts, so
+     * callers never allocate throwaway strings just to measure them.
+     */
+    fun estimateFromCharCounts(systemChars: Int, messageChars: List<Int>, toolSchemaChars: Int): Int {
+        var chars = systemChars
+        for (m in messageChars) chars += m + 8
+        chars += toolSchemaChars
+        return chars / 4
+    }
+
     fun total(usages: List<Usage>): Usage =
         usages.fold(Usage()) { acc, u -> acc + u }
 }

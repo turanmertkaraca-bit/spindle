@@ -100,7 +100,35 @@ sealed interface ProviderEvent {
     data class ToolCallEnd(val index: Int) : ProviderEvent
     data class UsageEvent(val usage: Usage) : ProviderEvent
     data class Finished(val reason: FinishReason) : ProviderEvent
-    data class Failure(val message: String, val cause: Throwable? = null) : ProviderEvent
+    data class Failure(
+        val message: String,
+        val cause: Throwable? = null,
+        val statusCode: Int? = null,
+        val retryAfterMs: Long? = null,
+        val retryable: Boolean? = null,
+        val contextOverflow: Boolean = false,
+    ) : ProviderEvent
+}
+
+/**
+ * Structured classification of provider error text/status, so the agent loop can
+ * treat a context-window overflow as a compaction trigger rather than a hard
+ * terminal failure.
+ */
+object ProviderErrors {
+    private val CONTEXT_OVERFLOW_MARKERS = listOf(
+        "context length",
+        "context_length_exceeded",
+        "maximum context length",
+        "too many tokens",
+        "prompt is too long",
+    )
+
+    fun isContextOverflow(message: String, statusCode: Int? = null): Boolean {
+        if (statusCode == 413) return true
+        val m = message.lowercase()
+        return CONTEXT_OVERFLOW_MARKERS.any { it in m }
+    }
 }
 
 interface Provider {

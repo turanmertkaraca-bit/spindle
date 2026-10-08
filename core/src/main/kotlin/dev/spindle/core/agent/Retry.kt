@@ -5,7 +5,28 @@ import kotlinx.coroutines.delay
 
 /** Classifies a provider/network failure as retryable or terminal. */
 object Retry {
-    fun isRetryable(message: String): Boolean {
+    fun isRetryable(message: String): Boolean = isRetryable(null, null, message)
+
+    /**
+     * Structured classification. A non-null [declared] verdict wins outright.
+     * Otherwise, an HTTP [statusCode] decides: 429 and all 5xx retry, while
+     * 400/401/403/404 are terminal; any other code (or none) falls back to the
+     * legacy string markers.
+     */
+    fun isRetryable(statusCode: Int?, declared: Boolean?, message: String): Boolean {
+        if (declared != null) return declared
+        if (statusCode != null) {
+            when {
+                statusCode == 429 -> return true
+                statusCode in 500..599 -> return true
+                statusCode == 400 || statusCode == 401 ||
+                    statusCode == 403 || statusCode == 404 -> return false
+            }
+        }
+        return isRetryableByMessage(message)
+    }
+
+    private fun isRetryableByMessage(message: String): Boolean {
         val m = message.lowercase()
         // Explicit non-retryable signals win over the retryable markers: a 500
         // buried in "invalid api key (500)" or a 512 in "context length 512
@@ -67,9 +88,13 @@ object Retry {
 
     /** Exponential backoff with jitter: attempts start at 1. */
     fun backoffMs(attempt: Int, base: Long = 500, cap: Long = 8_000): Long {
-        val exp = (base shl (attempt - 1)).coerceAtMost(cap)
-        val jitter = (Math.random() * (exp / 4)).toLong()
-        return exp + jitter
+        // Clamp the exponent so the shift can never wrap (which would collapse a
+        // high attempt count into a zero/negative delay and produce a hot loop).
+        val exponent = (attempt - 1).coerceIn(0, 62)
+        val shifted = (base shl exponent).let { if (it <= 0L) cap else it }
+        val bounded = shifted.coerceIn(base, cap)
+        val jitter = (Math.random() * (bounded / 4)).toLong()
+        return bounded + jitter
     }
 
     /**
@@ -111,6 +136,10 @@ object Retry {
         onRetry: suspend (attempt: Int, error: Throwable, waitMs: Long) -> Unit = { _, _, _ -> },
         isNetworkError: (Throwable) -> Boolean = { isNetwork(it.message ?: "") },
         classify: (Throwable) -> Boolean = { isRetryable(it.message ?: "") },
+        /** Provider-supplied Retry-After hint, in milliseconds. */
+        retryAfterMs: (Throwable) -> Long? = { null },
+        /** Structured retryable verdict; null falls back to [classify]. */
+        retryable: (Throwable) -> Boolean? = { null },
         block: suspend () -> T,
     ): T {
         var attempt = 0
@@ -122,12 +151,18 @@ object Retry {
             } catch (e: Throwable) {
                 attempt++
                 val network = isNetworkError(e)
+                val declared = retryable(e)
+                val canRetry = declared ?: if (network) true else classify(e)
                 // Fatal rejections (bad key, context length, content filter) end
                 // the run at once; they will never succeed by waiting.
-                if (!network && !classify(e)) throw e
+                if (!canRetry) throw e
                 if (!network && attempt > fatalRetries) throw e
+                val hint = retryAfterMs(e)
                 // Connectivity: patient, capped backoff. Other transient: normal.
-                val wait = if (network) {
+                // A provider Retry-After hint always wins, bounded to one minute.
+                val wait = if (hint != null && hint > 0) {
+                    minOf(hint, 60_000)
+                } else if (network) {
                     backoffMs(attempt, base = 1_000, cap = 30_000)
                 } else {
                     backoffMs(attempt)

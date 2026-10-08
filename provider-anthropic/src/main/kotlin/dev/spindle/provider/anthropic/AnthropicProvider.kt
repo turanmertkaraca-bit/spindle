@@ -5,6 +5,7 @@ import dev.spindle.core.model.Usage
 import dev.spindle.core.provider.ChatRequest
 import dev.spindle.core.provider.ModelInfo
 import dev.spindle.core.provider.Provider
+import dev.spindle.core.provider.ProviderErrors
 import dev.spindle.core.provider.ProviderEvent
 import dev.spindle.core.provider.ToolSpec
 import dev.spindle.core.provider.WireMessage
@@ -174,7 +175,7 @@ class AnthropicProvider(
         }
         val emitEvent: (ProviderEvent) -> Unit = { event -> trySend(event) }
         val emitFinish: (FinishReason) -> Unit = { terminal(ProviderEvent.Finished(it)) }
-        val fail: (String) -> Unit = { message -> terminal(ProviderEvent.Failure(message)) }
+        val fail: (ProviderEvent.Failure) -> Unit = { failure -> terminal(failure) }
 
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
@@ -187,7 +188,15 @@ class AnthropicProvider(
                 response.use { resp ->
                     if (!resp.isSuccessful) {
                         val body = runCatching { resp.body?.string() }.getOrNull()
-                        terminal(ProviderEvent.Failure("Anthropic HTTP ${resp.code}: ${body ?: ""}"))
+                        terminal(
+                            ProviderEvent.Failure(
+                                "Anthropic HTTP ${resp.code}: ${body ?: ""}",
+                                statusCode = resp.code,
+                                retryAfterMs = parseRetryAfter(resp.header("retry-after"))
+                                    ?: parseRetryAfter(resp.header("retry-after-ms"), isMillis = true),
+                                contextOverflow = ProviderErrors.isContextOverflow(body ?: "", resp.code),
+                            ),
+                        )
                         return@use
                     }
                     val source = resp.body?.source()
@@ -364,7 +373,7 @@ private class AnthropicStreamState {
         frame: String,
         emit: (ProviderEvent) -> Unit,
         finish: (FinishReason) -> Unit,
-        fail: (String) -> Unit,
+        fail: (ProviderEvent.Failure) -> Unit,
     ): Boolean {
         val rootObj = runCatching { json.parseToJsonElement(frame).jsonObject }.getOrNull()
             ?: return false
@@ -445,7 +454,14 @@ private class AnthropicStreamState {
             }
             "error" -> {
                 val err = rootObj["error"] as? JsonObject
-                fail(err?.str("message") ?: frame)
+                val message = err?.str("message") ?: frame
+                fail(
+                    ProviderEvent.Failure(
+                        message = message,
+                        retryable = anthropicRetryable(err?.str("type")),
+                        contextOverflow = ProviderErrors.isContextOverflow(message),
+                    ),
+                )
                 return true
             }
         }
@@ -469,6 +485,25 @@ private fun mapStop(reason: String): FinishReason = when (reason) {
     "stop_sequence" -> FinishReason.STOP
     "refusal" -> FinishReason.CONTENT_FILTER
     else -> FinishReason.UNKNOWN
+}
+
+/** Structured retry verdict for an Anthropic in-band error `type`. */
+private fun anthropicRetryable(type: String?): Boolean? = when (type?.lowercase()) {
+    "overloaded_error", "rate_limit_error", "api_error" -> true
+    "invalid_request_error", "authentication_error",
+    "permission_error", "not_found_error" -> false
+    else -> null
+}
+
+/**
+ * Parse a `Retry-After` value into milliseconds. A bare number is interpreted as
+ * seconds unless [isMillis] is set (the `retry-after-ms` header carries ms).
+ */
+private fun parseRetryAfter(value: String?, isMillis: Boolean = false): Long? {
+    val raw = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val number = raw.toDoubleOrNull() ?: return null
+    if (!number.isFinite() || number < 0.0) return null
+    return if (isMillis) number.toLong() else (number * 1000.0).toLong()
 }
 
 private fun JsonObject.str(key: String): String? =

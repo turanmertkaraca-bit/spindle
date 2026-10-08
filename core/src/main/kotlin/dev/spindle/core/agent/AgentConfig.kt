@@ -17,7 +17,7 @@ data class AgentConfig(
     /** Subagents this agent may spawn (null = all registered). */
     val allowedSubagents: Set<String>? = null,
     /** Retry budget for transient provider failures. */
-    val maxRetries: Int = 2,
+    val maxRetries: Int = 5,
     /**
      * Opt-in structured output. Null (default) keeps provider request bodies
      * unchanged. Only the OpenAI-compatible surface honours it; Anthropic

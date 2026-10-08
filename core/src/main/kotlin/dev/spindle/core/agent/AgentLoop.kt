@@ -18,6 +18,7 @@ import dev.spindle.core.model.ToolResult
 import dev.spindle.core.model.ToolState
 import dev.spindle.core.model.Usage
 import dev.spindle.core.provider.ProviderEvent
+import dev.spindle.core.provider.ProviderErrors
 import dev.spindle.core.provider.ProviderRegistry
 import dev.spindle.core.store.SessionStore
 import dev.spindle.core.store.SnapshotStore
@@ -178,12 +179,20 @@ class AgentLoop(
             val system = systemPrompt(agent.systemPrompt, Path.of(session.cwd), rules)
             var step = 0
             var compacted = false
+            var overflowRetries = 0
             while (true) {
                 currentCoroutineContext().ensureActive()
                 step++
 
                 // ---- context policy: trim/compact before we build the request ----
-                val decision = evaluateOverflow(sessionId, model.contextWindow, budget, active, system)
+                val decision = evaluateOverflow(
+                    sessionId,
+                    model.contextWindow,
+                    model.maxOutputTokens,
+                    budget,
+                    active,
+                    system,
+                )
                 if (decision.action != OverflowAction.NONE) {
                     bus.emit(AgentEvent.StateChanged(sessionId, SessionState.RUNNING))
                 }
@@ -226,7 +235,7 @@ class AgentLoop(
                 val calls = LinkedHashMap<Int, MutableToolCall>()
                 var usage = Usage()
                 var finish = FinishReason.UNKNOWN
-                var failure: String? = null
+                var failure: ProviderEvent.Failure? = null
 
                 val request = Wire.request(
                     model = model.id,
@@ -235,12 +244,21 @@ class AgentLoop(
                     tools = specs,
                     agent = agent,
                     sessionHint = sessionId.value,
+                    maxOutputTokens = model.maxOutputTokens,
                 )
 
                 // ---- stream with retry on transient failures ----
                 try {
                     Retry.withResilientRetry(
                         fatalRetries = agent.maxRetries,
+                        isNetworkError = { th ->
+                            val status = (th as? ProviderFailure)?.failure?.statusCode
+                            // A provider that answered with a status code is not a
+                            // dropped link, even if its message mentions a reset.
+                            status == null && Retry.isNetwork(th.message ?: "")
+                        },
+                        retryAfterMs = { th -> (th as? ProviderFailure)?.failure?.retryAfterMs },
+                        retryable = { th -> (th as? ProviderFailure)?.failure?.retryable },
                         onRetry = { attempt, err, _ ->
                             // The previous attempt already streamed deltas for the
                             // text/reasoning parts into the UI. Retract them before
@@ -284,25 +302,49 @@ class AgentLoop(
                                 is ProviderEvent.ToolCallEnd -> Unit
                                 is ProviderEvent.UsageEvent -> usage = usage + ev.usage
                                 is ProviderEvent.Finished -> finish = ev.reason
-                                is ProviderEvent.Failure -> failure = ev.message
+                                is ProviderEvent.Failure -> failure = ev
                             }
                         }
                         if (failure != null) throw ProviderFailure(failure!!)
                     }
                 } catch (e: ProviderFailure) {
+                    // Context overflow is not terminal: compact and retry the turn
+                    // (bounded) so a long session self-heals instead of dying.
+                    val overflow = e.failure.contextOverflow ||
+                        ProviderErrors.isContextOverflow(e.failure.message, e.failure.statusCode)
+                    if (overflow && overflowRetries < 2) {
+                        overflowRetries++
+                        bus.emit(AgentEvent.Error(sessionId, "context overflow — compacting and retrying"))
+                        if (!Compaction.compact(store, sessionId, modelRef, providers, bus)) {
+                            Compaction.trim(store, sessionId)
+                        }
+                        val overflowParts = buildList {
+                            if (reasoning.isNotEmpty()) add(Part.Reasoning(reasoningPartId, reasoning.toString()))
+                            if (text.isNotEmpty()) add(Part.Text(textPartId, text.toString()))
+                        }
+                        val overflowed = assistant.copy(
+                            error = e.failure.message,
+                            finish = FinishReason.ERROR,
+                            usage = usage,
+                            parts = overflowParts,
+                        )
+                        store.updateMessage(overflowed)
+                        overflowed.parts.forEach { bus.emit(AgentEvent.PartUpdated(sessionId, overflowed.id.value, it)) }
+                        continue
+                    }
                     val erroredParts = buildList {
                         if (reasoning.isNotEmpty()) add(Part.Reasoning(reasoningPartId, reasoning.toString()))
                         if (text.isNotEmpty()) add(Part.Text(textPartId, text.toString()))
                     }
                     val errored = assistant.copy(
-                        error = e.message,
+                        error = e.failure.message,
                         finish = FinishReason.ERROR,
                         usage = usage,
                         parts = erroredParts,
                     )
                     store.updateMessage(errored)
                     errored.parts.forEach { bus.emit(AgentEvent.PartUpdated(sessionId, errored.id.value, it)) }
-                    bus.emit(AgentEvent.Error(sessionId, e.message ?: "provider error"))
+                    bus.emit(AgentEvent.Error(sessionId, e.failure.message.ifBlank { "provider error" }))
                     bus.emit(AgentEvent.UsageUpdated(sessionId, store.messages(sessionId).fold(Usage()) { acc, m -> acc + m.usage }))
                     terminalState = SessionState.ERROR
                     bus.emit(AgentEvent.StateChanged(sessionId, SessionState.ERROR))
@@ -438,6 +480,7 @@ class AgentLoop(
     private suspend fun evaluateOverflow(
         sessionId: SessionId,
         contextWindow: Int,
+        maxOutputTokens: Int,
         budget: ContextBudget,
         active: ToolRegistry,
         system: String,
@@ -447,23 +490,37 @@ class AgentLoop(
             m.parts.filterIsInstance<Part.Tool>()
                 .any { it.state == ToolState.PENDING || it.state == ToolState.RUNNING }
         }
-        val sysChars = system.length
-        val msgChars = history.map { m ->
-            m.parts.sumOf { p ->
-                when (p) {
-                    is Part.Text -> p.text.length
-                    is Part.Reasoning -> p.text.length
-                    is Part.Tool -> p.call.argumentsJson.length + (p.result?.output?.length ?: 0)
-                    is Part.File -> p.dataBase64?.length ?: 16
-                    else -> 16
+        // Prefer the provider's own accounting from the latest assistant turn: it
+        // is exact. The char-based estimator is only a fallback for the very first
+        // request, when no real usage exists yet.
+        val latestUsage = history.lastOrNull { it.role == Role.ASSISTANT }?.usage
+        val est = if (latestUsage != null && latestUsage.inputTokens > 0) {
+            latestUsage.inputTokens + latestUsage.outputTokens +
+                latestUsage.cacheReadTokens + latestUsage.cacheWriteTokens
+        } else {
+            val sysChars = system.length
+            val msgChars = history.map { m ->
+                m.parts.sumOf { p ->
+                    when (p) {
+                        is Part.Text -> p.text.length
+                        is Part.Reasoning -> p.text.length
+                        is Part.Tool -> p.call.argumentsJson.length + (p.result?.output?.length ?: 0)
+                        is Part.File -> p.dataBase64?.length ?: 16
+                        else -> 16
+                    }
                 }
             }
+            val schemaChars = active.specs.sumOf { it.parametersJson.length + it.description.length }
+            TokenEstimator.estimateFromCharCounts(sysChars, msgChars, schemaChars)
         }
-        val schemaChars = active.specs.sumOf { it.parametersJson.length + it.description.length }
-        val est = TokenEstimator.estimate("x".repeat(sysChars), msgChars.map { "x".repeat(it) }, schemaChars)
+        // Hold back room for the response we are about to ask for, so we compact
+        // before the provider (which counts input+output against the window)
+        // rejects the turn.
+        val reserved = minOf(20_000, maxOutputTokens)
+        val effectiveWindow = (contextWindow - reserved).coerceAtLeast(1)
         val compactAt = (budget.compactAtFraction ?: Overflow.COMPACT_AT).coerceIn(0.5, 0.98)
         val trimAt = (compactAt - 0.12).coerceAtLeast(0.4)
-        return Overflow.decide(est, contextWindow, open, compactAt, trimAt)
+        return Overflow.decide(est, effectiveWindow, open, compactAt, trimAt)
     }
 
     private suspend fun budgetCheck(
@@ -712,7 +769,7 @@ class AgentLoop(
         fun toCall() = ToolCall(id, name, args.toString().ifBlank { "{}" })
     }
 
-    private class ProviderFailure(override val message: String) : RuntimeException(message)
+    private class ProviderFailure(val failure: ProviderEvent.Failure) : RuntimeException(failure.message)
 
     /** Ensures the budget warning fires once per prompt invocation, not per step. */
     private class BudgetWarningState(var warned: Boolean = false)

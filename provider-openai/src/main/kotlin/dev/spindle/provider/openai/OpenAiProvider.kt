@@ -5,6 +5,7 @@ import dev.spindle.core.model.Usage
 import dev.spindle.core.provider.ChatRequest
 import dev.spindle.core.provider.ModelInfo
 import dev.spindle.core.provider.Provider
+import dev.spindle.core.provider.ProviderErrors
 import dev.spindle.core.provider.ProviderEvent
 import dev.spindle.core.provider.ToolSpec
 import dev.spindle.core.provider.WireMessage
@@ -278,7 +279,15 @@ class OpenAiProvider(
                 response.use { resp ->
                     if (!resp.isSuccessful) {
                         val body = runCatching { resp.body?.string() }.getOrNull()
-                        terminal(ProviderEvent.Failure("OpenAI HTTP ${resp.code}: ${body ?: ""}"))
+                        terminal(
+                            ProviderEvent.Failure(
+                                "OpenAI HTTP ${resp.code}: ${body ?: ""}",
+                                statusCode = resp.code,
+                                retryAfterMs = parseRetryAfter(resp.header("retry-after"))
+                                    ?: parseRetryAfter(resp.header("retry-after-ms"), isMillis = true),
+                                contextOverflow = ProviderErrors.isContextOverflow(body ?: "", resp.code),
+                            ),
+                        )
                         return@use
                     }
                     val source = resp.body?.source()
@@ -289,14 +298,17 @@ class OpenAiProvider(
                     try {
                         val data = StringBuilder()
                         var done = false
-                        while (!done) {
+                        var failed = false
+                        while (!done && !failed) {
                             val line = source.readBoundedUtf8Line(maxSseLineBytes) ?: break
                             if (line.isEmpty()) {
                                 if (data.isNotEmpty()) {
                                     val frame = data.toString()
                                     data.setLength(0)
-                                    if (frame == "[DONE]") done = true
-                                    else state.handle(frame, emitEvent, emitFinish)
+                                    when {
+                                        frame == "[DONE]" -> done = true
+                                        state.handle(frame, emitEvent, emitFinish, terminal) -> failed = true
+                                    }
                                 }
                                 continue
                             }
@@ -306,12 +318,12 @@ class OpenAiProvider(
                             if (data.isNotEmpty()) data.append('\n')
                             data.append(payloadLine)
                         }
-                        if (!done && data.isNotEmpty()) {
+                        if (!done && !failed && data.isNotEmpty()) {
                             val frame = data.toString()
                             if (frame == "[DONE]") done = true
-                            else state.handle(frame, emitEvent, emitFinish)
+                            else if (state.handle(frame, emitEvent, emitFinish, terminal)) failed = true
                         }
-                        if (!state.sawFinish) {
+                        if (!failed && !state.sawFinish) {
                             state.closeToolCalls(emitEvent)
                             // An explicit `[DONE]` sentinel means the provider ended
                             // the stream but omitted finish_reason, so UNKNOWN is a
@@ -481,8 +493,22 @@ private class OpenAiStreamState {
     var sawFinish = false
         private set
 
-    fun handle(frame: String, emit: (ProviderEvent) -> Unit, finish: (FinishReason) -> Unit) {
-        val root = runCatching { json.parseToJsonElement(frame).jsonObject }.getOrNull() ?: return
+    fun handle(
+        frame: String,
+        emit: (ProviderEvent) -> Unit,
+        finish: (FinishReason) -> Unit,
+        fail: (ProviderEvent.Failure) -> Unit,
+    ): Boolean {
+        val root = runCatching { json.parseToJsonElement(frame).jsonObject }.getOrNull() ?: return false
+
+        // In-band error frames (OpenRouter/OpenAI gateways and the Responses API)
+        // arrive as a normal 200 SSE frame; without this they were silently ignored
+        // and the turn looked like a clean EOF.
+        parseError(root)?.let { failure ->
+            closeToolCalls(emit)
+            fail(failure)
+            return true
+        }
 
         val choices = root["choices"] as? JsonArray
         if (choices != null && choices.isNotEmpty()) {
@@ -511,6 +537,7 @@ private class OpenAiStreamState {
         (root["usage"] as? JsonObject)?.let {
             emit(ProviderEvent.UsageEvent(parseUsage(it)))
         }
+        return false
     }
 
     fun closeToolCalls(emit: (ProviderEvent) -> Unit) {
@@ -573,6 +600,59 @@ private fun mapFinish(reason: String): FinishReason = when (reason) {
     "length" -> FinishReason.LENGTH
     "content_filter" -> FinishReason.CONTENT_FILTER
     else -> FinishReason.UNKNOWN
+}
+
+/**
+ * Normalize the in-band error shapes an OpenAI-compatible stream can carry into
+ * one structured failure: a top-level `error` object, `{"type":"error"}`, or a
+ * Responses-style `response.failed`. Returns null for ordinary data frames.
+ */
+private fun parseError(root: JsonObject): ProviderEvent.Failure? {
+    val errorObj = root["error"] as? JsonObject
+    val response = root["response"] as? JsonObject
+    val rootType = root.str("type")
+    val responseType = response?.str("type")
+    val isError = errorObj != null ||
+        rootType == "error" ||
+        rootType == "response.failed" ||
+        responseType == "response.failed" ||
+        (response != null && response.str("status") == "failed")
+    if (!isError) return null
+
+    val source = errorObj
+        ?: (response?.get("error") as? JsonObject)
+        ?: response
+        ?: root
+    val message = source.str("message")
+        ?: root.str("message")
+        ?: errorObj?.str("type")
+        ?: rootType
+        ?: "OpenAI stream error"
+    val code = source.str("code")
+        ?: source.str("type")
+        ?: root.str("code")
+        ?: rootType
+    val retryable = when (code?.lowercase()) {
+        "insufficient_quota", "usage_not_included", "invalid_prompt" -> false
+        "server_is_overloaded", "server_error" -> true
+        else -> null
+    }
+    return ProviderEvent.Failure(
+        message = message,
+        retryable = retryable,
+        contextOverflow = ProviderErrors.isContextOverflow(message),
+    )
+}
+
+/**
+ * Parse a `Retry-After` value into milliseconds. A bare number is interpreted as
+ * seconds unless [isMillis] is set (the `retry-after-ms` header carries ms).
+ */
+private fun parseRetryAfter(value: String?, isMillis: Boolean = false): Long? {
+    val raw = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val number = raw.toDoubleOrNull() ?: return null
+    if (!number.isFinite() || number < 0.0) return null
+    return if (isMillis) number.toLong() else (number * 1000.0).toLong()
 }
 
 private fun JsonObject.str(key: String): String? =
