@@ -227,6 +227,83 @@ data class LumenColors(
             ),
             dark = true,
         )
+        val EmberLight = LumenColors(
+            bg = Color(0xFFF4EEE4), surface = Color(0xFFFFFDF9), fg = Color(0xFF2A1E12),
+            dim = Color(0xFF6E5A40), faint = Color(0xFFA89878), rule = Color(0x1A2A1E12),
+            outline = Color(0xFFD9CDB8),
+            accent = Color(0xFFA83E12),
+            water = Color(0xFF9A5A00),
+            spectrum = listOf(
+                Color(0xFF9A3412), Color(0xFFA8480A), Color(0xFF8A400E), Color(0xFF7C3D10),
+            ),
+            dark = false,
+        )
+        val EmberDark = LumenColors(
+            bg = Color(0xFF0A0705), surface = Color(0xFF191108), fg = Color(0xFFF7ECDD),
+            dim = Color(0xFFC9B79B), faint = Color(0xFF6E5C44), rule = Color(0x17F7ECDD),
+            outline = Color(0xFF3A2C1C),
+            accent = Color(0xFFF0A64B),
+            water = Color(0xFFE89B4A),
+            spectrum = listOf(
+                Color(0xFFF0A64B), Color(0xFFE8853F), Color(0xFFE06C5A), Color(0xFFD9A441),
+            ),
+            dark = true,
+        )
+        val PhosphorLight = LumenColors(
+            bg = Color(0xFFEEF3EC), surface = Color(0xFFFFFFFF), fg = Color(0xFF12251A),
+            dim = Color(0xFF466B54), faint = Color(0xFF92AA9A), rule = Color(0x1A12251A),
+            outline = Color(0xFFCBD9CE),
+            accent = Color(0xFF1E7A44),
+            water = Color(0xFF0E6E52),
+            spectrum = listOf(
+                Color(0xFF1F7A45), Color(0xFF0F766E), Color(0xFF0E7490), Color(0xFF2F7A1E),
+            ),
+            dark = false,
+        )
+        val PhosphorDark = LumenColors(
+            bg = Color(0xFF030805), surface = Color(0xFF0E1710), fg = Color(0xFFE4F5E8),
+            dim = Color(0xFF9CC0A6), faint = Color(0xFF55705C), rule = Color(0x17E4F5E8),
+            outline = Color(0xFF263528),
+            accent = Color(0xFF6EE787),
+            water = Color(0xFF4FD6A0),
+            spectrum = listOf(
+                Color(0xFF6EE787), Color(0xFF46D5C0), Color(0xFF5BC8E8), Color(0xFFA3E36B),
+            ),
+            dark = true,
+        )
+        val AbyssLight = LumenColors(
+            bg = Color(0xFFECEFF4), surface = Color(0xFFFFFFFF), fg = Color(0xFF232A33),
+            dim = Color(0xFF5A6673), faint = Color(0xFF9AA6B4), rule = Color(0x1A232A33),
+            outline = Color(0xFFCDD5DE),
+            accent = Color(0xFF3E6FA8),
+            water = Color(0xFF0F6E86),
+            spectrum = listOf(
+                Color(0xFF3A5F9E), Color(0xFF2F6FA0), Color(0xFF0F6E86), Color(0xFF2F7A57),
+            ),
+            dark = false,
+        )
+        val AbyssDark = LumenColors(
+            bg = Color(0xFF05080C), surface = Color(0xFF101720), fg = Color(0xFFE6EDF5),
+            dim = Color(0xFFA6B4C4), faint = Color(0xFF5A6878), rule = Color(0x17E6EDF5),
+            outline = Color(0xFF28323E),
+            accent = Color(0xFF82B8E0),
+            water = Color(0xFF6FD3E6),
+            spectrum = listOf(
+                Color(0xFF82B8E0), Color(0xFF6FA8D8), Color(0xFF6FD3E6), Color(0xFF7FE0C0),
+            ),
+            dark = true,
+        )
+
+        /** Palette ids in presentation order. */
+        val PaletteIds: List<String> = listOf("prism", "ember", "phosphor", "abyss")
+
+        /** Resolve a palette id and dark flag to its colours; unknown id -> prism. */
+        fun forId(id: String, dark: Boolean): LumenColors = when (id) {
+            "ember" -> if (dark) EmberDark else EmberLight
+            "phosphor" -> if (dark) PhosphorDark else PhosphorLight
+            "abyss" -> if (dark) AbyssDark else AbyssLight
+            else -> if (dark) Dark else Light
+        }
     }
 }
 
@@ -359,6 +436,10 @@ fun LumenChatScreen(
     theme: String = "system",
     /** Switch theme from the quick settings sheet. */
     onTheme: ((String) -> Unit)? = null,
+    /** Active palette: "prism" | "ember" | "phosphor" | "abyss". */
+    palette: String = "prism",
+    /** Switch palette from the quick settings sheet. */
+    onPalette: (String) -> Unit = {},
     /** Whether every tool asks for confirmation first. */
     askBeforeTools: Boolean = false,
     /** Toggle ask-before-tools from the quick settings sheet. */
@@ -3095,6 +3176,24 @@ private fun QuickSettingsSheet(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (value in listOf("system", "light", "dark")) {
                     QuickChip(value, theme == value, "quick-theme-$value", colors) { onTheme?.invoke(value) }
+                }
+            }
+
+            Spacer(Modifier.height(LumenSpacing.xl))
+            LumenSectionHeader(colors, "palette", caption = "the colour mood of the app")
+            Spacer(Modifier.height(LumenSpacing.md))
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                for (id in LumenColors.PaletteIds) {
+                    val label = when (id) {
+                        "ember" -> "Ember"
+                        "phosphor" -> "Phosphor"
+                        "abyss" -> "Abyss"
+                        else -> "Prism"
+                    }
+                    QuickChip(label, palette == id, "quick-palette-$id", colors) { onPalette(id) }
                 }
             }
 

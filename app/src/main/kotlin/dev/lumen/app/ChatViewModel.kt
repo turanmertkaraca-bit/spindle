@@ -249,6 +249,8 @@ data class ChatState(
     val currentSessionId: String? = null,
     /** "system" | "light" | "dark". */
     val theme: String = "system",
+    /** "prism" | "ember" | "phosphor" | "abyss". */
+    val palette: String = "prism",
     /** Running session token/cost totals, rolled up from each message. */
     val usage: Usage = Usage(),
 
@@ -391,6 +393,7 @@ class ChatViewModel(
             provider = keys.provider,
             needsKey = !keys.hasKey,
             theme = keys.theme,
+            palette = keys.palette,
             askBeforeTools = keys.askBeforeTools,
             agentMode = keys.agentMode,
             maxCostUsd = keys.maxCostUsd,
@@ -1169,6 +1172,11 @@ class ChatViewModel(
     fun setTheme(theme: String) {
         keys.theme = theme
         _state.value = _state.value.copy(theme = theme)
+    }
+
+    fun setPalette(id: String) {
+        keys.palette = id
+        _state.value = _state.value.copy(palette = id)
     }
 
     /** Switch the active primary agent (build/plan) and persist the choice. */

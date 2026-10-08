@@ -100,6 +100,11 @@ class KeyStore(context: Context) {
         get() = prefs.getString("theme", "system") ?: "system"
         set(value) = prefs.edit().putString("theme", value).apply()
 
+    /** "prism" | "ember" | "phosphor" | "abyss". */
+    var palette: String
+        get() = prefs.getString("palette", "prism") ?: "prism"
+        set(value) = prefs.edit().putString("palette", value).apply()
+
     /** The active primary agent: "build" | "plan" | "delegate". */
     var agentMode: String
         get() = prefs.getString("agentMode", "build") ?: "build"

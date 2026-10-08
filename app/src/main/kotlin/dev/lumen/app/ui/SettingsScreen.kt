@@ -49,6 +49,10 @@ fun SettingsScreen(
     onEditKey: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Active palette: "prism" | "ember" | "phosphor" | "abyss". */
+    palette: String = "prism",
+    /** Switch palette from the settings screen. */
+    onPalette: (String) -> Unit = {},
     askBeforeTools: Boolean = false,
     onAskBeforeTools: (Boolean) -> Unit = {},
     /** Per-session cost ceiling in USD; 0 means unlimited. */
@@ -173,6 +177,26 @@ fun SettingsScreen(
             chip(colors, "system", theme == "system", "theme-system") { onTheme("system") }
             chip(colors, "light", theme == "light", "theme-light") { onTheme("light") }
             chip(colors, "dark", theme == "dark", "theme-dark") { onTheme("dark") }
+        }
+
+        Spacer(Modifier.height(LumenSpacing.xl))
+        LumenSectionHeader(colors, "palette", caption = "the colour mood of the app")
+        Spacer(Modifier.height(LumenSpacing.md))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            for (id in LumenColors.PaletteIds) {
+                val label = when (id) {
+                    "ember" -> "Ember"
+                    "phosphor" -> "Phosphor"
+                    "abyss" -> "Abyss"
+                    else -> "Prism"
+                }
+                chip(colors, label, palette == id, "palette-$id") { onPalette(id) }
+            }
         }
 
         Spacer(Modifier.height(LumenSpacing.xxl))

@@ -66,7 +66,7 @@ class MainActivity : ComponentActivity() {
                 "dark" -> true
                 else -> systemDark
             }
-            val colors = animatedColors(dark)
+            val colors = animatedColors(state.palette, dark)
             val toggleTheme = { viewModel.setTheme(if (dark) "light" else "dark") }
 
             // Keep the system bar icons legible against our own background.
@@ -285,6 +285,8 @@ class MainActivity : ComponentActivity() {
                     onProvider = viewModel::setProvider,
                     theme = state.theme,
                     onTheme = viewModel::setTheme,
+                    palette = state.palette,
+                    onPalette = { viewModel.setPalette(it) },
                     askBeforeTools = state.askBeforeTools,
                     onAskBeforeTools = viewModel::setAskBeforeTools,
                     onMaxCost = viewModel::setMaxCost,
@@ -407,6 +409,8 @@ class MainActivity : ComponentActivity() {
                     onProvider = viewModel::setProvider,
                     onModel = viewModel::setModel,
                     onTheme = viewModel::setTheme,
+                    palette = state.palette,
+                    onPalette = { viewModel.setPalette(it) },
                     onEditKey = { route = "key" },
                     onBack = { route = "home" },
                     modifier = modifier,
@@ -512,8 +516,8 @@ class MainActivity : ComponentActivity() {
 
 /** The palette, eased between light and dark so the theme swap is not a hard cut. */
 @Composable
-private fun animatedColors(dark: Boolean): LumenColors {
-    val target = if (dark) LumenColors.Dark else LumenColors.Light
+private fun animatedColors(palette: String, dark: Boolean): LumenColors {
+    val target = LumenColors.forId(palette, dark)
     val spec = tween<Color>(durationMillis = 420)
     return LumenColors(
         bg = animateColorAsState(target.bg, spec, label = "bg").value,
