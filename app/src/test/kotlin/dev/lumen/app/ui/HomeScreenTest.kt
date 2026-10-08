@@ -132,7 +132,7 @@ class HomeScreenTest {
             screen(sessions = rows, runningSessionIds = setOf("live"))
         }
 
-        compose.onNodeWithTag("session-live-live").assertExists()
-        compose.onNodeWithTag("session-live-idle").assertDoesNotExist()
+        compose.onNodeWithTag("session-live-live", useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("session-live-idle", useUnmergedTree = true).assertDoesNotExist()
     }
 }
