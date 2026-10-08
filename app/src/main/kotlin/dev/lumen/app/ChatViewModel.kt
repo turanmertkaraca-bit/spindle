@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import dev.lumen.app.data.KeyStore
 import dev.lumen.app.data.ModelCatalogue
 import dev.lumen.app.data.ProviderCatalogue
+import dev.lumen.app.data.SessionArchive
 import dev.lumen.app.platform.AndroidEnvironment
 import dev.lumen.app.platform.AndroidShellExecutor
 import dev.lumen.app.platform.AndroidTerminal
@@ -1374,6 +1375,35 @@ class ChatViewModel(
                 openSession(fork.id.value)
             }
         }
+    }
+
+    // ---- export / import ----
+
+    /**
+     * Serialize session [sessionId] and its messages to the portable archive
+     * format. Returns null when the session is unknown, so the caller can post
+     * an error without a second lookup.
+     */
+    suspend fun exportSession(sessionId: String): String? {
+        val sid = SessionId(sessionId)
+        val session = store.session(sid) ?: return null
+        val messages = store.messages(sid)
+        return SessionArchive.encode(session, messages)
+    }
+
+    /**
+     * Import every session in [json], creating each one and appending its
+     * messages in order. Returns the number of sessions created (0 for
+     * malformed input). Parsing and id regeneration live in [SessionArchive].
+     */
+    suspend fun importSessions(json: String): Int {
+        val imported = SessionArchive.decode(json)
+        for (item in imported) {
+            store.createSession(item.session)
+            for (message in item.messages) store.appendMessage(message)
+        }
+        if (imported.isNotEmpty()) refreshSessions()
+        return imported.size
     }
 
     /**

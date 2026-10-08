@@ -260,6 +260,10 @@ fun HomeScreen(
     onSearch: (String) -> Unit = {},
     /** Fork a session at its head into a new child chat. */
     onFork: (String) -> Unit = {},
+    /** Export a session to a shareable JSON file, when the host wires it. */
+    onExport: (String) -> Unit = {},
+    /** Import a session archive, when the host wires it. */
+    onImport: (() -> Unit)? = null,
     /** Pin/unpin a session; pinned rows float to the top. */
     onPin: (String, Boolean) -> Unit = { _, _ -> },
     /** Archive/unarchive a session; archived rows are hidden unless shown. */
@@ -319,7 +323,10 @@ fun HomeScreen(
     )
 
     // Secondary destinations tuck into one quiet menu so the header stays calm.
-    val menuItems = listOf(TopMenuAction("Settings", "settings", onSettings))
+    val menuItems = buildList {
+        add(TopMenuAction("Settings", "settings", onSettings))
+        if (onImport != null) add(TopMenuAction("Import session", "home-import", onImport))
+    }
 
     Column(
         modifier
@@ -586,6 +593,7 @@ fun HomeScreen(
                         onPin = onPin,
                         onArchive = onArchive,
                         onFork = onFork,
+                        onExport = onExport,
                         onRename = onRename,
                         onAddTag = onAddTag,
                         onRemoveTag = onRemoveTag,
@@ -762,6 +770,7 @@ private fun SessionCard(
     onPin: (String, Boolean) -> Unit,
     onArchive: (String, Boolean) -> Unit,
     onFork: (String) -> Unit,
+    onExport: (String) -> Unit,
     onRename: (String, String) -> Unit,
     onAddTag: (String, String) -> Unit,
     onRemoveTag: (String, String) -> Unit,
@@ -893,6 +902,7 @@ private fun SessionCard(
                 Row(
                     Modifier
                         .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
                         .padding(start = 36.dp, end = 12.dp, bottom = 10.dp)
                         .testTag("actions-${session.id}"),
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -916,6 +926,7 @@ private fun SessionCard(
                         tagging = true
                     }
                     RowAction(colors, "fork", "fork-${session.id}") { onFork(session.id) }
+                    RowAction(colors, "export", "session-export-${session.id}") { onExport(session.id) }
                     RowAction(
                         colors,
                         "delete",
@@ -1043,7 +1054,7 @@ private fun TagEditor(
 }
 
 /**
- * A quiet action used in an expanded session row. Borderless so a row of six
+ * A quiet action used in an expanded session row. Borderless so a run of them
  * reads as a calm strip of words rather than a wall of boxes.
  */
 @Composable

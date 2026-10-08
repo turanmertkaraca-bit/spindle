@@ -25,6 +25,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
@@ -49,7 +50,10 @@ import dev.lumen.app.ui.OnboardingScreen
 import dev.lumen.app.ui.SettingsScreen
 import dev.lumen.app.ui.StorageScreen
 import dev.lumen.app.ui.TerminalScreen
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.io.File
+import java.nio.charset.StandardCharsets
 
 class MainActivity : ComponentActivity() {
 
@@ -121,6 +125,55 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 Unit
+            }
+            // Session export/import. File IO runs off the main thread; failures
+            // land on the diagnostics ring instead of crashing the picker flow.
+            val ioScope = rememberCoroutineScope()
+            // The id awaiting a CreateDocument target: the picker result only
+            // carries the uri, not the session it was launched for.
+            var pendingExportId by remember { mutableStateOf<String?>(null) }
+            val exportLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.CreateDocument("application/json"),
+            ) { uri ->
+                val id = pendingExportId
+                pendingExportId = null
+                if (uri == null || id == null) return@rememberLauncherForActivityResult
+                ioScope.launch(Dispatchers.IO) {
+                    runCatching {
+                        val json = viewModel.exportSession(id) ?: error("session not found")
+                        appContext.contentResolver.openOutputStream(uri)?.use { out ->
+                            out.write(json.toByteArray(StandardCharsets.UTF_8))
+                        } ?: error("cannot open export destination")
+                    }.onFailure { e ->
+                        viewModel.recordDiagnostic("export failed: ${e.message}")
+                    }
+                }
+            }
+            val importLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.OpenDocument(),
+            ) { uri ->
+                if (uri == null) return@rememberLauncherForActivityResult
+                ioScope.launch(Dispatchers.IO) {
+                    runCatching {
+                        val json = appContext.contentResolver.openInputStream(uri)?.use { input ->
+                            input.readBytes().toString(StandardCharsets.UTF_8)
+                        } ?: error("cannot open import source")
+                        val count = viewModel.importSessions(json)
+                        viewModel.recordDiagnostic("imported $count session(s)")
+                    }.onFailure { e ->
+                        viewModel.recordDiagnostic("import failed: ${e.message}")
+                    }
+                }
+            }
+            val requestExport: (String) -> Unit = { id ->
+                val title = state.sessions.firstOrNull { it.id == id }?.title ?: "session"
+                pendingExportId = id
+                exportLauncher.launch(archiveFileName(title))
+            }
+            val requestImport: () -> Unit = {
+                importLauncher.launch(
+                    arrayOf("application/json", "text/plain", "application/octet-stream"),
+                )
             }
             val onChat = route == "chat" && state.currentSessionId != null
 
@@ -490,6 +543,8 @@ class MainActivity : ComponentActivity() {
                     },
                     onDelete = viewModel::deleteSession,
                     onFork = viewModel::forkSession,
+                    onExport = requestExport,
+                    onImport = requestImport,
                     onPin = viewModel::setPinned,
                     onArchive = viewModel::setArchived,
                     onRename = viewModel::renameSession,
@@ -558,6 +613,16 @@ class MainActivity : ComponentActivity() {
         intent.removeExtra(RunService.EXTRA_SESSION_ID)
         pendingSessionId = id
     }
+}
+
+/** A filesystem-safe `lumen-<title>.json` name for the document picker. */
+private fun archiveFileName(title: String): String {
+    val safe = title.trim()
+        .replace(Regex("[^A-Za-z0-9._-]+"), "-")
+        .trim('-', '.')
+        .ifBlank { "session" }
+        .take(60)
+    return "lumen-$safe.json"
 }
 
 /** The palette, eased between light and dark so the theme swap is not a hard cut. */
