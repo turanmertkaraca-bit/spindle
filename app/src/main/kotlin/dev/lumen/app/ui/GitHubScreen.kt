@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -41,6 +42,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -65,6 +67,9 @@ private val Mono = FontFamily.Monospace
 
 private const val GITHUB_URL_HINT = "owner/name"
 
+/** Prefilled commit summary; the user can edit it in the confirm dialog. */
+private const val DEFAULT_COMMIT_MESSAGE = "lumen: update from agent"
+
 /**
  * The GitHub integration screen. Self-contained: it reads and writes its own
  * [KeyStore] and builds its own [GitHubClient]/[GitRunner] from the local
@@ -85,6 +90,10 @@ fun GitHubScreen(
     activityRefreshing: Boolean = false,
     onRefreshActivity: (() -> Unit)? = null,
     loadDiff: (suspend (String) -> String)? = null,
+    /** Invoked with the confirmed commit message; the host wires this to the ViewModel. */
+    onCommit: (String) -> Unit = {},
+    /** Invoked when the user confirms a non-force push; the host wires this to the ViewModel. */
+    onPush: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val keys = remember(context) { KeyStore(context) }
@@ -101,6 +110,8 @@ fun GitHubScreen(
     var statusIsError by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var gitProbe by remember { mutableStateOf<GitProbe?>(null) }
+    var showCommit by remember { mutableStateOf(false) }
+    var showPush by remember { mutableStateOf(false) }
 
     val connected = token.isNotBlank() || login.isNotBlank()
 
@@ -385,6 +396,18 @@ fun GitHubScreen(
                     uriHandler.openUri(url)
                 }
             }
+            ActionPill(
+                colors,
+                "Commit",
+                "git-commit",
+                enabled = !busy && token.isNotBlank() && repo.isNotBlank(),
+            ) { showCommit = true }
+            ActionPill(
+                colors,
+                "Push",
+                "git-push",
+                enabled = !busy && token.isNotBlank() && repo.isNotBlank(),
+            ) { showPush = true }
         }
 
         Spacer(Modifier.height(LumenSpacing.xxl))
@@ -407,6 +430,179 @@ fun GitHubScreen(
             lineHeight = LumenType.lineTight,
         )
     }
+
+    if (showCommit) {
+        CommitDialog(
+            colors = colors,
+            onDismiss = { showCommit = false },
+            onConfirm = { message ->
+                showCommit = false
+                onCommit(message)
+            },
+        )
+    }
+    if (showPush) {
+        PushDialog(
+            colors = colors,
+            branch = activity?.branch.orEmpty(),
+            onDismiss = { showPush = false },
+            onConfirm = {
+                showPush = false
+                onPush()
+            },
+        )
+    }
+}
+
+/**
+ * Confirm dialog for a commit: an editable one-line summary (prefilled with
+ * [DEFAULT_COMMIT_MESSAGE]) and a confirm action that hands the trimmed message
+ * to the caller.
+ */
+@Composable
+private fun CommitDialog(
+    colors: LumenColors,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var message by rememberSaveable { mutableStateOf(DEFAULT_COMMIT_MESSAGE) }
+    val valid = message.isNotBlank()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.surface,
+        titleContentColor = colors.fg,
+        textContentColor = colors.dim,
+        title = {
+            Text(
+                "Commit changes",
+                color = colors.fg,
+                fontFamily = Mono,
+                fontSize = LumenType.heading,
+                fontWeight = FontWeight.Medium,
+            )
+        },
+        text = {
+            BasicTextField(
+                value = message,
+                onValueChange = { message = it },
+                textStyle = TextStyle(
+                    color = colors.fg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.bodyLarge,
+                ),
+                cursorBrush = SolidColor(colors.accent),
+                keyboardOptions = KeyboardOptions(
+                    autoCorrect = false,
+                    capitalization = KeyboardCapitalization.Sentences,
+                    imeAction = ImeAction.Done,
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(LumenShapes.inset)
+                    .background(colors.bg)
+                    .border(1.dp, colors.outline, LumenShapes.inset)
+                    .padding(10.dp)
+                    .testTag("git-commit-message"),
+            )
+        },
+        confirmButton = {
+            Text(
+                "Commit",
+                color = if (valid) colors.accent else colors.faint,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clip(LumenShapes.small)
+                    .clickable(enabled = valid) { onConfirm(message.trim()) }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("git-commit-confirm"),
+            )
+        },
+        dismissButton = {
+            Text(
+                "Cancel",
+                color = colors.dim,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+                modifier = Modifier
+                    .clip(LumenShapes.small)
+                    .clickable { onDismiss() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("git-commit-cancel"),
+            )
+        },
+    )
+}
+
+/**
+ * Confirm dialog for a push. The copy names the branch and states explicitly
+ * that the push does not force, mirroring the guarded runner behaviour.
+ */
+@Composable
+private fun PushDialog(
+    colors: LumenColors,
+    branch: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val target = branch.trim()
+    val message = if (target.isBlank()) {
+        "Push to origin? This does not force."
+    } else {
+        "Push to origin $target? This does not force."
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.surface,
+        titleContentColor = colors.fg,
+        textContentColor = colors.dim,
+        title = {
+            Text(
+                "Push",
+                color = colors.fg,
+                fontFamily = Mono,
+                fontSize = LumenType.heading,
+                fontWeight = FontWeight.Medium,
+            )
+        },
+        text = {
+            Text(
+                message,
+                color = colors.dim,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+                lineHeight = LumenType.lineTight,
+            )
+        },
+        confirmButton = {
+            Text(
+                "Push",
+                color = colors.accent,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clip(LumenShapes.small)
+                    .clickable { onConfirm() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("git-push-confirm"),
+            )
+        },
+        dismissButton = {
+            Text(
+                "Cancel",
+                color = colors.dim,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+                modifier = Modifier
+                    .clip(LumenShapes.small)
+                    .clickable { onDismiss() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("git-push-cancel"),
+            )
+        },
+    )
 }
 
 @Composable

@@ -12,6 +12,7 @@ import dev.lumen.app.platform.AndroidShellExecutor
 import dev.lumen.app.platform.AndroidTerminal
 import dev.lumen.app.platform.DebianEnvironment
 import dev.lumen.app.platform.GitActivity
+import dev.lumen.app.platform.GitResult
 import dev.lumen.app.platform.GitRunner
 import dev.lumen.app.platform.PerfSampler
 import dev.lumen.app.platform.PerfSummary
@@ -1056,6 +1057,76 @@ class ChatViewModel(
                 GitActivity(error = t.message)
             }
             _state.value = _state.value.copy(gitActivity = result, gitActivityRefreshing = false)
+        }
+    }
+
+    /**
+     * Stage and commit the workspace through [GitRunner.commit], surfacing the
+     * outcome in diagnostics (and [ChatState.error] on failure). A successful
+     * commit — including a clean tree reported as "nothing to commit" — refreshes
+     * the GitHub activity view.
+     */
+    suspend fun gitCommit(message: String) {
+        val result = try {
+            git.commit(message)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            diag("git commit failed: ${t.message}")
+            _state.value = _state.value.copy(error = t.message ?: "commit failed")
+            return
+        }
+        when (result) {
+            is GitResult.Ok -> {
+                diag("git commit: ${result.output}")
+                refreshGitActivity()
+            }
+            is GitResult.Failed -> {
+                diag("git commit failed: ${result.message}")
+                _state.value = _state.value.copy(error = result.message)
+            }
+            GitResult.NotInstalled -> {
+                diag("git commit failed: git is not installed")
+                _state.value = _state.value.copy(error = "git is not installed")
+            }
+        }
+    }
+
+    /**
+     * Push the current branch through [GitRunner.push] using the stored GitHub
+     * PAT. The token is passed to the runner only (env + credential helper) and
+     * is never logged; [GitRunner] redacts it from any returned text. Success
+     * refreshes the activity view.
+     */
+    suspend fun gitPush() {
+        val token = keys.githubToken.orEmpty()
+        if (token.isBlank()) {
+            diag("git push failed: no GitHub token")
+            _state.value = _state.value.copy(error = "GitHub token required")
+            return
+        }
+        val result = try {
+            git.push(token)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            diag("git push failed: ${t.message}")
+            _state.value = _state.value.copy(error = t.message ?: "push failed")
+            return
+        }
+        when (result) {
+            is GitResult.Ok -> {
+                diag("git push: ${result.output}")
+                refreshGitActivity()
+            }
+            is GitResult.Failed -> {
+                diag("git push failed: ${result.message}")
+                _state.value = _state.value.copy(error = result.message)
+            }
+            GitResult.NotInstalled -> {
+                diag("git push failed: git is not installed")
+                _state.value = _state.value.copy(error = "git is not installed")
+            }
         }
     }
 

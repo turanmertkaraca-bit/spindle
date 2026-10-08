@@ -234,4 +234,85 @@ class GitRunnerTest {
         assertTrue(ok.output.endsWith("\u2026 (truncated)"))
         assertTrue(shell.commands.any { it.contains("head -c 2048") })
     }
+
+    @Test
+    fun `commit rejects a blank message without running a command`() = runBlocking {
+        val shell = FakeShell { ShellResult(0, "git version 2.43.0") }
+        val result = GitRunner(shell, temp()).commit("   ")
+        assertTrue(result is GitResult.Failed)
+        assertEquals("commit message required", (result as GitResult.Failed).message)
+        assertTrue(shell.commands.isEmpty(), "a blank message must not build a command")
+    }
+
+    @Test
+    fun `commit stages every change then commits with the quoted message`() = runBlocking {
+        val shell = FakeShell { cmd ->
+            when {
+                cmd.contains("--version") -> ShellResult(0, "git version 2.43.0")
+                cmd == "git add -A" -> ShellResult(0, "")
+                cmd.contains("git commit") -> ShellResult(0, "[main abc1234] fix the bug")
+                else -> ShellResult(0, "")
+            }
+        }
+        val result = GitRunner(shell, temp()).commit("fix the bug")
+        assertTrue(result is GitResult.Ok)
+
+        val addIndex = shell.commands.indexOf("git add -A")
+        val commitIndex = shell.commands.indexOfFirst { it.contains("git commit -m") }
+        assertTrue(addIndex >= 0, "add must be issued")
+        assertTrue(commitIndex > addIndex, "add must precede commit: ${shell.commands}")
+        assertEquals("git commit -m 'fix the bug'", shell.commands[commitIndex])
+    }
+
+    @Test
+    fun `commit reports a clean tree as success`() = runBlocking {
+        val shell = FakeShell { cmd ->
+            when {
+                cmd.contains("--version") -> ShellResult(0, "git version 2.43.0")
+                cmd.contains("git commit") -> ShellResult(1, "nothing to commit, working tree clean")
+                else -> ShellResult(0, "")
+            }
+        }
+        assertEquals(GitResult.Ok("nothing to commit"), GitRunner(shell, temp()).commit("update"))
+    }
+
+    @Test
+    fun `push authenticates via env and never forces`() = runBlocking {
+        val shell = FakeShell { cmd ->
+            when {
+                cmd.contains("--version") -> ShellResult(0, "git version 2.43.0")
+                cmd.contains("--abbrev-ref") -> ShellResult(0, "main\n")
+                else -> ShellResult(0, "Everything up-to-date")
+            }
+        }
+        val result = GitRunner(shell, temp()).push("s3cr3t")
+        assertTrue(result is GitResult.Ok)
+
+        // The push command is the version/rev-parse-free one.
+        val pushIndex = shell.commands.indexOfFirst { it.contains("credential.helper") }
+        assertTrue(pushIndex >= 0, "a push command should have been issued")
+        val command = shell.commands[pushIndex]
+        assertTrue(" push" in command, "it must be a push: $command")
+        assertFalse(command.contains("--force"), "never force")
+        assertFalse(Regex("(^|\\s)-f(\\s|$)").containsMatchIn(command), "never force")
+        assertTrue("s3cr3t" !in command, "the token must never be in argv")
+        assertTrue("credential.helper" in command, "auth rides on a credential helper")
+        assertTrue("https://" !in command, "the token must never be embedded in a url")
+        assertEquals("s3cr3t", shell.envs[pushIndex]["GITHUB_TOKEN"])
+    }
+
+    @Test
+    fun `a failed push redacts the token from its output`() = runBlocking {
+        val shell = FakeShell { cmd ->
+            when {
+                cmd.contains("--version") -> ShellResult(0, "git version 2.43.0")
+                cmd.contains("credential.helper") ->
+                    ShellResult(1, "fatal: Authentication failed for 'https://s3cr3t@github.com/o/r.git'")
+                else -> ShellResult(0, "")
+            }
+        }
+        val result = GitRunner(shell, temp()).push("s3cr3t")
+        val failed = result as GitResult.Failed
+        assertTrue("s3cr3t" !in failed.message, "the token must be redacted: ${failed.message}")
+    }
 }

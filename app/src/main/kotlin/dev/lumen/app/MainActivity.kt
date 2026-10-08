@@ -527,6 +527,8 @@ class MainActivity : ComponentActivity() {
                         activity = state.gitActivity,
                         activityRefreshing = state.gitActivityRefreshing,
                         onRefreshActivity = viewModel::refreshGitActivity,
+                        onCommit = { message -> viewModel.viewModelScope.launch { viewModel.gitCommit(message) } },
+                        onPush = { viewModel.viewModelScope.launch { viewModel.gitPush() } },
                     )
                 }
                 else -> HomeScreen(

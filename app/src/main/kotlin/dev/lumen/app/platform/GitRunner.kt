@@ -109,6 +109,65 @@ class GitRunner(
         return GitResult.Ok(redact(summary, token))
     }
 
+    /**
+     * Stage every workspace change (`git add -A`) and commit it with [message].
+     * A blank message is refused before any command is built. A clean tree is
+     * not an error: `git commit` exits non-zero with "nothing to commit", which
+     * is folded into a successful [GitResult.Ok] so a caller can report it
+     * plainly.
+     */
+    suspend fun commit(message: String): GitResult {
+        val subject = message.trim()
+        if (subject.isBlank()) return GitResult.Failed(-1, "commit message required")
+        ensureWorkspace()
+        if (!probe().installed) return GitResult.NotInstalled
+
+        val add = shell.run("git add -A", workspace, SHORT_TIMEOUT_MS)
+        if (add.exitCode != 0) {
+            return GitResult.Failed(add.exitCode, add.output.trim().ifBlank { "git add failed" })
+        }
+
+        val result = shell.run("git commit -m ${quote(subject)}", workspace, SHORT_TIMEOUT_MS)
+        if (result.exitCode == 0) {
+            return GitResult.Ok(result.output.trim().ifBlank { "committed" })
+        }
+        if (result.output.contains("nothing to commit", ignoreCase = true)) {
+            return GitResult.Ok("nothing to commit")
+        }
+        return GitResult.Failed(result.exitCode, result.output.trim().ifBlank { "commit failed" })
+    }
+
+    /**
+     * Push the current branch to its upstream with the SAME env-based auth as
+     * [clone]: the token rides in `GITHUB_TOKEN` and a one-shot
+     * `credential.helper`, never in argv or the remote URL. This is never a
+     * force push.
+     */
+    suspend fun push(token: String): GitResult {
+        ensureWorkspace()
+        if (!probe().installed) return GitResult.NotInstalled
+
+        // Defined with single quotes around the helper so the outer shell does
+        // not expand $GITHUB_TOKEN; git runs it later with the env var set.
+        val helper = "!f(){ echo username=x-access-token; echo password=\"\$GITHUB_TOKEN\"; };f"
+        val command = "git -c credential.helper='$helper' push"
+
+        val result = shell.run(command, workspace, CLONE_TIMEOUT_MS, mapOf("GITHUB_TOKEN" to token))
+        if (result.exitCode != 0) {
+            val message = redact(result.output, token).trim().ifBlank { "push failed" }
+            return GitResult.Failed(result.exitCode, message)
+        }
+
+        val branch = shell.run(
+            "git rev-parse --abbrev-ref HEAD",
+            workspace,
+            SHORT_TIMEOUT_MS,
+        ).output.trim().lineSequence().firstOrNull().orEmpty()
+
+        val summary = if (branch.isNotBlank() && branch != "HEAD") "pushed to $branch" else "pushed"
+        return GitResult.Ok(redact(summary, token))
+    }
+
     /** `git status` in the workspace (short, with branch). */
     suspend fun status(): GitResult {
         ensureWorkspace()
