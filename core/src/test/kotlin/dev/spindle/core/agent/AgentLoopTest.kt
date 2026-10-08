@@ -935,6 +935,62 @@ class AgentLoopTest {
     }
 
     @Test
+    fun `partial streamed text is checkpointed and survives mid-stream cancellation`() = runTest {
+        // A provider that streams some text, trips the ~1s wall-clock checkpoint
+        // throttle, then hangs forever without emitting Finished. If the process
+        // (or the run) is killed at that point, the store must already hold the
+        // partial assistant text rather than an empty turn.
+        val sessionId = SessionId("ses_checkpoint")
+        val store = store()
+        val bus = EventBus()
+        var now = 10_000L
+        val provider = object : Provider {
+            override val id = "fake"
+            override suspend fun models() =
+                listOf(ModelInfo(providerId = id, id = "fake-1", label = "fake"))
+
+            override fun stream(request: ChatRequest): Flow<ProviderEvent> = flow {
+                emit(ProviderEvent.TextDelta("durable "))
+                // The first checkpoint ran after the first delta; advance the
+                // injected wall clock so the second delta clears the throttle.
+                now += 2_000
+                emit(ProviderEvent.TextDelta("text"))
+                awaitCancellation()
+            }
+        }
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(emptyList()),
+            store = store,
+            bus = bus,
+            clock = { now },
+        )
+        newSession(store, "ses_checkpoint")
+
+        val job = launch(UnconfinedTestDispatcher(testScheduler)) {
+            runCatching { loop.prompt(sessionId, "hello", "fake/fake-1") }
+        }
+
+        // The stream is suspended on awaitCancellation; the checkpoint must
+        // already have persisted the partial text.
+        val checkpointed = store.messages(sessionId)
+            .first { it.role == Role.ASSISTANT }
+            .parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
+        assertEquals("durable text", checkpointed)
+
+        job.cancel()
+        job.join()
+
+        val persisted = store.messages(sessionId).first { it.role == Role.ASSISTANT }
+        assertEquals(
+            "durable text",
+            persisted.parts.filterIsInstance<Part.Text>().joinToString("") { it.text },
+            "the checkpointed partial text must survive mid-stream cancellation",
+        )
+        assertEquals(FinishReason.ERROR, persisted.finish)
+    }
+
+    @Test
     fun `a stale open tool from a previous run is finalized before the next prompt`() = runTest {
         val provider = ScriptedProvider(
             listOf(ProviderEvent.TextDelta("ok"), ProviderEvent.Finished(FinishReason.STOP)),

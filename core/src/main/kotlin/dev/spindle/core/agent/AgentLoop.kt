@@ -283,15 +283,39 @@ class AgentLoop(
                         usage = Usage()
                         finish = FinishReason.UNKNOWN
                         failure = null
+                        // Durability checkpoint. While streaming, persist a partial
+                        // snapshot of the assistant message at most once per
+                        // CHECKPOINT_INTERVAL_MS (~1s) so a process kill mid-stream
+                        // leaves the model's text/reasoning in the store instead of
+                        // an empty turn. Store-only: no UI events are emitted, and
+                        // the final updateMessage later overwrites cleanly because
+                        // it reuses the same part ids. Declared per attempt so a
+                        // retry (whose PartReset cleared the builders) starts a
+                        // fresh interval and cannot persist the failed attempt's
+                        // stale text.
+                        var lastCheckpointMs = 0L
+                        suspend fun checkpoint() {
+                            val now = clock()
+                            if (now - lastCheckpointMs < CHECKPOINT_INTERVAL_MS) return
+                            lastCheckpointMs = now
+                            val partial = buildList {
+                                if (reasoning.isNotEmpty()) add(Part.Reasoning(reasoningPartId, reasoning.toString()))
+                                if (text.isNotEmpty()) add(Part.Text(textPartId, text.toString()))
+                            }
+                            if (partial.isEmpty()) return
+                            store.updateMessage(assistant.copy(parts = partial, usage = usage))
+                        }
                         provider.stream(request).collect { ev ->
                             when (ev) {
                                 is ProviderEvent.TextDelta -> {
                                     text.append(ev.text)
                                     bus.emit(AgentEvent.PartDelta(sessionId, assistant.id.value, textPartId, DeltaKind.TEXT, ev.text))
+                                    checkpoint()
                                 }
                                 is ProviderEvent.ReasoningDelta -> {
                                     reasoning.append(ev.text)
                                     bus.emit(AgentEvent.PartDelta(sessionId, assistant.id.value, reasoningPartId, DeltaKind.REASONING, ev.text))
+                                    checkpoint()
                                 }
                                 is ProviderEvent.ToolCallStart -> {
                                     calls.getOrPut(ev.index) { MutableToolCall(ev.id, ev.name) }
@@ -858,5 +882,8 @@ class AgentLoop(
         const val MAX_RULES_CHARS = 8_192
         const val MAX_METADATA_VALUE_CHARS = 8_192
         const val DURATION_KEY = "durationMs"
+
+        /** Minimum wall-clock gap between mid-stream partial-message checkpoints. */
+        const val CHECKPOINT_INTERVAL_MS = 1_000L
     }
 }
