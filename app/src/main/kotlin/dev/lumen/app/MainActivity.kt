@@ -149,6 +149,7 @@ class MainActivity : ComponentActivity() {
                     route == "storage" || route == "diagnostics" -> route = "settings"
                     route == "github" -> {
                         viewModel.refreshGithubLogin()
+                        viewModel.refreshGitActivity()
                         route = "settings"
                     }
                     route == "key" -> route = "settings"
@@ -433,14 +434,20 @@ class MainActivity : ComponentActivity() {
                     initialProvider = state.provider,
                     initialKey = viewModel.currentApiKey(),
                 )
-                route == "github" -> GitHubScreen(
-                    colors = colors,
-                    onBack = {
-                        viewModel.refreshGithubLogin()
-                        route = "settings"
-                    },
-                    modifier = modifier,
-                )
+                route == "github" -> {
+                    LaunchedEffect(Unit) { viewModel.refreshGitActivity() }
+                    GitHubScreen(
+                        colors = colors,
+                        onBack = {
+                            viewModel.refreshGithubLogin()
+                            route = "settings"
+                        },
+                        modifier = modifier,
+                        activity = state.gitActivity,
+                        activityRefreshing = state.gitActivityRefreshing,
+                        onRefreshActivity = viewModel::refreshGitActivity,
+                    )
+                }
                 else -> HomeScreen(
                     colors = colors,
                     sessions = state.sessions,

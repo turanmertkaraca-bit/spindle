@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -51,6 +52,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.data.KeyStore
+import dev.lumen.app.platform.GitActivity
+import dev.lumen.app.platform.GitCommit
 import dev.lumen.app.platform.GitHubClient
 import dev.lumen.app.platform.GitHubUserStatus
 import dev.lumen.app.platform.GitProbe
@@ -65,8 +68,9 @@ private const val GITHUB_URL_HINT = "owner/name"
 /**
  * The GitHub integration screen. Self-contained: it reads and writes its own
  * [KeyStore] and builds its own [GitHubClient]/[GitRunner] from the local
- * context, so nothing is hoisted into the chat view model. Only [colors] and
- * [onBack] are supplied by the caller.
+ * context, so only the optional read-only activity view ([activity],
+ * [activityRefreshing], [onRefreshActivity], [loadDiff]) is supplied by the
+ * caller; everything else is local.
  *
  * The token field is non-destructive (it is prefilled from the store), the
  * token is only ever sent as an Authorization header / process env and is never
@@ -77,6 +81,10 @@ fun GitHubScreen(
     colors: LumenColors,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    activity: GitActivity? = null,
+    activityRefreshing: Boolean = false,
+    onRefreshActivity: (() -> Unit)? = null,
+    loadDiff: (suspend (String) -> String)? = null,
 ) {
     val context = LocalContext.current
     val keys = remember(context) { KeyStore(context) }
@@ -380,6 +388,16 @@ fun GitHubScreen(
         }
 
         Spacer(Modifier.height(LumenSpacing.xxl))
+        ActivitySection(
+            colors = colors,
+            activity = activity,
+            refreshing = activityRefreshing,
+            onRefresh = onRefreshActivity,
+            loadDiff = loadDiff,
+            git = git,
+        )
+
+        Spacer(Modifier.height(LumenSpacing.xxl))
         Text(
             "The token is sealed on-device and sent only to GitHub.\n" +
                 "It is never written into the repository config.",
@@ -400,6 +418,180 @@ private fun SectionLabel(colors: LumenColors, text: String) {
         fontSize = LumenType.caption,
         letterSpacing = 2.sp,
     )
+}
+
+@Composable
+private fun ActivitySection(
+    colors: LumenColors,
+    activity: GitActivity?,
+    refreshing: Boolean,
+    onRefresh: (() -> Unit)?,
+    loadDiff: (suspend (String) -> String)?,
+    git: GitRunner,
+) {
+    val scope = rememberCoroutineScope()
+    var expanded by remember { mutableStateOf<String?>(null) }
+    var diff by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(false) }
+
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            SectionLabel(colors, "activity")
+            Spacer(Modifier.weight(1f))
+            ActionPill(
+                colors,
+                if (refreshing) "Refreshing\u2026" else "Refresh",
+                "github-activity-refresh",
+                enabled = onRefresh != null && !refreshing,
+            ) { onRefresh?.invoke() }
+        }
+        Spacer(Modifier.height(LumenSpacing.md))
+        val current = activity
+        when {
+            current == null -> Text(
+                "No activity loaded",
+                color = colors.faint,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+                modifier = Modifier.testTag("github-activity-idle"),
+            )
+            !current.isRepo -> StateHint(
+                colors = colors,
+                text = "No local repository",
+                detail = current.error,
+                tag = "github-activity-empty",
+            )
+            else -> Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(LumenShapes.card)
+                    .background(colors.surface)
+                    .border(1.dp, colors.outline, LumenShapes.card)
+                    .padding(horizontal = LumenSpacing.lg, vertical = LumenSpacing.md)
+                    .testTag("github-activity"),
+                verticalArrangement = Arrangement.spacedBy(LumenSpacing.sm),
+            ) {
+                StatusRow(colors, "branch", current.branch.ifBlank { "detached" })
+                StatusRow(colors, "remote", current.remote.ifBlank { "none" })
+                StatusRow(
+                    colors,
+                    "working",
+                    if (current.dirty) "${current.changedFiles} changed" else "clean",
+                )
+                if (current.commits.isEmpty()) {
+                    Text(
+                        "no commits",
+                        color = colors.faint,
+                        fontFamily = Mono,
+                        fontSize = LumenType.body,
+                    )
+                } else {
+                    current.commits.forEach { commit ->
+                        CommitRow(
+                            colors = colors,
+                            commit = commit,
+                            expanded = expanded == commit.hash,
+                            diff = if (expanded == commit.hash) diff else null,
+                            loading = loading && expanded == commit.hash,
+                            onToggle = {
+                                if (expanded == commit.hash) {
+                                    expanded = null
+                                    diff = null
+                                } else {
+                                    expanded = commit.hash
+                                    diff = null
+                                    loading = true
+                                    scope.launch {
+                                        val text = loadDiff?.invoke(commit.hash)
+                                            ?: describeDiff(git.commitDiff(commit.hash))
+                                        if (expanded == commit.hash) {
+                                            diff = text
+                                            loading = false
+                                        }
+                                    }
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CommitRow(
+    colors: LumenColors,
+    commit: GitCommit,
+    expanded: Boolean,
+    diff: String?,
+    loading: Boolean,
+    onToggle: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(LumenShapes.small)
+                .clickable { onToggle() }
+                .padding(vertical = LumenSpacing.xs)
+                .testTag("github-commit")
+                .semantics { contentDescription = commit.shortHash },
+            verticalAlignment = Alignment.Top,
+        ) {
+            Text(
+                commit.shortHash,
+                color = colors.accent,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+                modifier = Modifier.width(64.dp),
+            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    commit.subject,
+                    color = colors.fg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "${commit.author} \u00b7 ${commit.relativeTime}",
+                    color = colors.faint,
+                    fontFamily = Mono,
+                    fontSize = LumenType.caption,
+                )
+            }
+        }
+        when {
+            diff != null -> Text(
+                diff,
+                color = colors.dim,
+                fontFamily = Mono,
+                fontSize = LumenType.caption,
+                lineHeight = LumenType.lineTight,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp)
+                    .padding(start = 64.dp, top = LumenSpacing.xs)
+                    .testTag("github-diff"),
+            )
+            loading && expanded -> Text(
+                "loading\u2026",
+                color = colors.faint,
+                fontFamily = Mono,
+                fontSize = LumenType.caption,
+                modifier = Modifier.padding(start = 64.dp, top = LumenSpacing.xs),
+            )
+        }
+    }
+}
+
+/** Renders a commit-diff result as display text for the expanded row. */
+private fun describeDiff(result: GitResult): String = when (result) {
+    is GitResult.Ok -> result.output
+    is GitResult.Failed -> result.message
+    GitResult.NotInstalled -> "git is not installed"
 }
 
 @Composable

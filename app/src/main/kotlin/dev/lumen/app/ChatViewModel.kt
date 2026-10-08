@@ -10,6 +10,8 @@ import dev.lumen.app.platform.AndroidEnvironment
 import dev.lumen.app.platform.AndroidShellExecutor
 import dev.lumen.app.platform.AndroidTerminal
 import dev.lumen.app.platform.DebianEnvironment
+import dev.lumen.app.platform.GitActivity
+import dev.lumen.app.platform.GitRunner
 import dev.lumen.app.platform.PerfSampler
 import dev.lumen.app.platform.PerfSummary
 import dev.lumen.app.platform.RunService
@@ -298,6 +300,10 @@ data class ChatState(
     val newTokens: Int = 0,
     /** Non-secret GitHub login, refreshed from [KeyStore.githubLogin]. */
     val githubLogin: String = "",
+    /** Read-only activity of the local workspace repo, or null before first read. */
+    val gitActivity: GitActivity? = null,
+    /** True while a git activity refresh is in flight. */
+    val gitActivityRefreshing: Boolean = false,
     /**
      * A just-applied revert that can still be undone (the pre-revert file image
      * plus the change rows it dropped). Null once dismissed, expired or undone.
@@ -456,6 +462,9 @@ class ChatViewModel(
 
     /** The one interactive shell behind the terminal screen. */
     private val terminal = AndroidTerminal(workspace.toFile(), shell)
+
+    /** Reads the LOCAL workspace repo for the GitHub activity view. */
+    private val git: GitRunner by lazy { GitRunner(shell ?: HostShellExecutor(), workspace) }
 
     /**
      * Polls the workspace during a run so files changed by a script the agent
@@ -1036,6 +1045,25 @@ class ChatViewModel(
     /** Re-read the non-secret GitHub login after the GitHub screen updated it. */
     fun refreshGithubLogin() {
         _state.value = _state.value.copy(githubLogin = keys.githubLogin)
+    }
+
+    /**
+     * Read the local workspace repo for the GitHub activity view. Runs on [io],
+     * coalesces while a read is already in flight, and never authenticates.
+     */
+    fun refreshGitActivity() {
+        if (_state.value.gitActivityRefreshing) return
+        _state.value = _state.value.copy(gitActivityRefreshing = true)
+        viewModelScope.launch(io) {
+            val result = try {
+                git.activity()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                GitActivity(error = t.message)
+            }
+            _state.value = _state.value.copy(gitActivity = result, gitActivityRefreshing = false)
+        }
     }
 
     fun clearKey() {

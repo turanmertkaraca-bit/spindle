@@ -813,4 +813,30 @@ class ScreenshotTest {
     @Test fun storage_dark() = storageShot("storage_dark.png", LumenColors.Dark, storageSample())
     @Test fun storage_empty_light() = storageShot("storage_empty_light.png", LumenColors.Light, StorageReport(0L, emptyList(), scanning = false))
     @Test fun storage_empty_dark() = storageShot("storage_empty_dark.png", LumenColors.Dark, null)
+
+    /** First-run onboarding wizard at step one, both themes. */
+    @Test fun onboarding_light() = onboardingShot("onboarding_light.png", LumenColors.Light)
+
+    @Test fun onboarding_dark() = onboardingShot("onboarding_dark.png", LumenColors.Dark)
+
+    /** The launch maintenance splash, both themes. */
+    @Test fun boot_light() = bootShot("boot_light.png", LumenColors.Light)
+
+    @Test fun boot_dark() = bootShot("boot_dark.png", LumenColors.Dark)
+
+    private fun onboardingShot(name: String, colors: LumenColors) = shoot(name) {
+        OnboardingScreen(
+            colors = colors,
+            linux = LinuxEnvironmentState(),
+            onInstallDebian = {},
+            onRequestBattery = {},
+            onRequestDownloads = {},
+            onAddKey = {},
+            onFinish = {},
+        )
+    }
+
+    private fun bootShot(name: String, colors: LumenColors) = shoot(name) {
+        BootScreen(colors = colors, message = "pruning the sandbox\u2026")
+    }
 }

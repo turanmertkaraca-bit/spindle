@@ -3011,7 +3011,12 @@ private fun QuickSettingsSheet(
                 ) {}
                 .heightIn(max = 460.dp)
                 .verticalScroll(rememberScrollState())
-                .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 18.dp),
+                .padding(
+                    start = LumenSpacing.page,
+                    end = LumenSpacing.page,
+                    top = LumenSpacing.lg,
+                    bottom = LumenSpacing.page,
+                ),
         ) {
             Text(
                 "quick settings",
@@ -3021,9 +3026,10 @@ private fun QuickSettingsSheet(
                 fontWeight = FontWeight.Medium,
                 letterSpacing = 0.4.sp,
             )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(LumenSpacing.lg))
 
-            QuickLabel("provider", colors)
+            LumenSectionHeader(colors, "provider", caption = "which API endpoint the agent talks to")
+            Spacer(Modifier.height(LumenSpacing.md))
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -3033,8 +3039,9 @@ private fun QuickSettingsSheet(
                 }
             }
 
-            Spacer(Modifier.height(18.dp))
-            QuickLabel("model", colors)
+            Spacer(Modifier.height(LumenSpacing.xl))
+            LumenSectionHeader(colors, "model", caption = "the default model for new chats")
+            Spacer(Modifier.height(LumenSpacing.md))
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (m in ProviderCatalogue.defaultModels(provider)) {
                     val ref = "$provider/${m.id}"
@@ -3077,16 +3084,22 @@ private fun QuickSettingsSheet(
                 }
             }
 
-            Spacer(Modifier.height(18.dp))
-            QuickLabel("theme", colors)
+            Spacer(Modifier.height(LumenSpacing.xl))
+            LumenSectionHeader(colors, "theme", caption = "light, dark or follow the system")
+            Spacer(Modifier.height(LumenSpacing.md))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (value in listOf("system", "light", "dark")) {
                     QuickChip(value, theme == value, "quick-theme-$value", colors) { onTheme?.invoke(value) }
                 }
             }
 
-            Spacer(Modifier.height(18.dp))
-            QuickLabel("agent", colors)
+            Spacer(Modifier.height(LumenSpacing.xl))
+            LumenSectionHeader(
+                colors,
+                "agent",
+                caption = "build acts directly; delegate hands work to subagents",
+            )
+            Spacer(Modifier.height(LumenSpacing.md))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 QuickChip("build", agentMode == "build", "quick-agent-build", colors) { onAgentMode?.invoke("build") }
                 QuickChip("plan", agentMode == "plan", "quick-agent-plan", colors) { onAgentMode?.invoke("plan") }
@@ -3095,8 +3108,13 @@ private fun QuickSettingsSheet(
                 }
             }
 
-            Spacer(Modifier.height(18.dp))
-            QuickLabel("budget", colors)
+            Spacer(Modifier.height(LumenSpacing.xl))
+            LumenSectionHeader(
+                colors,
+                "budget",
+                caption = "Stop a session before it spends more than this",
+            )
+            Spacer(Modifier.height(LumenSpacing.md))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 QuickChip("off", budgetUsd <= 0.0, "quick-budget-off", colors) { onMaxCost?.invoke(0.0) }
                 QuickChip("\$0.50", budgetUsd == 0.5, "quick-budget-050", colors) { onMaxCost?.invoke(0.5) }
@@ -3104,17 +3122,17 @@ private fun QuickSettingsSheet(
                 QuickChip("\$5", budgetUsd == 5.0, "quick-budget-5", colors) { onMaxCost?.invoke(5.0) }
             }
 
-            Spacer(Modifier.height(18.dp))
-            QuickLabel("context", colors)
-            Text(
-                "auto-compact at $autoCompactPercent% of the model window",
-                color = colors.dim, fontFamily = Mono, fontSize = LumenType.caption,
+            Spacer(Modifier.height(LumenSpacing.xl))
+            LumenSectionHeader(
+                colors,
+                "context",
+                caption = "auto-compact at $autoCompactPercent% of the model window",
             )
+            Spacer(Modifier.height(LumenSpacing.md))
             Slider(
                 value = autoCompactPercent.toFloat(),
                 onValueChange = { onAutoCompactPercent?.invoke(it.roundToInt()) },
                 valueRange = 50f..95f,
-                steps = 44,
                 modifier = Modifier.fillMaxWidth().testTag("quick-context-compact"),
             )
             if (onCompactNow != null && !busy) {
@@ -3130,8 +3148,9 @@ private fun QuickSettingsSheet(
                 )
             }
 
-            Spacer(Modifier.height(18.dp))
-            QuickLabel("tools", colors)
+            Spacer(Modifier.height(LumenSpacing.xl))
+            LumenSectionHeader(colors, "tools", caption = "what the agent may run on its own")
+            Spacer(Modifier.height(LumenSpacing.md))
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -3162,7 +3181,7 @@ private fun QuickSettingsSheet(
                 )
             }
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(LumenSpacing.xl))
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -3178,19 +3197,6 @@ private fun QuickSettingsSheet(
             }
         }
     }
-}
-
-/** A faint, spaced caption that heads a quick-settings section. */
-@Composable
-private fun QuickLabel(text: String, colors: LumenColors) {
-    Text(
-        text,
-        color = colors.faint,
-        fontFamily = Mono,
-        fontSize = LumenType.caption,
-        letterSpacing = 2.sp,
-    )
-    Spacer(Modifier.height(8.dp))
 }
 
 /** A selectable pill chip in the quick-settings sheet. */

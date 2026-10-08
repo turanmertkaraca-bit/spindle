@@ -29,7 +29,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.data.ProviderCatalogue
@@ -78,7 +77,7 @@ fun SettingsScreen(
             .background(colors.bg)
             .imePadding()
             .verticalScroll(rememberScrollState())
-            .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 8.dp, bottom = 28.dp),
+            .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 8.dp, bottom = LumenSpacing.xxl),
     ) {
         LumenTopBar(
             colors = colors,
@@ -90,7 +89,7 @@ fun SettingsScreen(
         )
         Spacer(Modifier.height(LumenSpacing.xl))
 
-        SectionTitle(colors, "provider")
+        LumenSectionHeader(colors, "provider", caption = "which API endpoint the agent talks to")
         Spacer(Modifier.height(LumenSpacing.md))
         Row(
             Modifier
@@ -104,7 +103,7 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(LumenSpacing.xxl))
-        SectionTitle(colors, "model")
+        LumenSectionHeader(colors, "model", caption = "the default model for new chats")
         Spacer(Modifier.height(LumenSpacing.md))
         val models = ProviderCatalogue.defaultModels(provider)
         if (models.isEmpty()) {
@@ -168,7 +167,7 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(LumenSpacing.xxl))
-        SectionTitle(colors, "theme")
+        LumenSectionHeader(colors, "theme", caption = "light, dark or follow the system")
         Spacer(Modifier.height(LumenSpacing.md))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             chip(colors, "system", theme == "system", "theme-system") { onTheme("system") }
@@ -177,13 +176,10 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(LumenSpacing.xxl))
-        SectionTitle(colors, "agent")
-        Spacer(Modifier.height(LumenSpacing.sm))
-        Text(
-            "Delegate thinks more and talks less, handing work to subagents",
-            color = colors.dim,
-            fontFamily = Mono,
-            fontSize = LumenType.caption,
+        LumenSectionHeader(
+            colors,
+            "agent",
+            caption = "Delegate thinks more and talks less, handing work to subagents",
         )
         Spacer(Modifier.height(LumenSpacing.md))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -193,13 +189,10 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(LumenSpacing.xxl))
-        SectionTitle(colors, "budget")
-        Spacer(Modifier.height(LumenSpacing.sm))
-        Text(
-            "Stop a session before it spends more than this",
-            color = colors.dim,
-            fontFamily = Mono,
-            fontSize = LumenType.caption,
+        LumenSectionHeader(
+            colors,
+            "budget",
+            caption = "Stop a session before it spends more than this",
         )
         Spacer(Modifier.height(LumenSpacing.md))
         Row(
@@ -215,27 +208,23 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(LumenSpacing.xxl))
-        SectionTitle(colors, "context")
-        Spacer(Modifier.height(LumenSpacing.sm))
-        Text(
-            "Auto-compact at $autoCompactPercent% of the model's context window",
-            color = colors.dim,
-            fontFamily = Mono,
-            fontSize = LumenType.caption,
+        LumenSectionHeader(
+            colors,
+            "context",
+            caption = "Auto-compact at $autoCompactPercent% of the model's context window",
         )
-        Spacer(Modifier.height(LumenSpacing.sm))
+        Spacer(Modifier.height(LumenSpacing.md))
         Slider(
             value = autoCompactPercent.toFloat(),
             onValueChange = { onAutoCompactPercent(it.roundToInt()) },
             valueRange = 50f..95f,
-            steps = 44,
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("context-slider"),
         )
 
         Spacer(Modifier.height(LumenSpacing.xxl))
-        SectionTitle(colors, "tools")
+        LumenSectionHeader(colors, "tools", caption = "what the agent may run on its own")
         Spacer(Modifier.height(LumenSpacing.md))
         Row(
             Modifier
@@ -280,7 +269,7 @@ fun SettingsScreen(
 
         if (onGitHub != null) {
             Spacer(Modifier.height(LumenSpacing.xxl))
-            SectionTitle(colors, "integrations")
+            LumenSectionHeader(colors, "integrations", caption = "connect outside services")
             Spacer(Modifier.height(LumenSpacing.md))
             SettingsLink(
                 colors = colors,
@@ -296,7 +285,7 @@ fun SettingsScreen(
         }
 
         Spacer(Modifier.height(LumenSpacing.xxl))
-        SectionTitle(colors, "system")
+        LumenSectionHeader(colors, "system", caption = "storage and the linux environment")
         Spacer(Modifier.height(LumenSpacing.md))
         SettingsLink(
             colors,
@@ -305,7 +294,7 @@ fun SettingsScreen(
             "settings-storage",
             onStorage,
         )
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(LumenSpacing.sm))
         SettingsLink(
             colors,
             "diagnostics",
@@ -334,17 +323,6 @@ fun SettingsScreen(
             )
         }
     }
-}
-
-@Composable
-private fun SectionTitle(colors: LumenColors, text: String) {
-    Text(
-        text,
-        color = colors.fg,
-        fontFamily = Mono,
-        fontSize = LumenType.heading,
-        fontWeight = FontWeight.Medium,
-    )
 }
 
 @Composable

@@ -106,4 +106,132 @@ class GitRunnerTest {
         assertEquals("https://github.com/octocat/Hello-World", runner.openUrl("octocat/Hello-World.git"))
         assertNull(runner.openUrl("bad slug"))
     }
+
+    /** A scripted shell that answers each git subcommand by substring. */
+    private fun fakeGit(
+        installed: Boolean = true,
+        inside: ShellResult = ShellResult(0, "true\n"),
+        branch: ShellResult = ShellResult(0, "main\n"),
+        symbolic: ShellResult = ShellResult(0, "main\n"),
+        remote: ShellResult = ShellResult(0, ""),
+        status: ShellResult = ShellResult(0, ""),
+        log: ShellResult = ShellResult(0, ""),
+    ): FakeShell = FakeShell { cmd ->
+        when {
+            cmd.contains("--version") ->
+                if (installed) ShellResult(0, "git version 2.43.0") else ShellResult(127, "git: not found")
+            cmd.contains("--is-inside-work-tree") -> inside
+            cmd.contains("--abbrev-ref") -> branch
+            cmd.contains("symbolic-ref") -> symbolic
+            cmd.contains("remote get-url") -> remote
+            cmd.contains("status --porcelain") -> status
+            cmd.contains("git log") -> log
+            else -> ShellResult(0, "")
+        }
+    }
+
+    @Test
+    fun `activity reports missing git without running repo commands`() = runBlocking {
+        val shell = fakeGit(installed = false)
+        val activity = GitRunner(shell, temp()).activity()
+        assertEquals("git is not installed", activity.error)
+        assertFalse(activity.isRepo)
+        assertTrue(shell.commands.none { it.contains("--is-inside-work-tree") })
+    }
+
+    @Test
+    fun `activity reports a non-repository`() = runBlocking {
+        val shell = fakeGit(inside = ShellResult(128, "fatal: not a git repository"))
+        val activity = GitRunner(shell, temp()).activity()
+        assertFalse(activity.isRepo)
+        assertEquals("not a git repository", activity.error)
+    }
+
+    @Test
+    fun `activity parses branch, remote, dirty state and commits`() = runBlocking {
+        val log = ShellResult(
+            0,
+            "abc1234567890\u001fabc1234\u001fAda Lovelace\u001f2 hours ago\u001ffix the bug\n",
+        )
+        val shell = fakeGit(
+            remote = ShellResult(0, "git@github.com:octocat/Hello-World.git\n"),
+            status = ShellResult(0, " M a.kt\n?? b.kt\n"),
+            log = log,
+        )
+        val activity = GitRunner(shell, temp()).activity()
+
+        assertTrue(activity.isRepo)
+        assertEquals("main", activity.branch)
+        assertEquals("git@github.com:octocat/Hello-World.git", activity.remote)
+        assertTrue(activity.dirty)
+        assertEquals(2, activity.changedFiles)
+        assertEquals(1, activity.commits.size)
+        val commit = activity.commits.single()
+        assertEquals("abc1234567890", commit.hash)
+        assertEquals("abc1234", commit.shortHash)
+        assertEquals("fix the bug", commit.subject)
+        assertEquals("Ada Lovelace", commit.author)
+        assertEquals("2 hours ago", commit.relativeTime)
+    }
+
+    @Test
+    fun `activity falls back to symbolic-ref for a branch name`() = runBlocking {
+        val shell = fakeGit(branch = ShellResult(128, ""), symbolic = ShellResult(0, "trunk\n"))
+        assertEquals("trunk", GitRunner(shell, temp()).activity().branch)
+    }
+
+    @Test
+    fun `activity on an empty repository has no commits and no error`() = runBlocking {
+        val shell = fakeGit(
+            branch = ShellResult(128, ""),
+            symbolic = ShellResult(0, "main\n"),
+            log = ShellResult(128, "fatal: your current branch 'main' does not have any commits yet"),
+        )
+        val activity = GitRunner(shell, temp()).activity()
+        assertTrue(activity.isRepo)
+        assertTrue(activity.commits.isEmpty())
+        assertNull(activity.error)
+        assertEquals("main", activity.branch)
+    }
+
+    @Test
+    fun `activity caps the commit count it requests`() = runBlocking {
+        val high = fakeGit()
+        GitRunner(high, temp()).activity(limit = 1000)
+        assertTrue(
+            high.commands.any { it.contains("git log -n 100 ") },
+            "the limit should be clamped to MAX_COMMITS: ${high.commands}",
+        )
+
+        val low = fakeGit()
+        GitRunner(low, temp()).activity(limit = 0)
+        assertTrue(low.commands.any { it.contains("git log -n 1 ") })
+    }
+
+    @Test
+    fun `activity strips credentials from the origin remote`() = runBlocking {
+        val shell = fakeGit(remote = ShellResult(0, "https://user:pass@github.com/octocat/Hello-World.git\n"))
+        val remote = GitRunner(shell, temp()).activity().remote
+        assertEquals("https://github.com/octocat/Hello-World.git", remote)
+        assertTrue("pass" !in remote)
+    }
+
+    @Test
+    fun `commitDiff rejects an unsafe hash without running a command`() = runBlocking {
+        val shell = FakeShell { ShellResult(0, "") }
+        val result = GitRunner(shell, temp()).commitDiff("abc; rm -rf /")
+        assertTrue(result is GitResult.Failed)
+        assertTrue(shell.commands.none { it.contains("git show") })
+    }
+
+    @Test
+    fun `commitDiff caps its output and appends a truncation note`() = runBlocking {
+        val shell = FakeShell { cmd ->
+            if (cmd.contains("git show")) ShellResult(0, "x".repeat(2048)) else ShellResult(0, "")
+        }
+        val result = GitRunner(shell, temp()).commitDiff("abcdef1", maxBytes = 2048)
+        val ok = result as GitResult.Ok
+        assertTrue(ok.output.endsWith("\u2026 (truncated)"))
+        assertTrue(shell.commands.any { it.contains("head -c 2048") })
+    }
 }

@@ -321,7 +321,7 @@ fun HomeScreen(
             .fillMaxSize()
             .background(colors.bg)
             .imePadding()
-            .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 8.dp, bottom = 20.dp),
+            .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 8.dp, bottom = LumenSpacing.xl),
     ) {
         LumenTopBar(
             colors = colors,
@@ -408,7 +408,9 @@ fun HomeScreen(
 
         // Quick controls: the one toggle worth surfacing plus the two cockpits,
         // kept to a single quiet line right under the search.
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(LumenSpacing.lg))
+        LumenSectionHeader(colors, "quick controls")
+        Spacer(Modifier.height(LumenSpacing.md))
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -486,7 +488,9 @@ fun HomeScreen(
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(LumenSpacing.lg))
+        LumenSectionHeader(colors, "chats")
+        Spacer(Modifier.height(LumenSpacing.sm))
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -511,7 +515,7 @@ fun HomeScreen(
                     .testTag("show-archived"),
             )
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(LumenSpacing.sm))
 
         if (search != null) {
             if (search.isEmpty()) {
@@ -695,9 +699,9 @@ private fun SearchHitRow(
         Modifier
             .fillMaxWidth()
             .padding(vertical = 3.dp)
-            .clip(LumenShapes.row)
+            .clip(LumenShapes.card)
             .background(colors.surface)
-            .border(1.dp, colors.outline, LumenShapes.row)
+            .border(1.dp, colors.outline, LumenShapes.card)
             .clickable { onOpen(hit.sessionId.value) }
             .padding(horizontal = 14.dp, vertical = 12.dp)
             .testTag("search-hit-${hit.messageId}"),

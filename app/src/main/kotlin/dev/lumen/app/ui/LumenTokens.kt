@@ -1,7 +1,14 @@
 package dev.lumen.app.ui
 
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -119,4 +126,31 @@ object LumenSize {
     val iconMd = 20.dp
     val iconLg = 28.dp
     val droplet = 10.dp
+}
+
+/**
+ * One section header for both Settings and the in-chat Quick Settings sheet: a
+ * medium-weight foreground label with identical size, colour and tracking in
+ * both surfaces, plus an optional dim one-line caption that grounds it. Lower-
+ * case on purpose — call sites pass their own text and never uppercase it.
+ */
+@Composable
+internal fun LumenSectionHeader(colors: LumenColors, text: String, caption: String? = null) {
+    Text(
+        text,
+        color = colors.fg,
+        fontFamily = FontFamily.Monospace,
+        fontSize = LumenType.heading,
+        fontWeight = FontWeight.Medium,
+        letterSpacing = 0.3.sp,
+    )
+    if (caption != null) {
+        Spacer(Modifier.height(LumenSpacing.xs))
+        Text(
+            caption,
+            color = colors.dim,
+            fontFamily = FontFamily.Monospace,
+            fontSize = LumenType.caption,
+        )
+    }
 }
