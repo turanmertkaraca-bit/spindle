@@ -37,7 +37,7 @@ object SessionArchive {
     /** Tool outputs longer than this (chars) are truncated when redacting. */
     const val MAX_TOOL_OUTPUT = 4 * 1024
 
-    private const val IMPORT_SUFFIX = " (imported)"
+    const val IMPORT_SUFFIX = " (imported)"
 
     private val archiveJson = Json {
         prettyPrint = true
@@ -222,7 +222,7 @@ private fun Part.toDto(redact: Boolean): PartDto = when (this) {
             name = call.name,
             arguments = call.argumentsJson,
             state = state.name,
-            output = result?.output?.let { if (redact) it.truncated(MAX_TOOL_OUTPUT) else it },
+            output = result?.output?.let { if (redact) it.truncated(SessionArchive.MAX_TOOL_OUTPUT) else it },
             isError = result?.isError ?: false,
             diff = if (redact) null else result?.diff,
             title = title,
@@ -311,7 +311,7 @@ private fun PartDto.toDomain(): Part = when (kind.lowercase()) {
 }
 
 private fun importTitle(title: String): String =
-    if (title.endsWith(IMPORT_SUFFIX)) title else title + IMPORT_SUFFIX
+    if (title.endsWith(SessionArchive.IMPORT_SUFFIX)) title else title + SessionArchive.IMPORT_SUFFIX
 
 private inline fun <reified E : Enum<E>> enumOrNull(name: String?): E? =
     name?.takeIf { it.isNotBlank() }
