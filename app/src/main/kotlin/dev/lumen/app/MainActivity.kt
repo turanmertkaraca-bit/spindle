@@ -35,6 +35,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
 import dev.lumen.app.platform.RunService
 import dev.lumen.app.ui.BootScreen
 import dev.lumen.app.ui.CanvasScreen
