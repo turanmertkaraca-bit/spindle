@@ -62,6 +62,9 @@ import dev.spindle.core.store.SearchHit
 
 private val Mono = FontFamily.Monospace
 
+/** The live-run signal: a calm green that reads on both light and dark cards. */
+private val LiveGreen = Color(0xFF3FB950)
+
 // --- Shared screen chrome ----------------------------------------------------
 //
 // One top-bar language for every non-chat screen: an optional back affordance
@@ -237,6 +240,8 @@ internal fun LumenTopBar(
 fun HomeScreen(
     colors: LumenColors,
     sessions: List<SessionRow>,
+    /** Sessions with a live in-process run, drawn with a green badge. */
+    runningSessionIds: Set<String> = emptySet(),
     onNewChat: () -> Unit,
     onOpen: (String) -> Unit,
     onDelete: (String) -> Unit,
@@ -574,6 +579,7 @@ fun HomeScreen(
                     SessionCard(
                         colors = colors,
                         session = s,
+                        live = s.id in runningSessionIds,
                         tagFilter = tagFilter,
                         onOpen = onOpen,
                         onToggleTagFilter = onToggleTagFilter,
@@ -726,9 +732,30 @@ private fun SearchHitRow(
 }
 
 @Composable
+private fun LiveBadge(sessionId: String) {
+    Box(
+        Modifier
+            .clip(LumenShapes.pill)
+            .background(LiveGreen.copy(alpha = 0.14f))
+            .border(1.dp, LiveGreen.copy(alpha = 0.5f), LumenShapes.pill)
+            .padding(horizontal = 6.dp, vertical = 1.dp)
+            .testTag("session-live-$sessionId"),
+    ) {
+        Text(
+            "LIVE",
+            color = LiveGreen,
+            fontFamily = Mono,
+            fontSize = LumenType.micro,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+@Composable
 private fun SessionCard(
     colors: LumenColors,
     session: SessionRow,
+    live: Boolean = false,
     tagFilter: Set<String>,
     onOpen: (String) -> Unit,
     onToggleTagFilter: (String) -> Unit,
@@ -753,7 +780,7 @@ private fun SessionCard(
                 .padding(vertical = 4.dp)
                 .clip(LumenShapes.card)
                 .background(colors.surface)
-                .border(1.dp, colors.outline, LumenShapes.card)
+                .border(1.dp, if (live) LiveGreen.copy(alpha = 0.45f) else colors.outline, LumenShapes.card)
                 .clickable { onOpen(session.id) }
                 .padding(horizontal = 14.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -761,18 +788,25 @@ private fun SessionCard(
             Box(
                 Modifier
                     .size(9.dp)
-                    .background(colors.water, WaterShapes.droplet(tail = 0.55f)),
+                    .background(if (live) LiveGreen else colors.water, WaterShapes.droplet(tail = 0.55f)),
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(
-                    if (session.pinned) "\u2605 ${session.title}" else session.title,
-                    color = colors.fg,
-                    fontFamily = Mono,
-                    fontSize = LumenType.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (session.pinned) "\u2605 ${session.title}" else session.title,
+                        color = colors.fg,
+                        fontFamily = Mono,
+                        fontSize = LumenType.bodyLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (live) {
+                        Spacer(Modifier.width(6.dp))
+                        LiveBadge(session.id)
+                    }
+                }
                 if (session.preview.isNotEmpty()) {
                     Spacer(Modifier.height(4.dp))
                     Text(

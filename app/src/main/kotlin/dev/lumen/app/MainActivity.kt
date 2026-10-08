@@ -456,6 +456,7 @@ class MainActivity : ComponentActivity() {
                 else -> HomeScreen(
                     colors = colors,
                     sessions = state.sessions,
+                    runningSessionIds = state.runningSessionIds,
                     onNewChat = {
                         viewModel.newChat()
                         route = "chat"

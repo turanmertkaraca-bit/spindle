@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
+import dev.lumen.app.SessionRow
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -41,10 +42,13 @@ class HomeScreenTest {
         onAskBeforeTools: (Boolean) -> Unit = {},
         onFiles: (() -> Unit)? = null,
         onTerminal: (() -> Unit)? = null,
+        sessions: List<SessionRow> = emptyList(),
+        runningSessionIds: Set<String> = emptySet(),
     ) {
         HomeScreen(
             colors = LumenColors.Dark,
-            sessions = emptyList(),
+            sessions = sessions,
+            runningSessionIds = runningSessionIds,
             onNewChat = {},
             onOpen = {},
             onDelete = {},
@@ -116,5 +120,19 @@ class HomeScreenTest {
 
         assertEquals(true, files)
         assertEquals(true, terminal)
+    }
+
+    @Test
+    fun `a running session shows the live badge and others do not`() {
+        val rows = listOf(
+            SessionRow("live", "new chat 1", 1L, ""),
+            SessionRow("idle", "new chat 2", 1L, ""),
+        )
+        compose.setContent {
+            screen(sessions = rows, runningSessionIds = setOf("live"))
+        }
+
+        compose.onNodeWithTag("session-live-live").assertExists()
+        compose.onNodeWithTag("session-live-idle").assertDoesNotExist()
     }
 }

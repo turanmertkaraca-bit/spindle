@@ -245,6 +245,8 @@ data class ChatState(
     val agentMode: String = "build",
     /** The chat currently open, or null on the home screen. */
     val currentSessionId: String? = null,
+    /** Sessions with a live in-process run, for the Home "live" badge. */
+    val runningSessionIds: Set<String> = emptySet(),
     /** "system" | "light" | "dark". */
     val theme: String = "system",
     /** "prism" | "ember" | "phosphor" | "abyss". */
@@ -724,6 +726,7 @@ class ChatViewModel(
         viewModelScope.launch { collectEvents() }
         viewModelScope.launch { reconcileOrphanRuns() }
         refreshLinuxEnvironment()
+        syncRunningSessions()
     }
 
     /**
@@ -736,6 +739,11 @@ class ChatViewModel(
      */
     private suspend fun reconcileOrphanRuns() {
         runCatching { RunRecovery.reconcile(store, runningSessions ?: emptySet()) }
+    }
+
+    /** Mirror the process-wide live-run set into state for the Home badge. */
+    private fun syncRunningSessions() {
+        _state.value = _state.value.copy(runningSessionIds = runningSessions?.toSet() ?: emptySet())
     }
 
     // ---- diagnostics ----
@@ -1419,6 +1427,7 @@ class ChatViewModel(
             sessions = filterSessionsByTags(rows, _state.value.tagFilter),
             availableTags = rows.asSequence().flatMap { it.tags }.distinct().sorted().toList(),
         )
+        syncRunningSessions()
     }
 
     /** Trim/lowercase a tag, rejecting blank input and capping its length. */
@@ -2576,6 +2585,7 @@ class ChatViewModel(
         val generation = ++runGeneration
         runningSessionId = currentId
         runningSessions?.add(currentId)
+        syncRunningSessions()
         // The Application scope keeps the run alive across Activity destruction;
         // tests without one fall back to the ViewModel scope.
         val scope = runScope ?: viewModelScope
@@ -2645,6 +2655,7 @@ class ChatViewModel(
                     // watcher/service now, so this must not touch them.
                     runningSessionId = null
                     runningSessions?.remove(sid.value)
+                    syncRunningSessions()
                     watcher?.stop()
                     context?.let { ctx -> runCatching { RunService.stop(ctx) } }
                 }
@@ -2662,6 +2673,7 @@ class ChatViewModel(
         runGeneration++
         runJob?.cancel()
         runningSessionId?.let { runningSessions?.remove(it) }
+        syncRunningSessions()
         runningSessionId = null
         // Land the last buffered tokens now instead of leaving them to the
         // coalescing timer (which the ViewModel may not outlive).
