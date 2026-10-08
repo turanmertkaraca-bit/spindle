@@ -4,8 +4,11 @@ import android.content.Context
 import dev.spindle.core.tool.PtySession
 import dev.spindle.core.tool.ShellExecutor
 import dev.spindle.core.tool.ShellResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.sync.Mutex
@@ -23,8 +26,8 @@ import java.util.concurrent.TimeUnit
  * back to a plain Android `/system/bin/sh`, exactly like the host executor, so
  * the app still works (and CI still passes on a bare JVM).
  *
- * Output is merged, time-bounded and capped; this never throws — every failure
- * comes back as a [ShellResult].
+ * Output is merged, time-bounded and capped; this never throws (except
+ * coroutine cancellation) — every other failure comes back as a [ShellResult].
  */
 class AndroidShellExecutor(context: Context) : ShellExecutor {
 
@@ -83,15 +86,17 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
                 putAll(env)
             }
 
-            val process = builder.start()
+            val process = startUnderSetsid(builder)
             collect(process, timeoutMs)
+        } catch (e: CancellationException) {
+            throw e
         } catch (t: Throwable) {
             ShellResult(exitCode = -1, output = "failed to launch shell: ${t.message}")
         }
     }
 
     /** Run one agent command inside the Debian guest through proot. */
-    private fun runInDebian(
+    private suspend fun runInDebian(
         command: String,
         cwd: Path,
         timeoutMs: Long,
@@ -103,7 +108,7 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
             remove("_JAVA_OPTIONS")
             putAll(env)
         }
-        return collect(builder.start(), timeoutMs)
+        return collect(startUnderSetsid(builder), timeoutMs)
     }
 
     /**
@@ -119,7 +124,7 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
             if (debian.active()) {
                 val guest = command.takeIf { it.isNotBlank() } ?: "exec /bin/bash"
                 return@withContext ProcessPtySession(
-                    debian.guestProcess(guest, cwd.toFile().absolutePath).start(),
+                    startUnderSetsid(debian.guestProcess(guest, cwd.toFile().absolutePath)),
                 )
             }
             val ready = environment.ready()
@@ -141,7 +146,7 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
                 }
             }
 
-            ProcessPtySession(builder.start())
+            ProcessPtySession(startUnderSetsid(builder))
         } catch (t: Throwable) {
             null
         }
@@ -157,7 +162,21 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         }
     }
 
-    private fun collect(process: Process, timeoutMs: Long): ShellResult {
+    /**
+     * Launch [builder] under `setsid` when available so the child becomes a
+     * session/process-group leader (pgid == pid). A process-group TERM then
+     * reaches the whole tree and proot's `--kill-on-exit` can reap its tracees.
+     * If `setsid` is unavailable, or the command list cannot be rewritten, the
+     * process is started unchanged. Argv order is otherwise preserved.
+     */
+    private fun startUnderSetsid(builder: ProcessBuilder): Process {
+        if (SETSID != null) {
+            runCatching { builder.command().add(0, SETSID) }
+        }
+        return builder.start()
+    }
+
+    private suspend fun collect(process: Process, timeoutMs: Long): ShellResult {
         val collected = StringBuilder()
         val truncated = booleanArrayOf(false)
 
@@ -186,26 +205,47 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         reader.isDaemon = true
         reader.start()
 
-        val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
-        if (!finished) {
-            process.destroyForcibly()
-            process.waitFor(1, TimeUnit.SECONDS)
-            reader.join(500)
-            return ShellResult(
+        var finished = false
+        var timedOut = false
+        try {
+            val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+            while (true) {
+                if (process.waitFor(POLL_MS, TimeUnit.MILLISECONDS)) {
+                    finished = true
+                    break
+                }
+                if (System.nanoTime() >= deadline) {
+                    timedOut = true
+                    break
+                }
+                // Cooperative cancellation: press-Stop unwinds here, killing
+                // the tree before the coroutine propagates.
+                currentCoroutineContext().ensureActive()
+            }
+        } catch (e: CancellationException) {
+            killProcessTree(process)
+            reader.join(READER_JOIN_MS)
+            throw e
+        }
+
+        if (!finished) killProcessTree(process)
+        reader.join(READER_JOIN_MS)
+
+        val output = synchronized(collected) { collected.toString() }
+        return if (timedOut) {
+            ShellResult(
                 exitCode = -1,
-                output = synchronized(collected) { collected.toString() },
+                output = output,
                 truncated = truncated[0],
                 timedOut = true,
             )
+        } else {
+            ShellResult(
+                exitCode = process.exitValue(),
+                output = output,
+                truncated = truncated[0],
+            )
         }
-
-        process.waitFor()
-        reader.join(2000)
-        return ShellResult(
-            exitCode = process.exitValue(),
-            output = synchronized(collected) { collected.toString() },
-            truncated = truncated[0],
-        )
     }
 
     private companion object {
@@ -236,10 +276,7 @@ private class ProcessPtySession(private val process: Process) : PtySession {
 
     /** Best-effort pid via the (hidden) `Process.pid` field; 0 when unavailable. */
     override val pid: Int
-        get() = runCatching {
-            val field = process.javaClass.getDeclaredField("pid").apply { isAccessible = true }
-            field.getInt(process)
-        }.getOrDefault(0)
+        get() = processPid(process).takeIf { it > 0 }?.toInt() ?: 0
 
     init {
         reader.isDaemon = true
@@ -281,12 +318,46 @@ private class ProcessPtySession(private val process: Process) : PtySession {
         closed = true
         runCatching { process.outputStream.close() }
         val exited = runCatching { process.waitFor(500, TimeUnit.MILLISECONDS) }.getOrDefault(false)
-        if (!exited) {
-            runCatching { process.destroy() }
-            val gone = runCatching { process.waitFor(300, TimeUnit.MILLISECONDS) }.getOrDefault(false)
-            if (!gone) runCatching { process.destroyForcibly() }
-        }
+        if (!exited) killProcessTree(process)
         runCatching { reader.join(1000) }
         chunks.close()
     }
 }
+
+/** Best-effort pid from the (hidden) `Process.pid` field; -1 when unavailable. */
+private fun processPid(process: Process): Long = runCatching {
+    val field = process.javaClass.getDeclaredField("pid").apply { isAccessible = true }
+    field.getInt(process).toLong()
+}.getOrDefault(-1L)
+
+/**
+ * Terminate [process] and its descendants, mirroring the host executor.
+ *
+ * SIGTERM first — a best-effort process-group TERM (the group leader is the pid
+ * when launched under `setsid`) so proot's `--kill-on-exit` can reap its
+ * tracees — then a bounded grace, then SIGKILL. Best-effort throughout: a dead
+ * or unrunnable process must never surface as an exception.
+ */
+private fun killProcessTree(process: Process) {
+    val pid = processPid(process)
+    if (pid > 0) {
+        runCatching {
+            Runtime.getRuntime().exec(arrayOf("kill", "-TERM", "-$pid"))
+                .waitFor(TERM_GRACE_MS, TimeUnit.MILLISECONDS)
+        }
+    }
+    runCatching { process.destroy() }
+    runCatching { process.waitFor(TERM_GRACE_MS, TimeUnit.MILLISECONDS) }
+    runCatching {
+        process.toHandle().descendants().forEach { runCatching { it.destroyForcibly() } }
+    }
+    runCatching { process.destroyForcibly() }
+    runCatching { process.waitFor(1, TimeUnit.SECONDS) }
+}
+
+private const val POLL_MS = 50L
+private const val READER_JOIN_MS = 2000L
+private const val TERM_GRACE_MS = 1500L
+
+private val SETSID: String? = listOf("/system/bin/setsid", "/usr/bin/setsid")
+    .firstOrNull { runCatching { File(it).canExecute() }.getOrDefault(false) }

@@ -7,6 +7,8 @@ import dev.spindle.core.tool.Tool
 import dev.spindle.core.tool.ToolContext
 import dev.spindle.core.tool.ToolEdit
 import dev.spindle.core.tool.ToolOutcome
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import java.nio.charset.StandardCharsets
 import java.nio.file.AtomicMoveNotSupportedException
@@ -66,13 +68,33 @@ class ApplyPatchTool : Tool {
         if (segments.isEmpty()) {
             return ToolOutcome("Patch contains no file changes", isError = true)
         }
+        ctx.checkAborted()
 
+        // Resolve every touched path up front so all of them can be locked (in
+        // sorted order) around the whole context-match + write region.
+        val lockPaths = ArrayList<String>()
+        for (segment in segments) {
+            for (rawPath in listOfNotNull(segment.path, (segment as? UpdateFile)?.moveTo)) {
+                val resolved = try {
+                    resolveInsideCwd(ctx, rawPath)
+                } catch (e: IllegalArgumentException) {
+                    return ToolOutcome(e.message ?: "Invalid path: $rawPath", isError = true)
+                }
+                lockPaths.add(resolved.toString())
+            }
+        }
+
+        return withPathLocks(lockPaths) { applySegments(segments, ctx) }
+    }
+
+    private suspend fun applySegments(segments: List<Segment>, ctx: ToolContext): ToolOutcome {
         val pending = LinkedHashMap<Path, String?>()
         val diff = StringBuilder()
         val summary = ArrayList<String>()
         val specs = ArrayList<EditSpec>()
 
         for (segment in segments) {
+            ctx.checkAborted()
             val rawPath = segment.path
             val path = try {
                 resolveInsideCwd(ctx, rawPath)
@@ -279,6 +301,7 @@ class ApplyPatchTool : Tool {
 
         try {
             for ((path, content) in pending) {
+                ctx.checkAborted()
                 if (content == null) {
                     Files.deleteIfExists(path)
                 } else {
@@ -286,6 +309,9 @@ class ApplyPatchTool : Tool {
                     writeAtomically(path, content)
                 }
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            withContext(NonCancellable) { revert(originals, absent) }
+            throw e
         } catch (e: Exception) {
             revert(originals, absent)
             return ToolOutcome(

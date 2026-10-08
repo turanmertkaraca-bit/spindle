@@ -46,6 +46,7 @@ class EditTool : Tool {
         val oldString = input.requireString("oldString")
         val newString = input.requireString("newString")
         val replaceAll = input.boolOrNull("replaceAll") ?: false
+        ctx.checkAborted()
         val path = try {
             resolveInsideCwd(ctx, raw)
         } catch (e: IllegalArgumentException) {
@@ -55,81 +56,89 @@ class EditTool : Tool {
         if (oldString.isEmpty()) {
             return ToolOutcome("oldString must not be empty", isError = true)
         }
-        if (!Files.exists(path)) return ToolOutcome("File not found: $raw", isError = true)
-        if (Files.isDirectory(path)) return ToolOutcome("Path is a directory: $raw", isError = true)
 
-        val original = try {
-            Files.readString(path, StandardCharsets.UTF_8)
-        } catch (e: Exception) {
-            return ToolOutcome("Failed to read $raw: ${e.message}", isError = true)
-        }
+        // The whole read-modify-write (including the pre-edit snapshot) runs
+        // under the per-path lock so two edits of the same file serialize.
+        return withPathLock(path.toString()) {
+            if (!Files.exists(path)) return@withPathLock ToolOutcome("File not found: $raw", isError = true)
+            if (Files.isDirectory(path)) return@withPathLock ToolOutcome("Path is a directory: $raw", isError = true)
 
-        val occurrences = findOccurrences(original, oldString)
-        if (occurrences.isEmpty()) {
-            return ToolOutcome(
-                "oldString not found in $raw. It must match the file content exactly, " +
-                    "including whitespace and indentation.",
-                isError = true,
-            )
-        }
-        if (occurrences.size > 1 && !replaceAll) {
-            return ToolOutcome(
-                "oldString appears ${occurrences.size} times in $raw; provide more surrounding " +
-                    "context or set replaceAll=true.",
-                isError = true,
-            )
-        }
+            val original = try {
+                Files.readString(path, StandardCharsets.UTF_8)
+            } catch (e: Exception) {
+                return@withPathLock ToolOutcome("Failed to read $raw: ${e.message}", isError = true)
+            }
 
-        // Matches are non-overlapping and applied left-to-right. Rebuild from the
-        // same occurrence list used for counting so the applied replacements can
-        // never disagree with the reported match count (a self-overlapping
-        // oldString such as "aa" in "aaa" counts once and replaces once).
-        val selected = if (replaceAll) occurrences else occurrences.take(1)
-        val updated = applyReplacements(original, selected, oldString, newString)
+            val occurrences = findOccurrences(original, oldString)
+            if (occurrences.isEmpty()) {
+                return@withPathLock ToolOutcome(
+                    "oldString not found in $raw. It must match the file content exactly, " +
+                        "including whitespace and indentation.",
+                    isError = true,
+                )
+            }
+            if (occurrences.size > 1 && !replaceAll) {
+                return@withPathLock ToolOutcome(
+                    "oldString appears ${occurrences.size} times in $raw; provide more surrounding " +
+                        "context or set replaceAll=true.",
+                    isError = true,
+                )
+            }
 
-        val rel = path.displayPath(ctx.cwd)
-        val snapshotId = recordSnapshot(ctx, path, rel)
+            // Matches are non-overlapping and applied left-to-right. Rebuild from the
+            // same occurrence list used for counting so the applied replacements can
+            // never disagree with the reported match count (a self-overlapping
+            // oldString such as "aa" in "aaa" counts once and replaces once).
+            val selected = if (replaceAll) occurrences else occurrences.take(1)
+            val updated = applyReplacements(original, selected, oldString, newString)
 
-        return try {
-            Files.writeString(path, updated, StandardCharsets.UTF_8)
-            val applied = selected.size
-            val diff = buildDiff(
-                relPath = rel,
-                original = original,
-                oldString = oldString,
-                newString = newString,
-                occurrences = occurrences,
-                replaceAll = replaceAll,
-            )
-            // Count only lines that actually changed. Counting the whole
-            // old/new blocks over-reports a multi-line edit whose middle line
-            // changed (e.g. "a\nb\nc" -> "a\nB\nc" is +1/-1, not +3/-3).
-            val stats = lineStats(oldString, newString)
-            val added = stats.added * applied
-            val removed = stats.removed * applied
-            val matchLine = lineNumberAt(original, selected.first())
-            val firstChanged = matchLine + stats.prefix
-            val edit = FileEdit(
-                id = Ids.new("edit"),
-                sessionId = ctx.sessionId,
-                path = rel,
-                startLine = firstChanged,
-                endLine = if (stats.added == 0) null else firstChanged + stats.added - 1,
-                added = added,
-                removed = removed,
-                unifiedDiff = diff,
-                created = false,
-                at = System.currentTimeMillis(),
-            )
-            ToolOutcome(
-                output = "Edited $raw ($applied replacement${if (applied == 1) "" else "s"})",
-                diff = diff,
-                metadata = mapOf("path" to raw, "replacements" to applied.toString()),
-                edit = edit,
-                snapshotId = snapshotId,
-            )
-        } catch (e: Exception) {
-            ToolOutcome("Failed to write $raw: ${e.message}", isError = true)
+            val rel = path.displayPath(ctx.cwd)
+            val snapshotId = recordSnapshot(ctx, path, rel)
+
+            try {
+                Files.writeString(path, updated, StandardCharsets.UTF_8)
+                ctx.checkAborted()
+                val applied = selected.size
+                val diff = buildDiff(
+                    relPath = rel,
+                    original = original,
+                    oldString = oldString,
+                    newString = newString,
+                    occurrences = occurrences,
+                    replaceAll = replaceAll,
+                )
+                // Count only lines that actually changed. Counting the whole
+                // old/new blocks over-reports a multi-line edit whose middle line
+                // changed (e.g. "a\nb\nc" -> "a\nB\nc" is +1/-1, not +3/-3).
+                val stats = lineStats(oldString, newString)
+                val added = stats.added * applied
+                val removed = stats.removed * applied
+                val matchLine = lineNumberAt(original, selected.first())
+                val firstChanged = matchLine + stats.prefix
+                val edit = FileEdit(
+                    id = Ids.new("edit"),
+                    sessionId = ctx.sessionId,
+                    path = rel,
+                    startLine = firstChanged,
+                    endLine = if (stats.added == 0) null else firstChanged + stats.added - 1,
+                    added = added,
+                    removed = removed,
+                    unifiedDiff = diff,
+                    created = false,
+                    at = System.currentTimeMillis(),
+                )
+                ToolOutcome(
+                    output = "Edited $raw ($applied replacement${if (applied == 1) "" else "s"})",
+                    diff = diff,
+                    metadata = mapOf("path" to raw, "replacements" to applied.toString()),
+                    edit = edit,
+                    snapshotId = snapshotId,
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                ToolOutcome("Failed to write $raw: ${e.message}", isError = true)
+            }
         }
     }
 

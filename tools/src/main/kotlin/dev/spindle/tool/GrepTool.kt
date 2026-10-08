@@ -4,6 +4,7 @@ import dev.spindle.core.provider.ToolSpec
 import dev.spindle.core.tool.Tool
 import dev.spindle.core.tool.ToolContext
 import dev.spindle.core.tool.ToolOutcome
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonObject
 import java.nio.charset.StandardCharsets
 import java.nio.file.FileSystems
@@ -60,13 +61,17 @@ class GrepTool : Tool {
             }
         }
 
+        ctx.checkAborted()
+
         val results = ArrayList<String>()
         var truncated = false
+        var visited = 0
         try {
             Files.walk(base).use { stream ->
                 val iterator = stream.iterator()
                 while (iterator.hasNext()) {
                     val candidate = iterator.next()
+                    if (++visited % ABORT_CHECK_INTERVAL == 0) ctx.checkAborted()
                     // NOFOLLOW + isRegularFile skips symlinks, FIFOs, sockets and devices.
                     val attrs = try {
                         Files.readAttributes(candidate, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
@@ -119,6 +124,8 @@ class GrepTool : Tool {
                 isError = true,
                 metadata = mapOf("truncated" to "true"),
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             return ToolOutcome("Grep failed: ${e.message}", isError = true)
         }

@@ -595,8 +595,30 @@ class AgentLoop(
             return
         }
 
-        val input: JsonObject = runCatching { json.parseToJsonElement(part.call.argumentsJson) as JsonObject }
-            .getOrElse { JsonObject(emptyMap()) }
+        val input: JsonObject = try {
+            json.parseToJsonElement(part.call.argumentsJson) as? JsonObject
+                ?: throw IllegalArgumentException("arguments must be a JSON object")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Malformed tool arguments must fail loudly instead of silently
+            // running the tool against empty input; the model needs the parse
+            // error so it can rewrite the call.
+            finishTool(
+                sessionId, messageId,
+                part.copy(
+                    state = ToolState.ERROR,
+                    result = ToolResult(
+                        part.call.id,
+                        "Invalid arguments for ${part.call.name}: ${e.message}. " +
+                            "Rewrite the input as valid JSON matching the schema.",
+                        isError = true,
+                        metadata = durationMetadata(emptyMap(), startedAt),
+                    ),
+                ),
+            )
+            return
+        }
 
         val request = ApprovalRequest(
             sessionId = sessionId.value,

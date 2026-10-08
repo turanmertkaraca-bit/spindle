@@ -32,54 +32,62 @@ class WriteTool : Tool {
     override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
         val raw = input.requireString("path")
         val content = input.requireString("content")
+        ctx.checkAborted()
         val path = try {
             resolveInsideCwd(ctx, raw)
         } catch (e: IllegalArgumentException) {
             return ToolOutcome(e.message ?: "Invalid path: $raw", isError = true)
         }
 
-        if (Files.isDirectory(path)) {
-            return ToolOutcome("Path is a directory: $raw", isError = true)
-        }
+        // The whole read-modify-write (including the pre-edit snapshot) runs
+        // under the per-path lock so two writes of the same file serialize.
+        return withPathLock(path.toString()) {
+            if (Files.isDirectory(path)) {
+                return@withPathLock ToolOutcome("Path is a directory: $raw", isError = true)
+            }
 
-        val existed = Files.isRegularFile(path)
-        val original = if (existed) {
-            runCatching { Files.readString(path, StandardCharsets.UTF_8) }.getOrDefault("")
-        } else {
-            ""
-        }
-        val rel = path.displayPath(ctx.cwd)
-        val snapshotId = if (existed) recordSnapshot(ctx, path, rel) else null
+            val existed = Files.isRegularFile(path)
+            val original = if (existed) {
+                runCatching { Files.readString(path, StandardCharsets.UTF_8) }.getOrDefault("")
+            } else {
+                ""
+            }
+            val rel = path.displayPath(ctx.cwd)
+            val snapshotId = if (existed) recordSnapshot(ctx, path, rel) else null
 
-        return try {
-            path.parent?.let { Files.createDirectories(it) }
-            val bytes = content.toByteArray(StandardCharsets.UTF_8)
-            Files.write(path, bytes)
-            val added = splitLines(content).size
-            val removed = splitLines(original).size
-            val edit = FileEdit(
-                id = Ids.new("edit"),
-                sessionId = ctx.sessionId,
-                path = rel,
-                startLine = if (added == 0) null else 1,
-                endLine = if (added == 0) null else added,
-                added = added,
-                removed = removed,
-                unifiedDiff = wholeFileDiff(rel, original, content),
-                created = !existed,
-                at = System.currentTimeMillis(),
-            )
-            ToolOutcome(
-                output = "Wrote $raw (${bytes.size} bytes, ${content.count { it == '\n' } + if (content.isEmpty()) 0 else 1} lines)",
-                metadata = mapOf(
-                    "path" to raw,
-                    "bytes" to bytes.size.toString(),
-                ),
-                edit = edit,
-                snapshotId = snapshotId,
-            )
-        } catch (e: Exception) {
-            ToolOutcome("Failed to write $raw: ${e.message}", isError = true)
+            try {
+                path.parent?.let { Files.createDirectories(it) }
+                val bytes = content.toByteArray(StandardCharsets.UTF_8)
+                Files.write(path, bytes)
+                ctx.checkAborted()
+                val added = splitLines(content).size
+                val removed = splitLines(original).size
+                val edit = FileEdit(
+                    id = Ids.new("edit"),
+                    sessionId = ctx.sessionId,
+                    path = rel,
+                    startLine = if (added == 0) null else 1,
+                    endLine = if (added == 0) null else added,
+                    added = added,
+                    removed = removed,
+                    unifiedDiff = wholeFileDiff(rel, original, content),
+                    created = !existed,
+                    at = System.currentTimeMillis(),
+                )
+                ToolOutcome(
+                    output = "Wrote $raw (${bytes.size} bytes, ${content.count { it == '\n' } + if (content.isEmpty()) 0 else 1} lines)",
+                    metadata = mapOf(
+                        "path" to raw,
+                        "bytes" to bytes.size.toString(),
+                    ),
+                    edit = edit,
+                    snapshotId = snapshotId,
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                ToolOutcome("Failed to write $raw: ${e.message}", isError = true)
+            }
         }
     }
 }

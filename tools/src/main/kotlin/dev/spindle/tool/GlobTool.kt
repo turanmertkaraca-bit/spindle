@@ -4,9 +4,11 @@ import dev.spindle.core.provider.ToolSpec
 import dev.spindle.core.tool.Tool
 import dev.spindle.core.tool.ToolContext
 import dev.spindle.core.tool.ToolOutcome
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonObject
 import java.nio.file.FileSystems
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 
 /** Find files by glob pattern anywhere under the working directory. */
@@ -55,23 +57,54 @@ class GlobTool : Tool {
             null
         }
 
+        ctx.checkAborted()
+
+        // Breadth-first walk with an explicit depth cap and directory pruning.
+        // The result cap is enforced *during* the walk: once [Limits.GLOB_MAX_RESULTS]
+        // matches are found, traversal stops instead of collecting the whole tree.
         val matches = ArrayList<Path>()
+        var visited = 0
+        var capped = false
+        val queue = ArrayDeque<Pair<Path, Int>>()
+        queue.add(base.toAbsolutePath().normalize() to 0)
         try {
-            Files.walk(base).use { stream ->
-                val iterator = stream.iterator()
-                while (iterator.hasNext()) {
-                    val candidate = iterator.next()
-                    // Never surface symlinks or special files: a symlink inside the
-                    // tree can point outside the sandbox.
-                    if (isNonRegularOrSymlink(candidate)) continue
-                    val normalized = candidate.toAbsolutePath().normalize()
-                    if (!normalized.startsWith(cwd)) continue
-                    val rel = base.relativize(normalized)
-                    if (matcher.matches(rel) || recursiveFix?.matches(rel) == true) {
-                        matches.add(normalized)
+            while (queue.isNotEmpty()) {
+                val (dir, depth) = queue.removeFirst()
+                val entries = try {
+                    Files.newDirectoryStream(dir)
+                } catch (e: Exception) {
+                    continue
+                }
+                var stop = false
+                entries.use { stream ->
+                    for (entry in stream) {
+                        if (++visited % ABORT_CHECK_INTERVAL == 0) ctx.checkAborted()
+                        if (Files.isSymbolicLink(entry)) continue
+                        val normalized = entry.toAbsolutePath().normalize()
+                        if (!normalized.startsWith(cwd)) continue
+                        if (Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) {
+                            val name = entry.fileName?.toString() ?: continue
+                            if (name in HEAVY_DIRS) continue
+                            if (depth + 1 <= Limits.GLOB_MAX_DEPTH) queue.add(normalized to (depth + 1))
+                            continue
+                        }
+                        if (!Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS)) continue
+                        if (isSkipped(cwd.relativize(normalized))) continue
+                        val rel = base.relativize(normalized)
+                        if (matcher.matches(rel) || recursiveFix?.matches(rel) == true) {
+                            matches.add(normalized)
+                            if (matches.size >= Limits.GLOB_MAX_RESULTS) {
+                                capped = true
+                                stop = true
+                                break
+                            }
+                        }
                     }
                 }
+                if (stop) break
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             return ToolOutcome("Glob failed: ${e.message}", isError = true)
         }
@@ -80,8 +113,8 @@ class GlobTool : Tool {
 
         val sorted = matches.map { it.displayPath(cwd) }.sorted()
         val shown = sorted.take(Limits.GLOB_MAX_RESULTS)
-        val truncated = sorted.size > shown.size
-        val note = capNote(shown.size, sorted.size, "glob")
+        val truncated = capped || sorted.size > shown.size
+        val note = if (truncated) "\n\n…[glob: capped at ${Limits.GLOB_MAX_RESULTS} results]" else ""
         return ToolOutcome(
             output = shown.joinToString("\n") + note,
             metadata = mapOf(
@@ -90,5 +123,16 @@ class GlobTool : Tool {
                 "truncated" to truncated.toString(),
             ),
         )
+    }
+
+    /** Heavy directory names that are never descended, mirroring [GrepTool]. */
+    private fun isSkipped(rel: Path): Boolean =
+        rel.any { component ->
+            val name = component.toString()
+            name in HEAVY_DIRS
+        }
+
+    private companion object {
+        val HEAVY_DIRS = setOf(".git", "build", "node_modules", ".gradle")
     }
 }

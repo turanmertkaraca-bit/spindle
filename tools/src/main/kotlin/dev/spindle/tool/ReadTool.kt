@@ -32,6 +32,7 @@ class ReadTool : Tool {
 
     override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
         val raw = input.requireString("path")
+        ctx.checkAborted()
         val path = try {
             resolveInsideCwd(ctx, raw)
         } catch (e: IllegalArgumentException) {
@@ -67,7 +68,9 @@ class ReadTool : Tool {
         val limit = minOf(requested, Limits.READ_MAX_LINES)
 
         val window = try {
-            readWindow(path, offset, limit)
+            readWindow(ctx, path, offset, limit)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             return ToolOutcome("Failed to read $raw: ${e.message}", isError = true)
         }
@@ -110,7 +113,7 @@ class ReadTool : Tool {
      * window in memory while counting total lines. The 2 MB byte guard above
      * bounds both the scan and the line count.
      */
-    private fun readWindow(path: Path, offset: Int, limit: Int): Window {
+    private suspend fun readWindow(ctx: ToolContext, path: Path, offset: Int, limit: Int): Window {
         val lines = ArrayList<String>(minOf(limit, 64))
         var total = 0
         var capped = false
@@ -118,6 +121,7 @@ class ReadTool : Tool {
             while (true) {
                 val line = reader.readLine() ?: break
                 total++
+                if (total % ABORT_CHECK_INTERVAL == 0) ctx.checkAborted()
                 if (total >= offset && lines.size < limit) lines.add(line)
                 if (total >= Limits.READ_MAX_SCAN_LINES) {
                     capped = true

@@ -7,6 +7,8 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
@@ -18,6 +20,7 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 
 /** Shared caps so tool output can never blow up the model context. */
 internal object Limits {
@@ -42,6 +45,49 @@ internal object Limits {
     const val SKILL_MAX_OUTPUT_CHARS = 60_000
     const val EXTERNAL_MAX_ENTRIES = 1000
     const val EXTERNAL_MAX_OUTPUT_CHARS = 60_000
+    const val GLOB_MAX_DEPTH = 64
+}
+
+/** How often directory walks yield to [ToolContext.checkAborted] while walking. */
+internal const val ABORT_CHECK_INTERVAL = 256
+
+/**
+ * Process-wide per-path mutexes serializing the read-modify-write region of the
+ * file-mutating tools. A lock is keyed by the target's canonical path when the
+ * file exists, and by its absolute path otherwise, so two mutations of the same
+ * file (even reached through different relative paths or symlinks) contend on a
+ * single mutex instead of racing.
+ */
+private val pathLocks = ConcurrentHashMap<String, Mutex>()
+
+private fun pathLockKey(rawPath: String): String {
+    val file = java.io.File(rawPath)
+    return try {
+        if (file.exists()) file.canonicalPath else file.absolutePath
+    } catch (e: Exception) {
+        file.absolutePath
+    }
+}
+
+/** Run [block] while holding the process-wide lock for [path]. */
+internal suspend fun <T> withPathLock(path: String, block: suspend () -> T): T {
+    val mutex = pathLocks.computeIfAbsent(pathLockKey(path)) { Mutex() }
+    return mutex.withLock { block() }
+}
+
+/**
+ * Run [block] while holding the locks for every path in [paths]. Locks are
+ * acquired in a globally sorted order so two multi-file operations can never
+ * deadlock on each other.
+ */
+internal suspend fun <T> withPathLocks(paths: Collection<String>, block: suspend () -> T): T {
+    val keys = paths.map { pathLockKey(it) }.distinct().sorted()
+    suspend fun acquire(index: Int): T {
+        if (index >= keys.size) return block()
+        val mutex = pathLocks.computeIfAbsent(keys[index]) { Mutex() }
+        return mutex.withLock { acquire(index + 1) }
+    }
+    return acquire(0)
 }
 
 /**

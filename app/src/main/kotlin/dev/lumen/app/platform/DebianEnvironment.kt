@@ -514,7 +514,7 @@ class DebianEnvironment(private val context: Context) {
             reader.start()
 
             val done = process.waitFor(PROBE_TIMEOUT_SEC, TimeUnit.SECONDS)
-            if (!done) runCatching { process.destroyForcibly() }
+            if (!done) terminateProcess(process)
             runCatching { reader.join(2000) }
 
             val rc = runCatching { process.exitValue() }.getOrDefault(-1)
@@ -529,8 +529,19 @@ class DebianEnvironment(private val context: Context) {
             runCatching { File(dir, ".probed").delete() }
             false
         } finally {
-            runCatching { if (process?.isAlive == true) process.destroyForcibly() }
+            runCatching { if (process?.isAlive == true) terminateProcess(process) }
         }
+    }
+
+    /**
+     * SIGTERM first, then a short bounded grace so proot's `--kill-on-exit` can
+     * reap its tracees, then SIGKILL. Best-effort: never throws.
+     */
+    private fun terminateProcess(process: Process) {
+        runCatching { process.destroy() }
+        val gone = runCatching { process.waitFor(TERM_GRACE_MS, TimeUnit.MILLISECONDS) }.getOrDefault(false)
+        if (!gone) runCatching { process.destroyForcibly() }
+        runCatching { process.waitFor(1, TimeUnit.SECONDS) }
     }
 
     // ------------------------------------------------------------ assets
@@ -609,6 +620,9 @@ class DebianEnvironment(private val context: Context) {
             "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
         private const val PROBE_TIMEOUT_SEC = 30L
+
+        /** Grace between SIGTERM and SIGKILL so proot's `--kill-on-exit` can run. */
+        private const val TERM_GRACE_MS = 1500L
 
         private val SYSTEM_CA_CANDIDATES = listOf(
             "/system/etc/security/ca-certificates.crt",
