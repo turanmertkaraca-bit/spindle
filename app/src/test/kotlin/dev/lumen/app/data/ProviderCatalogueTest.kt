@@ -110,6 +110,17 @@ class ProviderCatalogueTest {
     }
 
     @Test
+    fun `mergeModels keeps a live 128k window over a larger embedded one`() {
+        // The sentinel bug: a live contextWindow of exactly the ModelInfo default
+        // (128_000) used to be treated as "not provided" and the embedded 1M won.
+        val embedded = listOf(ModelInfo("p", "m", contextWindow = 1_000_000))
+        val live = listOf(ModelInfo("p", "m", contextWindow = 128_000))
+
+        val merged = ProviderCatalogue.mergeModels(embedded, live).single()
+        assertEquals(128_000, merged.contextWindow, "a real live 128k limit must win over the embedded 1M")
+    }
+
+    @Test
     fun `mergeModels keeps an unknown live id usable and resolvable`() = runBlocking {
         val embedded = ProviderCatalogue.defaultModels("deepseek")
         val live = embedded + ModelInfo(

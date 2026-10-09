@@ -21,11 +21,6 @@ object ProviderCatalogue {
      */
     const val SNAPSHOT_VERSION = 1
 
-    // ModelInfo's own defaults; kept here so [overlay] can tell a live field
-    // that was actually provided from one left at its constructor default.
-    private const val DEFAULT_CONTEXT_WINDOW = 128_000
-    private const val DEFAULT_MAX_OUTPUT_TOKENS = 8_192
-
     fun registry(provider: String, key: String): SimpleProviderRegistry =
         SimpleProviderRegistry(providers(provider, key))
 
@@ -94,17 +89,12 @@ object ProviderCatalogue {
      * [live] are appended (so a newer model stays usable) and ids only in
      * [embedded] survive (so offline resolution never regresses).
      *
-     * A live field counts as "provided" when it differs from [ModelInfo]'s own
-     * default: non-zero cost, non-default context/output, a true capability, or
-     * a tool flag explicitly disabled. Callers that parsed a richer payload and
-     * inherited fallbacks already should pass those inherited values through.
-     *
-     * Best-effort only: [ModelInfo] carries no presence bit, so a live field
-     * explicitly set to its default value (e.g. `contextWindow = 128_000`) is
-     * indistinguishable from an omitted one and the embedded value wins. The
-     * provider adapter performs the authoritative presence-aware overlay while
-     * it still has the raw JSON; this helper exists for callers that only have
-     * [ModelInfo] pairs and must not regress the offline defaults.
+     * Context window and max output take the live value whenever it is positive,
+     * so a real provider limit (including exactly 128_000) always wins over the
+     * embedded snapshot. Costs/capabilities fall back to embedded when the live
+     * value is zero/false. Callers that parsed a richer payload pass the values
+     * through; the provider adapter does the authoritative presence-aware overlay
+     * while it still has the raw JSON.
      */
     fun mergeModels(embedded: List<ModelInfo>, live: List<ModelInfo>): List<ModelInfo> {
         val embeddedById = embedded.associateBy { it.id }
@@ -120,8 +110,12 @@ object ProviderCatalogue {
     /** Fill every field [live] left at its ModelInfo default from the embedded copy. */
     private fun ModelInfo.overlay(live: ModelInfo): ModelInfo = copy(
         label = live.label.takeIf { it.isNotBlank() && it != live.id } ?: label,
-        contextWindow = live.contextWindow.takeIf { it != DEFAULT_CONTEXT_WINDOW } ?: contextWindow,
-        maxOutputTokens = live.maxOutputTokens.takeIf { it != DEFAULT_MAX_OUTPUT_TOKENS } ?: maxOutputTokens,
+        // Live context/output win whenever positive. A sentinel comparison against
+        // the 128_000 default would discard a real live 128k value and wrongly
+        // keep an embedded 1M, which is exactly the "use the model's real limit"
+        // case we must not lose.
+        contextWindow = live.contextWindow.takeIf { it > 0 } ?: contextWindow,
+        maxOutputTokens = live.maxOutputTokens.takeIf { it > 0 } ?: maxOutputTokens,
         supportsTools = live.supportsTools.takeIf { !it } ?: supportsTools,
         supportsReasoning = live.supportsReasoning.takeIf { it } ?: supportsReasoning,
         supportsVision = live.supportsVision.takeIf { it } ?: supportsVision,
