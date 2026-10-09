@@ -66,25 +66,46 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
 
     override suspend fun record(snapshot: Snapshot) {
         mutex.withLock {
-            connection.prepareStatement(
-                "INSERT OR REPLACE INTO snapshots(id, session_id, path, content, sha256, created_at) " +
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-            ).use { st ->
-                st.setString(1, snapshot.id)
-                st.setString(2, snapshot.sessionId.value)
-                st.setString(3, snapshot.path)
-                st.setString(4, snapshot.content)
-                st.setString(5, snapshot.sha256)
-                st.setLong(6, snapshot.createdAt)
-                st.executeUpdate()
+            // Content-addressed: the body is written once per distinct sha256 and
+            // the row references it. A blank sha falls back to the row id so the
+            // content stays reachable.
+            val sha = snapshot.sha256.ifBlank { snapshot.id }
+            connection.autoCommit = false
+            try {
+                connection.prepareStatement(
+                    "INSERT OR IGNORE INTO snapshot_blobs(sha256, content) VALUES (?, ?)",
+                ).use { st ->
+                    st.setString(1, sha)
+                    st.setString(2, snapshot.content)
+                    st.executeUpdate()
+                }
+                connection.prepareStatement(
+                    "INSERT OR REPLACE INTO snapshots(id, session_id, path, sha256, created_at) " +
+                        "VALUES (?, ?, ?, ?, ?)",
+                ).use { st ->
+                    st.setString(1, snapshot.id)
+                    st.setString(2, snapshot.sessionId.value)
+                    st.setString(3, snapshot.path)
+                    st.setString(4, sha)
+                    st.setLong(5, snapshot.createdAt)
+                    st.executeUpdate()
+                }
+                connection.commit()
+            } catch (t: Throwable) {
+                connection.rollback()
+                throw t
+            } finally {
+                connection.autoCommit = true
             }
         }
     }
 
     override suspend fun latest(sessionId: SessionId, path: String): Snapshot? = mutex.withLock {
         connection.prepareStatement(
-            "SELECT * FROM snapshots WHERE session_id = ? AND path = ? " +
-                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            "SELECT s.id, s.session_id, s.path, s.sha256, s.created_at, b.content " +
+                "FROM snapshots s LEFT JOIN snapshot_blobs b ON b.sha256 = s.sha256 " +
+                "WHERE s.session_id = ? AND s.path = ? " +
+                "ORDER BY s.created_at DESC, s.rowid DESC LIMIT 1",
         ).use { st ->
             st.setString(1, sessionId.value)
             st.setString(2, path)
@@ -94,7 +115,9 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
 
     override suspend fun forSession(sessionId: SessionId): List<Snapshot> = mutex.withLock {
         connection.prepareStatement(
-            "SELECT * FROM snapshots WHERE session_id = ? ORDER BY created_at ASC, rowid ASC",
+            "SELECT s.id, s.session_id, s.path, s.sha256, s.created_at, b.content " +
+                "FROM snapshots s LEFT JOIN snapshot_blobs b ON b.sha256 = s.sha256 " +
+                "WHERE s.session_id = ? ORDER BY s.created_at ASC, s.rowid ASC",
         ).use { st ->
             st.setString(1, sessionId.value)
             st.executeQuery().use { rs -> buildList { while (rs.next()) add(readSnapshot(rs)) } }
@@ -113,6 +136,7 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
                     }
                     st.executeBatch()
                 }
+                gcBlobs()
                 connection.commit()
             } catch (t: Throwable) {
                 connection.rollback()
@@ -124,15 +148,26 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
     }
 
     override suspend fun prune(keep: Int): Int = mutex.withLock {
-        connection.prepareStatement(
-            "DELETE FROM snapshots WHERE rowid IN (" +
-                "SELECT s.rowid FROM snapshots s WHERE (" +
-                "SELECT COUNT(*) FROM snapshots x WHERE x.session_id = s.session_id " +
-                "AND (x.created_at > s.created_at OR (x.created_at = s.created_at AND x.rowid > s.rowid))" +
-                ") >= ?)",
-        ).use { st ->
-            st.setInt(1, keep.coerceAtLeast(0))
-            st.executeUpdate()
+        connection.autoCommit = false
+        try {
+            val removed = connection.prepareStatement(
+                "DELETE FROM snapshots WHERE rowid IN (" +
+                    "SELECT s.rowid FROM snapshots s WHERE (" +
+                    "SELECT COUNT(*) FROM snapshots x WHERE x.session_id = s.session_id " +
+                    "AND (x.created_at > s.created_at OR (x.created_at = s.created_at AND x.rowid > s.rowid))" +
+                    ") >= ?)",
+            ).use { st ->
+                st.setInt(1, keep.coerceAtLeast(0))
+                st.executeUpdate()
+            }
+            gcBlobs()
+            connection.commit()
+            removed
+        } catch (t: Throwable) {
+            connection.rollback()
+            throw t
+        } finally {
+            connection.autoCommit = true
         }
     }
 
@@ -208,6 +243,7 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
                     }
                 }
             }
+            gcBlobs()
             connection.commit()
             removed
         } catch (t: Throwable) {
@@ -226,11 +262,22 @@ class SqliteSnapshotStore(dbPath: Path) : SnapshotStore, AutoCloseable {
             }
         }
 
+    /**
+     * Drop blobs no snapshot row references any more. Shared content survives as
+     * long as a single referencing row remains. Assumes the caller holds [mutex].
+     */
+    private fun gcBlobs() {
+        connection.prepareStatement(
+            "DELETE FROM snapshot_blobs " +
+                "WHERE sha256 NOT IN (SELECT sha256 FROM snapshots WHERE sha256 IS NOT NULL)",
+        ).use { it.executeUpdate() }
+    }
+
     private fun readSnapshot(rs: ResultSet) = Snapshot(
         id = rs.getString("id"),
         sessionId = SessionId(rs.getString("session_id")),
         path = rs.getString("path"),
-        content = rs.getString("content"),
+        content = rs.getString("content") ?: "",
         sha256 = rs.getString("sha256"),
         createdAt = rs.getLong("created_at"),
     )
@@ -282,6 +329,44 @@ private val SNAPSHOT_MIGRATIONS = listOf(
             }
             if ("snapshot" in tables && "snapshots" !in tables) {
                 st.execute("ALTER TABLE snapshot RENAME TO snapshots")
+            }
+        }
+    },
+    SnapshotMigration(3) { connection ->
+        // Move bodies into a content-addressed `snapshot_blobs` table so the same
+        // content is stored once. `snapshots` keeps its columns minus `content`;
+        // explicit rowids are copied so created_at/rowid ordering is unchanged.
+        connection.createStatement().use { st ->
+            st.execute(
+                "CREATE TABLE IF NOT EXISTS snapshot_blobs (" +
+                    "sha256 TEXT PRIMARY KEY, content TEXT NOT NULL)",
+            )
+            val columns = st.executeQuery("PRAGMA table_info(snapshots)").use { rs ->
+                buildSet { while (rs.next()) add(rs.getString("name")) }
+            }
+            // A DB already migrated to v3 has no content column to backfill from.
+            if ("content" in columns) {
+                // Key each row's blob by sha256, falling back to the row id for a
+                // legacy row with no hash, so no body is dropped by the rebuild.
+                st.execute(
+                    "INSERT OR IGNORE INTO snapshot_blobs(sha256, content) " +
+                        "SELECT CASE WHEN sha256 IS NULL OR sha256 = '' THEN id ELSE sha256 END, content " +
+                        "FROM snapshots WHERE content IS NOT NULL",
+                )
+                st.execute(
+                    "CREATE TABLE snapshots_new (" +
+                        "id TEXT PRIMARY KEY, session_id TEXT NOT NULL, path TEXT NOT NULL, " +
+                        "sha256 TEXT NOT NULL, created_at INTEGER NOT NULL)",
+                )
+                st.execute(
+                    "INSERT INTO snapshots_new(rowid, id, session_id, path, sha256, created_at) " +
+                        "SELECT rowid, id, session_id, path, " +
+                        "CASE WHEN sha256 IS NULL OR sha256 = '' THEN id ELSE sha256 END, created_at " +
+                        "FROM snapshots",
+                )
+                st.execute("DROP TABLE snapshots")
+                st.execute("ALTER TABLE snapshots_new RENAME TO snapshots")
+                st.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_session_path ON snapshots(session_id, path)")
             }
         }
     },

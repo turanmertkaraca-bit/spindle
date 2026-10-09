@@ -68,7 +68,24 @@ class HostShellExecutorTest {
         withShellDir { dir ->
             val result = shell.run("yes a | head -n 60000", dir, 10_000)
             assertTrue(result.truncated, "expected truncation")
-            assertEquals(Limits.BASH_MAX_OUTPUT_CHARS, result.output.length)
+            assertTrue(
+                result.output.contains("output truncated"),
+                "expected an elision marker: ${result.output.take(80)}",
+            )
+            assertTrue(
+                result.output.length <= Limits.BASH_MAX_OUTPUT_CHARS + 128,
+                "retained head+tail must stay near the cap, was ${result.output.length}",
+            )
+        }
+    }
+
+    @Test
+    fun longOutputKeepsItsTail() = runTest {
+        withShellDir { dir ->
+            val result = shell.run("printf '%*s' 60000 '' | tr ' ' a; printf TAILMARK", dir, 10_000)
+            assertTrue(result.truncated, "expected truncation")
+            assertTrue(result.output.contains("TAILMARK"), "the tail marker must survive truncation")
+            assertTrue(result.output.contains("output truncated"), "expected an elision marker")
         }
     }
 

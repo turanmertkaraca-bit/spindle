@@ -688,10 +688,15 @@ class AgentLoop(
             ToolOutcome("Tool ${part.call.name} failed: ${e.message}", isError = true)
         }
 
-        val clipped = clip(outcome.output, maxToolOutputChars)
+        val (clipped, spillPath) = spillOutput(cwd, part.call.name, part.call.id, outcome.output)
         // The diff is persisted forever and re-sent each turn; an unbounded
         // patch would otherwise make a single stored Part enormous.
         val clippedDiff = outcome.diff?.let { clip(it, maxToolOutputChars) }
+        val resultMetadata = durationMetadata(outcome.metadata, runStartedAt).let { base ->
+            // Only claim an outputPath when the spill actually landed; a failed
+            // write degrades to clip and reports no path.
+            if (spillPath != null) base + (OUTPUT_PATH_KEY to spillPath) else base
+        }
         finishTool(
             sessionId, messageId,
             part.copy(
@@ -701,7 +706,7 @@ class AgentLoop(
                     clipped,
                     outcome.isError,
                     clippedDiff,
-                    clipMetadata(durationMetadata(outcome.metadata, runStartedAt)),
+                    clipMetadata(resultMetadata),
                 ),
             ),
         )
@@ -745,6 +750,51 @@ class AgentLoop(
         return text.take(head) +
             "\n…[truncated ${text.length - max} chars]…\n" +
             text.takeLast(tail)
+    }
+
+    /**
+     * Persist an over-cap tool output under `<cwd>/.spindle/truncated/` and
+     * return a head+tail preview that tells the model where to find the rest.
+     *
+     * [Wire.toWire] only ever transmits a result's `output` string, so the spill
+     * path has to live inside that string; writing a bare file the model cannot
+     * see would lose the output entirely. Keeps the head (context) and the tail
+     * (the error that usually matters) and drops the middle. A failed write —
+     * read-only workspace, missing cwd — falls back to the plain [clip].
+     */
+    private suspend fun spillOutput(
+        cwd: String,
+        tool: String,
+        callId: String,
+        text: String,
+    ): Pair<String, String?> {
+        if (maxToolOutputChars <= 0 || text.length <= maxToolOutputChars) return text to null
+        val relative = spillRelativePath(tool, callId)
+        val written = try {
+            val target = Path.of(cwd).resolve(relative)
+            target.parent?.let { Files.createDirectories(it) }
+            Files.writeString(target, text, StandardCharsets.UTF_8)
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            false
+        }
+        if (!written) return clip(text, maxToolOutputChars) to null
+        val head = maxToolOutputChars * 2 / 3
+        val tail = maxToolOutputChars - head
+        val preview = text.take(head) +
+            "\n…[output ${text.length} chars; full text saved to $relative. " +
+            "Use read(path, offset/limit) or grep — do not read it all]…\n" +
+            text.takeLast(tail)
+        return preview to relative
+    }
+
+    /** Workspace-relative spill path for [tool]/[callId], sanitized against traversal. */
+    private fun spillRelativePath(tool: String, callId: String): String {
+        val safeTool = tool.replace(UNSAFE_PATH_CHARS, "_")
+        val safeCall = callId.replace(UNSAFE_PATH_CHARS, "_")
+        return "$SPILL_DIR/$safeTool-$safeCall.txt"
     }
 
     /**
@@ -921,6 +971,15 @@ class AgentLoop(
         const val MAX_RULES_CHARS = 8_192
         const val MAX_METADATA_VALUE_CHARS = 8_192
         const val DURATION_KEY = "durationMs"
+
+        /** Relative directory (under the session cwd) for spilled tool output. */
+        const val SPILL_DIR = ".spindle/truncated"
+
+        /** Metadata key recording the relative path of a spilled tool output. */
+        const val OUTPUT_PATH_KEY = "outputPath"
+
+        /** Characters outside this set in a tool name / call id are replaced. */
+        val UNSAFE_PATH_CHARS = Regex("[^A-Za-z0-9_.-]")
 
         /** Minimum wall-clock gap between mid-stream partial-message checkpoints. */
         const val CHECKPOINT_INTERVAL_MS = 1_000L

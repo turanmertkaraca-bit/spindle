@@ -36,3 +36,6 @@ fixtures/live/
 
 # Local screenshot review artifacts
 .screenshots/
+
+# Agent tool-output spill files
+.spindle/

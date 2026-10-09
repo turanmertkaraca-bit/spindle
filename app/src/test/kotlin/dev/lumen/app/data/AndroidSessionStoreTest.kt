@@ -9,6 +9,7 @@ import dev.spindle.core.model.PartId
 import dev.spindle.core.model.Role
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
+import dev.spindle.core.model.SessionState
 import dev.spindle.core.model.Snapshot
 import dev.spindle.core.model.ToolCall
 import dev.spindle.core.model.ToolResult
@@ -22,6 +23,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -328,6 +330,95 @@ class AndroidSessionStoreTest {
             assertEquals(listOf("p5", "p4"), store.sessions(limit = 100).map { it.id.value })
             assertTrue(store.messages(SessionId("p1")).isEmpty(), "pruned sessions lose their messages")
             assertEquals(1, store.messages(SessionId("p5")).size, "kept sessions are untouched")
+        }
+    }
+
+    @Test
+    fun `prune budgets over roots so hidden children do not evict them`() = runTest {
+        newStore().use { store ->
+            store.createSession(Session(SessionId("r1"), "r", "/tmp", 10, 10))
+            store.createSession(Session(SessionId("r2"), "r", "/tmp", 20, 20))
+            // Recent hidden children hang off r1 and are newer than both roots.
+            (1..5).forEach { i ->
+                store.createSession(
+                    Session(SessionId("c$i"), "c", "/tmp", 100L + i, 100L + i, parentId = SessionId("r1")),
+                )
+            }
+
+            val removed = store.prune(keepSessions = 2)
+
+            assertEquals(0, removed, "children must not consume the root budget")
+            assertEquals(
+                listOf("r2", "r1"),
+                store.sessions(limit = 100).map { it.id.value },
+                "both roots survive even though children are newer",
+            )
+            assertEquals(5, store.sessions(limit = 100, includeChildren = true).count { it.parentId != null })
+        }
+    }
+
+    @Test
+    fun `prune drops a dropped root's whole subtree`() = runTest {
+        newStore().use { store ->
+            store.createSession(Session(SessionId("old"), "r", "/tmp", 1, 1))
+            store.createSession(Session(SessionId("oc"), "c", "/tmp", 2, 2, parentId = SessionId("old")))
+            store.createSession(Session(SessionId("og"), "g", "/tmp", 3, 3, parentId = SessionId("oc")))
+            store.appendMessage(Message(MessageId("ogm"), SessionId("og"), Role.USER, createdAt = 0))
+            store.createSession(Session(SessionId("new"), "r", "/tmp", 10, 10))
+
+            val removed = store.prune(keepSessions = 1)
+
+            assertEquals(3, removed, "the root and both descendants count as deleted")
+            assertEquals(listOf("new"), store.sessions(limit = 100).map { it.id.value })
+            assertTrue(store.messages(SessionId("og")).isEmpty(), "subtree messages go with the root")
+        }
+    }
+
+    @Test
+    fun `prune spares a root whose subtree has a running session`() = runTest {
+        newStore().use { store ->
+            store.createSession(Session(SessionId("old"), "r", "/tmp", 1, 1))
+            store.createSession(
+                Session(SessionId("live"), "c", "/tmp", 2, 2, parentId = SessionId("old"), state = SessionState.RUNNING),
+            )
+            store.createSession(Session(SessionId("new"), "r", "/tmp", 10, 10))
+
+            val removed = store.prune(keepSessions = 1)
+
+            assertEquals(0, removed, "a subtree containing a live run is never deleted")
+            assertNotNull(store.session(SessionId("old")))
+            assertNotNull(store.session(SessionId("live")))
+        }
+    }
+
+    @Test
+    fun `sweepSubagentSessions drops old terminal children but keeps recent and running`() = runTest {
+        newStore().use { store ->
+            val now = 1_000_000L
+            store.createSession(Session(SessionId("parent"), "r", "/tmp", 0, now))
+            store.createSession(
+                Session(SessionId("old"), "c", "/tmp", 0, now - 5_000, parentId = SessionId("parent")),
+            )
+            store.createSession(
+                Session(SessionId("grand"), "g", "/tmp", 0, now - 5_000, parentId = SessionId("old")),
+            )
+            store.createSession(
+                Session(SessionId("recent"), "c", "/tmp", 0, now, parentId = SessionId("parent")),
+            )
+            store.createSession(
+                Session(
+                    SessionId("running"), "c", "/tmp", 0, now - 5_000,
+                    parentId = SessionId("parent"), state = SessionState.RUNNING,
+                ),
+            )
+
+            val removed = store.sweepSubagentSessions(maxAgeMillis = 1_000, now = now)
+
+            assertEquals(2, removed, "the stale child and its grandchild are deleted")
+            assertNotNull(store.session(SessionId("recent")), "a recent child is kept for on-demand transcripts")
+            assertNotNull(store.session(SessionId("running")), "a running child is never swept")
+            assertNull(store.session(SessionId("old")))
+            assertNull(store.session(SessionId("grand")))
         }
     }
 }

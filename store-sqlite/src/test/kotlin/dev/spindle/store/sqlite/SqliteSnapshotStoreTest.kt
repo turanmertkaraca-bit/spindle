@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
+import java.sql.DriverManager
 
 class SqliteSnapshotStoreTest {
 
@@ -167,4 +168,29 @@ class SqliteSnapshotStoreTest {
         )
         assertTrue(second.forSession(SessionId("ses_missing")).isEmpty())
     }
+
+    @Test
+    fun sharedContentIsStoredOnceAndOrphanBlobsAreReclaimed(@TempDir tmpDir: Path) = runTest {
+        val db = tmpDir.resolve("blobs.db")
+        val s = SqliteSnapshotStore.open(db)
+        store = s
+        // Two rows carry the same body and hash, so only one blob is written.
+        s.record(Snapshot("a1", SessionId("ses_blob"), "a.kt", "shared", "h-shared", 1L))
+        s.record(Snapshot("a2", SessionId("ses_blob"), "b.kt", "shared", "h-shared", 2L))
+
+        assertEquals(1, blobCount(db), "the shared body is stored once")
+        assertEquals("shared", s.latest(SessionId("ses_blob"), "a.kt")?.content)
+
+        s.delete(listOf("a1", "a2"))
+        assertEquals(0, blobCount(db), "the orphaned body is dropped")
+    }
+
+    private fun blobCount(db: Path): Int =
+        DriverManager.getConnection("jdbc:sqlite:${db.toAbsolutePath()}").use { c ->
+            c.createStatement().use { st ->
+                st.executeQuery("SELECT COUNT(*) FROM snapshot_blobs").use { rs ->
+                    if (rs.next()) rs.getInt(1) else -1
+                }
+            }
+        }
 }

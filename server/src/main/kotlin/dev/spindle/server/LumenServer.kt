@@ -71,6 +71,13 @@ class LumenServer(
     /** One live SSE subscriber per connected browser tab. */
     private val subscribers = CopyOnWriteArrayList<SseSubscriber>()
 
+    /**
+     * Serializes "add subscriber + replay" against [broadcast], so a reconnect
+     * catches up exactly once: no event is lost in the gap and none is sent
+     * twice. [SseSubscriber.lastSent] is the second line of defence.
+     */
+    private val subLock = Any()
+
     /** The running turn per session, so /stop and re-send behave. */
     private val runs = ConcurrentHashMap<String, Job>()
     private val runLock = Mutex()
@@ -82,8 +89,9 @@ class LumenServer(
         http.executor = Executors.newFixedThreadPool(8)
         http.createContext("/", ::handle)
         http.start()
-        // Fan the event bus out to every subscriber, tagged for the wire.
-        scope.launch { bus.events.collect { e -> broadcast(WireEvent.of(e)) } }
+        // Fan the sequenced bus out to every subscriber, so each SSE frame
+        // carries the id a reconnecting client can resume from.
+        scope.launch { bus.sequenced.collect { entry -> broadcast(entry) } }
         return http.address.port
     }
 
@@ -93,10 +101,13 @@ class LumenServer(
         scope.launch { }
     }
 
-    private fun broadcast(event: WireEvent) {
-        val payload = json.encodeToString(WireEvent.serializer(), event)
-        subscribers.forEach { it.send(payload) }
+    private fun broadcast(entry: EventBus.Entry) {
+        val payload = payloadOf(entry.event)
+        synchronized(subLock) { subscribers.forEach { it.send(payload, entry.seq) } }
     }
+
+    private fun payloadOf(event: AgentEvent): String =
+        json.encodeToString(WireEvent.serializer(), WireEvent.of(event))
 
     // ---- routing ----
 
@@ -269,8 +280,18 @@ class LumenServer(
         exchange.sendResponseHeaders(200, 0)
         val out = exchange.responseBody
         val sub = SseSubscriber(out)
-        subscribers += sub
         sub.send("""{"hello":true}""")
+        // A reconnecting client sends the id of the last frame it saw. Add it to
+        // the live set and replay anything newer from the ring under [subLock],
+        // atomically with broadcast, so it neither misses a frame nor sees one
+        // twice. An unparseable/absent header means a fresh subscriber.
+        val lastEventId = exchange.requestHeaders.getFirst("Last-Event-ID")?.trim()?.toLongOrNull()
+        synchronized(subLock) {
+            subscribers += sub
+            if (lastEventId != null) {
+                bus.replayAfter(lastEventId).forEach { entry -> sub.send(payloadOf(entry.event), entry.seq) }
+            }
+        }
         try {
             // Hold the connection open until the client goes away.
             while (!sub.closed) {
@@ -288,11 +309,22 @@ class LumenServer(
         @Volatile var closed = false
         private val lock = Any()
 
-        fun send(payload: String) {
+        /** Highest seq already written; frames at or below it are dropped. */
+        private var lastSent = 0L
+
+        fun send(payload: String, seq: Long? = null) {
             synchronized(lock) {
                 if (closed) return
+                if (seq != null) {
+                    if (seq <= lastSent) return
+                    lastSent = seq
+                }
                 runCatching {
-                    out.write("data: $payload\n\n".toByteArray(Charsets.UTF_8))
+                    val frame = buildString {
+                        if (seq != null) append("id: ").append(seq).append('\n')
+                        append("data: ").append(payload).append("\n\n")
+                    }
+                    out.write(frame.toByteArray(Charsets.UTF_8))
                     out.flush()
                 }.onFailure { closed = true }
             }

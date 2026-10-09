@@ -137,6 +137,7 @@ class OpenAiProviderTest {
         assertEquals("sess-42", recorded.getHeader("x-opencode-session"))
         val body = recorded.body.readUtf8()
         assertTrue(body.contains("\"stream\":true"), body)
+        assertTrue(body.contains("\"prompt_cache_key\":\"sess-42\""), body)
         assertTrue(body.contains("\"include_usage\":true"), body)
         assertTrue(body.contains("\"tool_choice\":\"auto\""), body)
         assertTrue(body.contains("\"type\":\"enabled\""), body)

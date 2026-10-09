@@ -611,28 +611,84 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
     }
 
     /**
-     * Keep the [keepSessions] most recently updated sessions and drop the rest,
-     * whole: each dropped session's messages/parts/todos/snapshots/FTS rows go
-     * with it. Sessions are compared as a flat set (children count toward the
-     * budget like any other) and deletion here is non-cascading, so a child that
-     * survives the cut is not swept away with an aged-out parent. Negative
-     * values behave like zero.
+     * Keep the [keepSessions] most recently updated TOP-LEVEL sessions and drop
+     * the rest, whole: each dropped root's entire `parent_id` subtree (its
+     * messages/parts/todos/snapshots/FTS rows included) goes with it. Hidden
+     * subagent children are filtered from Home and must not consume the root
+     * budget, so the cut is over roots only; their retention is handled by
+     * [sweepSubagentSessions].
+     *
+     * A root whose subtree still contains a RUNNING session is spared entirely,
+     * because deleting it would orphan a live run. Negative values behave like
+     * zero. Returns the number of individual sessions actually deleted (roots
+     * plus descendants), not the number of roots dropped.
      */
     override suspend fun prune(keepSessions: Int): Int = locked {
         val keep = keepSessions.coerceAtLeast(0)
         // `keep` is a coerced non-negative Int, so inlining it is injection-safe
         // and avoids depending on SQLite coercing a text-bound LIMIT/OFFSET.
-        val drop = db.rawQuery(
+        val roots = db.rawQuery(
             // A NULL state (rows created before the state column existed) is not
             // 'RUNNING', but `state != 'RUNNING'` is NULL for it, so it must be
-            // matched explicitly or it could never be pruned.
-            "SELECT id FROM sessions WHERE (state IS NULL OR state != 'RUNNING') " +
+            // matched explicitly or it could never be pruned. Children are
+            // excluded from the budget: they are hidden from Home and swept by
+            // [sweepSubagentSessions] instead.
+            "SELECT id FROM sessions WHERE parent_id IS NULL AND (state IS NULL OR state != 'RUNNING') " +
                 "ORDER BY updated_at DESC LIMIT -1 OFFSET $keep",
             null,
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
-        transaction { for (id in drop) deleteSessionRows(id) }
-        drop.size
+        transaction {
+            var deleted = 0
+            for (root in roots) {
+                val subtree = sessionTree(root)
+                // Never delete a subtree containing a live run, even when the
+                // root itself is terminal.
+                if (subtree.any { isRunning(it) }) continue
+                for (sid in subtree) {
+                    deleteSessionRows(sid)
+                    deleted++
+                }
+            }
+            deleted
+        }
     }
+
+    /**
+     * Drop terminal hidden children older than [maxAgeMillis], each with its own
+     * `parent_id` subtree, in one transaction. This bounds the children of
+     * long-lived kept parents without racing the UI, which reads a child's
+     * transcript on demand (`ChatViewModel.childSteps` -> `messages(childId)`):
+     * recent children survive so that view still works. Returns the number of
+     * individual sessions deleted. [now] is injectable for tests.
+     */
+    suspend fun sweepSubagentSessions(maxAgeMillis: Long, now: Long = System.currentTimeMillis()): Int = locked {
+        val cutoff = now - maxAgeMillis
+        val staleChildren = db.rawQuery(
+            // A NULL state is terminal (not 'RUNNING'); see prune() for why the
+            // explicit NULL match is required.
+            "SELECT id FROM sessions WHERE parent_id IS NOT NULL " +
+                "AND (state IS NULL OR state != 'RUNNING') AND updated_at < ?",
+            arrayOf(cutoff.toString()),
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+        transaction {
+            val doomed = LinkedHashSet<String>()
+            for (child in staleChildren) {
+                val subtree = sessionTree(child)
+                // Mirror prune(): never delete a subtree containing a live run.
+                if (subtree.any { isRunning(it) }) continue
+                doomed.addAll(subtree)
+            }
+            for (sid in doomed) deleteSessionRows(sid)
+            doomed.size
+        }
+    }
+
+    /** True when [sessionId]'s stored state is exactly `RUNNING`. */
+    private fun isRunning(sessionId: String): Boolean =
+        db.rawQuery(
+            "SELECT 1 FROM sessions WHERE id=? AND state=?",
+            arrayOf(sessionId, SessionState.RUNNING.name),
+        ).use { it.moveToFirst() }
 
     /**
      * Fold FTS tombstones left by message rewrites/compaction and truncate the
@@ -641,15 +697,22 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
      */
     override suspend fun maintain() {
         locked {
-            // Sweep rows whose session no longer exists (a write racing a delete,
-            // or a non-cascading prune). prune() only walks live session ids, so
-            // without this these orphans would grow the DB forever.
+            // Sweep rows whose session no longer exists (e.g. a write racing a
+            // delete, which could insert after the id was removed). Without this
+            // these orphans would grow the DB forever.
             runCatching {
                 transaction {
                     db.execSQL("DELETE FROM parts WHERE session_id NOT IN (SELECT id FROM sessions)")
                     db.execSQL("DELETE FROM messages WHERE session_id NOT IN (SELECT id FROM sessions)")
                     db.execSQL("DELETE FROM todos WHERE session_id NOT IN (SELECT id FROM sessions)")
                     db.execSQL("DELETE FROM snapshots WHERE session_id NOT IN (SELECT id FROM sessions)")
+                    // Content-addressed snapshot bodies referenced by no snapshot
+                    // row (a session was deleted, or a snapshot was pruned) are
+                    // unreachable; drop them so the blob table cannot grow forever.
+                    db.execSQL(
+                        "DELETE FROM snapshot_blobs " +
+                            "WHERE sha256 NOT IN (SELECT sha256 FROM snapshots WHERE sha256 IS NOT NULL)",
+                    )
                 }
             }
             // Only merge when enough rewrites have accumulated; calling optimize

@@ -598,6 +598,18 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * Re-read the open session's stored state whenever the Activity returns to
+     * the foreground. A run that finished while we were backgrounded may have
+     * emitted its terminal event before this ViewModel re-subscribed, so this
+     * clears a possibly wedged `busy` from the store. Read-only and a no-op
+     * when no chat is open.
+     */
+    override fun onResume() {
+        super.onResume()
+        viewModel.reconcileOpenSession()
+    }
+
+    /**
      * The activity is `singleTask`, so tapping a completion notification while
      * Lumen is already alive lands here instead of [onCreate]. The new intent
      * becomes the activity's intent, and the session id is consumed by the

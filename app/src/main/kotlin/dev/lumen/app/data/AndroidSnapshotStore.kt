@@ -36,25 +36,44 @@ class AndroidSnapshotStore internal constructor(private val shared: AndroidDatab
         // `sequence` is AUTOINCREMENT and assigned by SQLite, so it is omitted
         // here; a replace re-inserts the row and therefore moves it to the end
         // of the monotonic order, which is exactly "newest".
-        db.execSQL(
-            "INSERT OR REPLACE INTO snapshots(id,session_id,path,content,sha256,created_at) VALUES(?,?,?,?,?,?)",
-            arrayOf(
-                snapshot.id, snapshot.sessionId.value, snapshot.path,
-                snapshot.content, snapshot.sha256, snapshot.createdAt,
-            ),
-        )
+        //
+        // The body is content-addressed: it is written once per distinct sha256
+        // and the row only references it. A blank sha (legacy/edge) falls back to
+        // the row id so the content is still reachable.
+        val sha = snapshot.sha256.ifBlank { snapshot.id }
+        db.beginTransaction()
+        try {
+            db.execSQL(
+                "INSERT OR IGNORE INTO snapshot_blobs(sha256,content) VALUES(?,?)",
+                arrayOf(sha, snapshot.content),
+            )
+            db.execSQL(
+                "INSERT OR REPLACE INTO snapshots(id,session_id,path,sha256,created_at) VALUES(?,?,?,?,?)",
+                arrayOf(
+                    snapshot.id, snapshot.sessionId.value, snapshot.path,
+                    sha, snapshot.createdAt,
+                ),
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
 
     override suspend fun latest(sessionId: SessionId, path: String): Snapshot? = locked {
         db.rawQuery(
-            "SELECT * FROM snapshots WHERE session_id=? AND path=? ORDER BY sequence DESC LIMIT 1",
+            "SELECT s.id, s.session_id, s.path, s.sha256, s.created_at, s.sequence, b.content " +
+                "FROM snapshots s LEFT JOIN snapshot_blobs b ON b.sha256 = s.sha256 " +
+                "WHERE s.session_id=? AND s.path=? ORDER BY s.sequence DESC LIMIT 1",
             arrayOf(sessionId.value, path),
         ).use { c -> if (c.moveToFirst()) c.toSnapshot() else null }
     }
 
     override suspend fun forSession(sessionId: SessionId): List<Snapshot> = locked {
         db.rawQuery(
-            "SELECT * FROM snapshots WHERE session_id=? ORDER BY sequence",
+            "SELECT s.id, s.session_id, s.path, s.sha256, s.created_at, s.sequence, b.content " +
+                "FROM snapshots s LEFT JOIN snapshot_blobs b ON b.sha256 = s.sha256 " +
+                "WHERE s.session_id=? ORDER BY s.sequence",
             arrayOf(sessionId.value),
         ).use { c -> buildList { while (c.moveToNext()) add(c.toSnapshot()) } }
     }
@@ -64,6 +83,7 @@ class AndroidSnapshotStore internal constructor(private val shared: AndroidDatab
         db.beginTransaction()
         try {
             for (id in ids) db.delete("snapshots", "id=?", arrayOf(id))
+            gcBlobs()
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -85,6 +105,7 @@ class AndroidSnapshotStore internal constructor(private val shared: AndroidDatab
                 ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
                 ids.drop(keep).forEach { db.delete("snapshots", "id=?", arrayOf(it)); removed++ }
             }
+            gcBlobs()
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -157,11 +178,23 @@ class AndroidSnapshotStore internal constructor(private val shared: AndroidDatab
                     }
                 }
             }
+            gcBlobs()
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
         }
         removed
+    }
+
+    /**
+     * Drop blobs no snapshot row references any more. Shared content survives as
+     * long as a single referencing row remains.
+     */
+    private fun gcBlobs() {
+        db.execSQL(
+            "DELETE FROM snapshot_blobs " +
+                "WHERE sha256 NOT IN (SELECT sha256 FROM snapshots WHERE sha256 IS NOT NULL)",
+        )
     }
 
     /**

@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * hold tens of thousands of files (or churn constantly). They are pruned from
  * every snapshot walk.
  */
-internal val HEAVY_DIRS = setOf(".git", "node_modules", "build", ".gradle", ".idea")
+internal val HEAVY_DIRS = setOf(".git", "node_modules", "build", ".gradle", ".idea", ".spindle")
 
 /** Safety bounds so a pathological tree cannot pin the poller forever. */
 private const val MAX_FILES = 20_000

@@ -63,6 +63,7 @@ class LumenApp : Application() {
     private suspend fun retentionJanitor() {
         while (true) {
             runCatching { container.store.prune(keepSessions = KEEP_SESSIONS) }
+            runCatching { container.store.sweepSubagentSessions(SUBAGENT_TTL_MS) }
             runCatching { container.snapshots.pruneBounded() }
             runCatching { container.store.maintain() }
             delay(JANITOR_INTERVAL_MS)
@@ -72,6 +73,9 @@ class LumenApp : Application() {
     private companion object {
         /** Sessions retained (newest first); older ones are dropped whole. */
         const val KEEP_SESSIONS = 100
+
+        /** Hidden subagent children older than a day are swept with their subtrees. */
+        const val SUBAGENT_TTL_MS = 24L * 60L * 60L * 1_000L
 
         /** Run retention every 6 hours. */
         const val JANITOR_INTERVAL_MS = 6L * 60L * 60L * 1_000L

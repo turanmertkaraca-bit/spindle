@@ -31,6 +31,11 @@ class AndroidSnapshotStoreTest {
         createdAt = at,
     )
 
+    private fun blobCount(database: AndroidDatabase): Int =
+        database.db().rawQuery("SELECT COUNT(*) FROM snapshot_blobs", null).use {
+            if (it.moveToFirst()) it.getInt(0) else -1
+        }
+
     @Test
     fun `pruneBounded caps per session, global count and age`() = runTest {
         val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
@@ -109,6 +114,68 @@ class AndroidSnapshotStoreTest {
 
         assertEquals("clock_behind", store.latest(SessionId("s1"), "a.kt")?.id)
         assertEquals(listOf("clock_ahead", "clock_behind"), store.forSession(SessionId("s1")).map { it.id })
+        store.close()
+    }
+
+    @Test
+    fun `identical content across paths and sessions is stored as one blob`() = runTest {
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val store = AndroidSnapshotStore(database)
+        store.record(snap("a1", "s1", "src/a.kt", 1))
+        store.record(snap("a2", "s1", "src/b.kt", 2))
+        store.record(snap("a3", "s2", "src/a.kt", 3))
+
+        assertEquals(1, blobCount(database), "the shared body is stored once")
+        store.close()
+    }
+
+    @Test
+    fun `different content is stored as separate blobs`() = runTest {
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val store = AndroidSnapshotStore(database)
+        store.record(Snapshot("a", SessionId("s1"), "a.kt", "one", "h1", 1))
+        store.record(Snapshot("b", SessionId("s1"), "b.kt", "two", "h2", 2))
+
+        assertEquals(2, blobCount(database))
+        store.close()
+    }
+
+    @Test
+    fun `removing every snapshot garbage collects orphan blobs`() = runTest {
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val store = AndroidSnapshotStore(database)
+        store.record(Snapshot("a", SessionId("s1"), "a.kt", "one", "h1", 1))
+        store.record(Snapshot("b", SessionId("s1"), "b.kt", "two", "h2", 2))
+        assertEquals(2, blobCount(database))
+
+        store.delete(listOf("a", "b"))
+
+        assertEquals(0, blobCount(database), "no snapshot references the bodies any more")
+        store.close()
+    }
+
+    @Test
+    fun `pruning to zero garbage collects orphan blobs`() = runTest {
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val store = AndroidSnapshotStore(database)
+        store.record(Snapshot("a", SessionId("s1"), "a.kt", "one", "h1", 1))
+        store.record(Snapshot("b", SessionId("s1"), "b.kt", "two", "h2", 2))
+
+        assertEquals(2, store.prune(0))
+
+        assertEquals(0, blobCount(database))
+        store.close()
+    }
+
+    @Test
+    fun `latest and forSession resolve content through the blob join`() = runTest {
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val store = AndroidSnapshotStore(database)
+        store.record(Snapshot("a", SessionId("s1"), "a.kt", "alpha", "h1", 1))
+        store.record(Snapshot("b", SessionId("s1"), "b.kt", "beta", "h2", 2))
+
+        assertEquals("beta", store.latest(SessionId("s1"), "b.kt")?.content)
+        assertEquals(listOf("alpha", "beta"), store.forSession(SessionId("s1")).map { it.content })
         store.close()
     }
 }

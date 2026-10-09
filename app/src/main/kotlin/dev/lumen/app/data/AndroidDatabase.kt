@@ -85,6 +85,7 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
             Migration(1) { createSchema(it) },
             Migration(2) { migrateMessagesUniqueSeq(it) },
             Migration(3) { migrateSnapshotSequence(it) },
+            Migration(4) { contentAddressedSnapshots(it) },
         )
         val current = userVersion(db)
         for (migration in migrations) {
@@ -140,6 +141,12 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
                  sha256 TEXT, created_at INTEGER)""",
         )
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_snap ON snapshots(session_id, path)")
+        // Snapshot bodies live once per distinct sha256; `snapshots` references
+        // them by hash (see [contentAddressedSnapshots]).
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS snapshot_blobs(
+                 sha256 TEXT PRIMARY KEY, content TEXT NOT NULL)""",
+        )
     }
 
     /**
@@ -203,6 +210,44 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
             """INSERT INTO snapshots_new(id, session_id, path, content, sha256, created_at, sequence)
                SELECT id, session_id, path, content, sha256, created_at, rowid
                FROM snapshots ORDER BY created_at, rowid""",
+        )
+        db.execSQL("DROP TABLE snapshots")
+        db.execSQL("ALTER TABLE snapshots_new RENAME TO snapshots")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_snap ON snapshots(session_id, path)")
+    }
+
+    /**
+     * Move snapshot bodies into a content-addressed `snapshot_blobs` table so the
+     * same file content is stored once however many snapshots reference it. The
+     * `snapshots` table keeps `id`/`sequence` (and every row, with its original
+     * sequence) but drops `content`; a reader resolves it by joining on `sha256`.
+     */
+    private fun contentAddressedSnapshots(db: SQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS snapshot_blobs(
+                 sha256 TEXT PRIMARY KEY, content TEXT NOT NULL)""",
+        )
+        // A DB already migrated to v4 has no content column to backfill from.
+        if ("content" !in columnNames(db, "snapshots")) return
+        // Key every row's blob by sha256, falling back to the row id for a legacy
+        // row that never had a hash, so no content is dropped by the rebuild.
+        db.execSQL(
+            """INSERT OR IGNORE INTO snapshot_blobs(sha256, content)
+               SELECT CASE WHEN sha256 IS NULL OR sha256 = '' THEN id ELSE sha256 END, content
+               FROM snapshots WHERE content IS NOT NULL""",
+        )
+        db.execSQL(
+            """CREATE TABLE snapshots_new(
+                 id TEXT NOT NULL UNIQUE, session_id TEXT, path TEXT, sha256 TEXT,
+                 created_at INTEGER, sequence INTEGER PRIMARY KEY AUTOINCREMENT)""",
+        )
+        // The explicit `sequence` is copied verbatim so newest-ordering is not
+        // perturbed by the rebuild; the sha is normalized to match the blob key.
+        db.execSQL(
+            """INSERT INTO snapshots_new(id, session_id, path, sha256, created_at, sequence)
+               SELECT id, session_id, path,
+                 CASE WHEN sha256 IS NULL OR sha256 = '' THEN id ELSE sha256 END,
+                 created_at, sequence FROM snapshots""",
         )
         db.execSQL("DROP TABLE snapshots")
         db.execSQL("ALTER TABLE snapshots_new RENAME TO snapshots")

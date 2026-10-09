@@ -41,6 +41,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicInteger
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
@@ -112,6 +113,17 @@ class AgentLoopTest {
         )
         override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome =
             ToolOutcome("ok", diff = "d".repeat(100_000))
+    }
+
+    /** A tool whose output exceeds the loop's cap, so it must be spilled to a file. */
+    private class HugeOutputTool(private val size: Int = 100_000) : Tool {
+        override val spec = ToolSpec(
+            name = "spill",
+            description = "returns a giant output",
+            parametersJson = """{"type":"object","properties":{}}""",
+        )
+        override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome =
+            ToolOutcome("HEAD" + "x".repeat(size) + "TAIL")
     }
 
     /** A tool that returns enormous metadata, which the loop must clip. */
@@ -1050,6 +1062,50 @@ class AgentLoopTest {
             .flatMap { it.parts }.filterIsInstance<Part.Tool>().single().result?.diff
         assertTrue(diff != null && diff.length < 100_000, "the persisted diff must be clipped")
         assertTrue(diff!!.contains("truncated"), diff)
+    }
+
+    @Test
+    fun `a giant tool output is spilled to a file and the result points at it`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_spill", "spill"),
+                ProviderEvent.ToolCallArgsDelta(0, "{}"),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            listOf(ProviderEvent.TextDelta("done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        val cwd = Files.createTempDirectory("spindle-spill")
+        try {
+            store.createSession(
+                Session(id = SessionId("ses_spill"), cwd = cwd.toString(), createdAt = 0, updatedAt = 0),
+            )
+            val loop = AgentLoop(
+                providers = SimpleProviderRegistry(listOf(provider)),
+                tools = ToolRegistry(listOf(HugeOutputTool())),
+                store = store,
+                bus = EventBus(),
+                maxToolOutputChars = 1_000,
+            )
+
+            loop.prompt(SessionId("ses_spill"), "go", "fake/fake-1")
+
+            val result = store.messages(SessionId("ses_spill"))
+                .flatMap { it.parts }.filterIsInstance<Part.Tool>().single().result!!
+            assertTrue(result.output.contains(".spindle/truncated/"), result.output)
+            assertTrue(result.output.contains("do not read it all"), result.output)
+            assertTrue(result.output.startsWith("HEAD"), "the head of the output must be preserved")
+            assertTrue(result.output.endsWith("TAIL"), "the tail of the output must be preserved")
+
+            // The full text lands inside the session cwd, where the read tool's
+            // sandbox (`resolveInsideCwd`) can reach it with a relative path.
+            val spilled = cwd.resolve(".spindle/truncated/spill-call_spill.txt").normalize()
+            assertTrue(spilled.startsWith(cwd.normalize()), "the spill must stay inside the sandbox")
+            assertTrue(Files.isRegularFile(spilled), "the spilled file must exist at $spilled")
+            assertEquals("HEAD" + "x".repeat(100_000) + "TAIL", Files.readString(spilled))
+        } finally {
+            cwd.toFile().deleteRecursively()
+        }
     }
 
     @Test

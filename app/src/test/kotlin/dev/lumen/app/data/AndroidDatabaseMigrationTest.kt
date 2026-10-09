@@ -62,9 +62,52 @@ class AndroidDatabaseMigrationTest {
         }
 
         openRaw().use { raw ->
-            assertEquals(3, raw.userVersion(), "the version gate records the current schema")
+            assertEquals(4, raw.userVersion(), "the version gate records the current schema")
             assertTrue(raw.hasColumn("snapshots", "sequence"), "migration 3 adds the snapshot sequence")
             assertTrue(raw.isUniqueIndex("messages", "idx_msg"), "migration 2 makes (session_id, seq) unique")
+        }
+    }
+
+    @Test
+    fun `migration 4 content-addresses duplicate snapshot bodies`() = runTest {
+        openRaw().use { raw ->
+            raw.execSQL(
+                "CREATE TABLE snapshots(id TEXT NOT NULL UNIQUE, session_id TEXT, path TEXT, content TEXT, " +
+                    "sha256 TEXT, created_at INTEGER, sequence INTEGER PRIMARY KEY AUTOINCREMENT)",
+            )
+            raw.execSQL("CREATE INDEX idx_snap ON snapshots(session_id, path)")
+            // Two rows share body "dup" (and its hash); a third is distinct.
+            raw.execSQL(
+                "INSERT INTO snapshots(id, session_id, path, content, sha256, created_at) " +
+                    "VALUES('s1','sess','a.kt','dup','h1',1)",
+            )
+            raw.execSQL(
+                "INSERT INTO snapshots(id, session_id, path, content, sha256, created_at) " +
+                    "VALUES('s2','sess','b.kt','dup','h1',2)",
+            )
+            raw.execSQL(
+                "INSERT INTO snapshots(id, session_id, path, content, sha256, created_at) " +
+                    "VALUES('s3','sess','c.kt','other','h2',3)",
+            )
+            raw.rawQuery("PRAGMA user_version = 3", null).use { it.moveToFirst() }
+        }
+
+        AndroidSnapshotStore(context).use { store ->
+            val rows = store.forSession(SessionId("sess"))
+            assertEquals(listOf("s1", "s2", "s3"), rows.map { it.id }, "every row survives in sequence order")
+            assertEquals(listOf("dup", "dup", "other"), rows.map { it.content }, "content resolves through the join")
+        }
+
+        openRaw().use { raw ->
+            assertEquals(4, raw.userVersion())
+            assertTrue(raw.hasColumn("snapshots", "sequence"), "the sequence column is preserved")
+            assertTrue(!raw.hasColumn("snapshots", "content"), "the content column is moved to snapshot_blobs")
+            assertEquals(2, raw.countBlobs(), "duplicate bodies collapse to one blob")
+            val sequences = raw.rawQuery(
+                "SELECT id FROM snapshots ORDER BY sequence",
+                null,
+            ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+            assertEquals(listOf("s1", "s2", "s3"), sequences, "sequence values are preserved exactly")
         }
     }
 
@@ -110,5 +153,10 @@ class AndroidDatabaseMigrationTest {
             var found = false
             while (c.moveToNext()) if (c.getString(name) == index) found = c.getInt(unique) != 0
             found
+        }
+
+    private fun SQLiteDatabase.countBlobs(): Int =
+        rawQuery("SELECT COUNT(*) FROM snapshot_blobs", null).use { c ->
+            if (c.moveToFirst()) c.getInt(0) else -1
         }
 }

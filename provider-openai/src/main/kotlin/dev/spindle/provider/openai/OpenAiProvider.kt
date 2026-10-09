@@ -357,6 +357,10 @@ class OpenAiProvider(
         put("stream", true)
         put("model", request.model)
         put("messages", buildMessages(request))
+        // Stable per-conversation cache key so gateways that route by key reuse
+        // the cached prefix across turns instead of sharding it. Optional; a
+        // missing hint leaves the body unchanged for providers that ignore it.
+        request.sessionHint?.let { put("prompt_cache_key", it) }
         if (request.tools.isNotEmpty()) {
             put("tools", buildTools(request.tools))
             put("tool_choice", "auto")

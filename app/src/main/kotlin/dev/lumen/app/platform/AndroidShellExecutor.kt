@@ -194,8 +194,9 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
     }
 
     private suspend fun collect(process: Process, timeoutMs: Long, onChunk: ((String) -> Unit)?): ShellResult {
-        val collected = StringBuilder()
-        val truncated = booleanArrayOf(false)
+        val headCap = MAX_OUTPUT_CHARS * 2 / 3
+        val tailCap = MAX_OUTPUT_CHARS - headCap
+        val collected = BoundedOutput(headCap, tailCap)
 
         val reader = Thread {
             try {
@@ -204,20 +205,13 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
                     while (true) {
                         val read = stream.read(buffer)
                         if (read < 0) break
-                        var emitted: String? = null
-                        synchronized(collected) {
-                            val room = MAX_OUTPUT_CHARS - collected.length
-                            if (room <= 0) {
-                                truncated[0] = true
-                            } else {
-                                val take = minOf(room, read)
-                                collected.append(buffer, 0, take)
-                                if (take < read) truncated[0] = true
-                                if (onChunk != null && take > 0) emitted = String(buffer, 0, take)
-                            }
-                        }
+                        if (read == 0) continue
+                        synchronized(collected) { collected.append(buffer, 0, read) }
                         // A throwing consumer must never abort draining.
-                        emitted?.let { chunk -> runCatching { onChunk?.invoke(chunk) } }
+                        if (onChunk != null) {
+                            val chunk = String(buffer, 0, read)
+                            runCatching { onChunk.invoke(chunk) }
+                        }
                     }
                 }
             } catch (ignored: Exception) {
@@ -256,20 +250,61 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         if (!finished) killProcessTree(process)
         reader.join(READER_JOIN_MS)
 
-        val output = synchronized(collected) { collected.toString() }
+        val (output, truncated) = synchronized(collected) {
+            collected.render(::truncationMarker) to collected.truncated
+        }
         return if (timedOut) {
             ShellResult(
                 exitCode = -1,
                 output = output,
-                truncated = truncated[0],
+                truncated = truncated,
                 timedOut = true,
             )
         } else {
             ShellResult(
                 exitCode = process.exitValue(),
                 output = output,
-                truncated = truncated[0],
+                truncated = truncated,
             )
+        }
+    }
+
+    /**
+     * Head+tail bounded capture for shell output. The first [headCap] characters
+     * and the last [tailCap] characters are retained; anything between is dropped
+     * but its count is remembered so [render] can say how much was elided. The
+     * tail is what carries a build's final error line.
+     */
+    private class BoundedOutput(private val headCap: Int, private val tailCap: Int) {
+        private val head = StringBuilder()
+        private val tail = StringBuilder()
+        private var total = 0L
+
+        val truncated: Boolean get() = total > (head.length + tail.length).toLong()
+
+        fun append(buffer: CharArray, offset: Int, length: Int) {
+            if (length <= 0) return
+            total += length
+            var off = offset
+            var len = length
+            val headRoom = headCap - head.length
+            if (headRoom > 0) {
+                val take = minOf(headRoom, len)
+                head.append(buffer, off, take)
+                off += take
+                len -= take
+            }
+            if (len > 0) {
+                tail.append(buffer, off, len)
+                val excess = tail.length - tailCap
+                if (excess > 0) tail.delete(0, excess)
+            }
+        }
+
+        fun render(markerFor: (Long) -> String): String {
+            val dropped = total - (head.length + tail.length).toLong()
+            return if (dropped <= 0) head.toString() + tail.toString()
+            else head.toString() + markerFor(dropped) + tail.toString()
         }
     }
 
@@ -277,6 +312,9 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         const val MAX_OUTPUT_CHARS = 50_000
     }
 }
+
+/** Elision notice inserted between the retained head and tail of shell output. */
+private fun truncationMarker(dropped: Long): String = "\n…[output truncated $dropped chars]…\n"
 
 /**
  * A pipe-backed "terminal". It is not a PTY: there is no raw mode, no window

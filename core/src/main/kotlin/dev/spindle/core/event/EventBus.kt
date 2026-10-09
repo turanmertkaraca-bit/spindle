@@ -10,6 +10,7 @@ import dev.spindle.core.model.Usage
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import java.util.concurrent.atomic.AtomicLong
 
 enum class DeltaKind { TEXT, REASONING }
 
@@ -119,11 +120,58 @@ sealed interface AgentEvent {
 
 /** Fan-out bus. Slow subscribers drop oldest rather than blocking the loop. */
 class EventBus {
+    /** One bus emission, tagged with its monotonic sequence number. */
+    data class Entry(val seq: Long, val event: AgentEvent)
+
     private val flow = MutableSharedFlow<AgentEvent>(
         replay = 0,
         extraBufferCapacity = 1024,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
     val events: SharedFlow<AgentEvent> get() = flow
-    fun emit(event: AgentEvent) { flow.tryEmit(event) }
+
+    /**
+     * The same stream as [events], but each emission carries the monotonic
+     * [Entry.seq] a client uses to detect gaps and to catch up after a
+     * reconnect (`Last-Event-ID`). Kept additive so existing collectors of
+     * [events] compile and behave unchanged.
+     */
+    private val sequences = MutableSharedFlow<Entry>(
+        replay = 0,
+        extraBufferCapacity = 1024,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    val sequenced: SharedFlow<Entry> get() = sequences
+
+    private val counter = AtomicLong(0)
+
+    /** Bounded replay ring of the most recent entries, oldest first. */
+    private val ring = ArrayDeque<Entry>()
+    private val ringLock = Any()
+
+    fun emit(event: AgentEvent) {
+        // Assign the seq, append to the ring, and publish under one lock so the
+        // sequence order, the ring order, and the live emission order all agree.
+        // Otherwise two concurrent emitters could hand out 1 and 2 but publish
+        // 2 first, breaking replay and gap detection.
+        synchronized(ringLock) {
+            val entry = Entry(counter.incrementAndGet(), event)
+            ring.addLast(entry)
+            while (ring.size > REPLAY_CAPACITY) ring.removeFirst()
+            sequences.tryEmit(entry)
+            flow.tryEmit(event)
+        }
+    }
+
+    /** Ring entries with `seq > afterSeq`, in order; empty if none survive. */
+    fun replayAfter(afterSeq: Long): List<Entry> =
+        synchronized(ringLock) { ring.filter { it.seq > afterSeq } }
+
+    /** The highest sequence emitted so far, or 0 before the first event. */
+    fun lastSeq(): Long = counter.get()
+
+    companion object {
+        /** How many recent entries are retained for reconnect catch-up. */
+        const val REPLAY_CAPACITY = 4096
+    }
 }

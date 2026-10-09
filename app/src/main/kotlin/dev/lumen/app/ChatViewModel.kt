@@ -476,6 +476,13 @@ class ChatViewModel(
     /** Bumped on every session switch so a slow `openSession` cannot land stale. */
     private var sessionOpenToken = 0
 
+    /**
+     * Highest bus sequence already applied for the open session. A discontinuity
+     * (`seq != lastEventSeq + 1`) means the bounded buffer dropped events or a
+     * reconnect skipped some, so the store is re-read to resync.
+     */
+    private var lastEventSeq = 0L
+
     /** In-flight debounced search, cancelled when a newer query arrives. */
     private var searchJob: Job? = null
 
@@ -1260,6 +1267,7 @@ class ChatViewModel(
     fun newChat() {
         val token = ++sessionOpenToken
         viewModelScope.launch {
+            resetEventBaseline()
             val now = System.currentTimeMillis()
             val id = SessionId(Ids.new("ses"))
             store.createSession(
@@ -1301,6 +1309,10 @@ class ChatViewModel(
         val token = ++sessionOpenToken
         viewModelScope.launch {
             val sid = SessionId(id)
+            // Baseline before the store read: events emitted during it carry a
+            // seq the collector sees as contiguous, and anything older is in
+            // the messages we are about to load.
+            resetEventBaseline()
             val messages = store.messages(sid)
             val session = store.session(sid)
             if (token != sessionOpenToken) return@launch
@@ -2447,17 +2459,86 @@ class ChatViewModel(
         registryFactory?.invoke(provider, key) ?: ProviderCatalogue.registry(provider, key)
 
     private suspend fun collectEvents() {
+        // The bus may already hold history when this collector starts (a run
+        // that began before the ViewModel existed). Baseline at the current head
+        // so the first observed event is not misread as a gap.
+        resetEventBaseline()
         // A single malformed event must never cancel the only subscriber: with
         // replay=0 a dead collector drops every later event, including the
         // terminal StateChanged that clears `busy`. Swallow per-event failures.
-        bus.events.collect { e ->
+        bus.sequenced.collect { entry ->
             try {
+                val e = entry.event
+                // Advance the baseline for EVERY entry (the bus seq is
+                // process-wide) before the session filter, so an interleaved
+                // subagent or other-session event never makes the next
+                // current-session event look like a gap.
+                val expected = lastEventSeq + 1
+                lastEventSeq = entry.seq
+                val current = _state.value.currentSessionId
+                if (current == null || e.sessionId.value != current) return@collect
+                if (entry.seq != expected) {
+                    // A gap: the bounded buffer dropped events or a reconnect
+                    // landed mid-stream. Resync from the store before applying,
+                    // so a lost terminal can never leave `busy` stuck.
+                    reconcileCurrent()
+                }
                 handleEvent(e)
             } catch (ce: CancellationException) {
                 throw ce
             } catch (t: Throwable) {
                 diag("event handler failed: ${t.message}")
             }
+        }
+    }
+
+    /** Re-baseline gap detection to the bus head (on collector start/session switch). */
+    private fun resetEventBaseline() {
+        lastEventSeq = bus.lastSeq()
+    }
+
+    /**
+     * Re-read the open session from the store after a detected gap: the timeline
+     * is rebuilt and `busy` is re-derived from the authoritative [SessionState],
+     * so a terminal event lost to the bounded buffer cannot wedge the UI.
+     */
+    private suspend fun reconcileCurrent() {
+        val current = _state.value.currentSessionId ?: return
+        val sid = SessionId(current)
+        runCatching { store.session(sid) }.getOrNull()?.let { session ->
+            _state.value = _state.value.copy(busy = session.state == SessionState.RUNNING)
+        }
+        requestRebuild(sid)
+    }
+
+    /**
+     * Re-read the open session's stored state and messages on resume. A run that
+     * finished while the app was backgrounded may have emitted its terminal
+     * before this ViewModel subscribed, so this re-applies `busy` and rebuilds
+     * the timeline. Read-only: it never navigates or cancels a live run.
+     */
+    fun reconcileOpenSession() {
+        val id = _state.value.currentSessionId ?: return
+        val token = sessionOpenToken
+        viewModelScope.launch {
+            val sid = SessionId(id)
+            val messages = store.messages(sid)
+            val session = store.session(sid)
+            if (token != sessionOpenToken || _state.value.currentSessionId != id) return@launch
+            resetSessionCaches()
+            val steps = enrich(StepMapper.fromMessages(messages))
+            replaceTimeline(steps)
+            _state.value = _state.value.copy(
+                steps = steps,
+                busy = session?.state == SessionState.RUNNING,
+                usage = messages.fold(Usage()) { acc, m -> acc + m.usage },
+                todos = loadTodos(sid),
+                ask = activeAsk?.ask,
+            )
+            resetUsage()
+            // The rebuild is current as of the bus head; re-baseline so the
+            // collector does not flag the next event as a gap.
+            resetEventBaseline()
         }
     }
 
