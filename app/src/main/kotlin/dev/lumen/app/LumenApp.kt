@@ -7,6 +7,7 @@ import dev.lumen.app.data.AndroidSessionStore
 import dev.lumen.app.data.AndroidSnapshotStore
 import dev.lumen.app.data.KeyStore
 import dev.lumen.app.data.ModelCatalogue
+import dev.spindle.core.agent.RunRecovery
 import dev.spindle.core.event.EventBus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +42,12 @@ class LumenApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        // Reconcile orphaned RUNNING sessions/parts once per process, before any
+        // UI exists, so a process killed mid-run never leaves a session wedged as
+        // busy (the previous UI-only call could be skipped entirely).
+        applicationScope.launch {
+            runCatching { RunRecovery.reconcile(container.store, runningSessions) }
+        }
         applicationScope.launch { container.catalogue.refreshAll() }
         applicationScope.launch { retentionJanitor() }
     }
@@ -89,6 +96,9 @@ class AppContainer(context: Context) : AutoCloseable {
     val catalogue = ModelCatalogue(keys, context)
 
     override fun close() {
-        runCatching { database.close() }
+        // Go through the stores' mutex-guarded close rather than calling the
+        // shared database directly, so a close cannot race an in-flight query.
+        runCatching { store.close() }
+        runCatching { snapshots.close() }
     }
 }

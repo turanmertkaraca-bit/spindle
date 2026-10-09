@@ -49,6 +49,22 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         cwd: Path,
         timeoutMs: Long,
         env: Map<String, String>,
+    ): ShellResult = execute(command, cwd, timeoutMs, env, null)
+
+    override suspend fun runStreaming(
+        command: String,
+        cwd: Path,
+        timeoutMs: Long,
+        env: Map<String, String>,
+        onChunk: (String) -> Unit,
+    ): ShellResult = execute(command, cwd, timeoutMs, env, onChunk)
+
+    private suspend fun execute(
+        command: String,
+        cwd: Path,
+        timeoutMs: Long,
+        env: Map<String, String>,
+        onChunk: ((String) -> Unit)?,
     ): ShellResult = withContext(Dispatchers.IO) {
         try {
             // Debian wins whenever the user has installed it and its proot
@@ -56,7 +72,7 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
             // a fresh install keeps using Alpine until [DebianEnvironment.install]
             // is run explicitly.
             if (debian.active()) {
-                return@withContext runInDebian(command, cwd, timeoutMs, env)
+                return@withContext runInDebian(command, cwd, timeoutMs, env, onChunk)
             }
 
             // Install the userland once, on first use. If it fails the run
@@ -87,7 +103,7 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
             }
 
             val process = startUnderSetsid(builder)
-            collect(process, timeoutMs)
+            collect(process, timeoutMs, onChunk)
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
@@ -101,6 +117,7 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         cwd: Path,
         timeoutMs: Long,
         env: Map<String, String>,
+        onChunk: ((String) -> Unit)?,
     ): ShellResult {
         val builder = debian.guestProcess(command, cwd.toFile().absolutePath)
         builder.environment().apply {
@@ -108,7 +125,7 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
             remove("_JAVA_OPTIONS")
             putAll(env)
         }
-        return collect(startUnderSetsid(builder), timeoutMs)
+        return collect(startUnderSetsid(builder), timeoutMs, onChunk)
     }
 
     /**
@@ -176,7 +193,7 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         return builder.start()
     }
 
-    private suspend fun collect(process: Process, timeoutMs: Long): ShellResult {
+    private suspend fun collect(process: Process, timeoutMs: Long, onChunk: ((String) -> Unit)?): ShellResult {
         val collected = StringBuilder()
         val truncated = booleanArrayOf(false)
 
@@ -187,6 +204,7 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
                     while (true) {
                         val read = stream.read(buffer)
                         if (read < 0) break
+                        var emitted: String? = null
                         synchronized(collected) {
                             val room = MAX_OUTPUT_CHARS - collected.length
                             if (room <= 0) {
@@ -195,8 +213,11 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
                                 val take = minOf(room, read)
                                 collected.append(buffer, 0, take)
                                 if (take < read) truncated[0] = true
+                                if (onChunk != null && take > 0) emitted = String(buffer, 0, take)
                             }
                         }
+                        // A throwing consumer must never abort draining.
+                        emitted?.let { chunk -> runCatching { onChunk?.invoke(chunk) } }
                     }
                 }
             } catch (ignored: Exception) {
@@ -205,16 +226,20 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         reader.isDaemon = true
         reader.start()
 
+        // A non-positive timeout means "no deadline": run until the process exits
+        // or the run is cancelled, so a long monitored script is never killed by
+        // the harness before the agent stops.
+        val hasDeadline = timeoutMs > 0
         var finished = false
         var timedOut = false
         try {
-            val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+            val deadline = if (hasDeadline) System.nanoTime() + timeoutMs * 1_000_000L else Long.MAX_VALUE
             while (true) {
                 if (process.waitFor(POLL_MS, TimeUnit.MILLISECONDS)) {
                     finished = true
                     break
                 }
-                if (System.nanoTime() >= deadline) {
+                if (hasDeadline && System.nanoTime() >= deadline) {
                     timedOut = true
                     break
                 }

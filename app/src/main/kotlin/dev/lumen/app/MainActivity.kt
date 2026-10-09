@@ -484,6 +484,8 @@ class MainActivity : ComponentActivity() {
                     onProvider = viewModel::setProvider,
                     onModel = viewModel::setModel,
                     onTheme = viewModel::setTheme,
+                    subagentModel = state.subagentModel,
+                    onSubagentModel = viewModel::setSubagentModel,
                     palette = state.palette,
                     onPalette = { viewModel.setPalette(it) },
                     onEditKey = { route = "key" },

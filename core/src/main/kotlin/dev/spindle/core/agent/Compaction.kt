@@ -31,7 +31,7 @@ object Compaction {
     /** Inline base64 larger than this is dropped from an old message's File part. */
     private const val TRIM_FILE_BASE64 = 4_000
 
-    suspend fun trim(store: SessionStore, sessionId: SessionId): Int {
+    suspend fun trim(store: SessionStore, sessionId: SessionId, bus: EventBus? = null): Int {
         val messages = store.messages(sessionId)
         val keepFrom = (messages.size - KEEP_RECENT).coerceAtLeast(0)
         var changed = 0
@@ -40,6 +40,15 @@ object Compaction {
             val trimmed = m.copy(parts = m.parts.map { clip(it) })
             if (trimmed != m) {
                 store.updateMessage(trimmed)
+                // Surface the shrink to the UI instead of leaving it showing the
+                // untrimmed text until the next full rebuild.
+                bus?.let { b ->
+                    trimmed.parts.forEachIndexed { idx, p ->
+                        if (p != m.parts.getOrNull(idx)) {
+                            b.emit(AgentEvent.PartUpdated(sessionId, trimmed.id.value, p))
+                        }
+                    }
+                }
                 changed++
             }
         }
@@ -102,11 +111,18 @@ object Compaction {
         var turnStart = lastUser
         while (turnStart > 0 && messages[turnStart - 1].role == Role.USER) turnStart--
         val keepFrom = messages.size - KEEP_RECENT
-        val headEnd = if (turnStart in 0 until keepFrom) turnStart else keepFrom
-        if (headEnd <= 0) return false
+        // Never fold the current turn's user message(s). When the only user
+        // message sits at index 0 there is no earlier turn boundary, so fold the
+        // old assistant/tool turns from index 1 and keep the instruction at index
+        // 0 verbatim. The fallback refuses if it would fold any user message.
+        val startedAtZero = turnStart <= 0
+        val headStart = if (startedAtZero) 1 else 0
+        val headEnd = if (startedAtZero) keepFrom else minOf(turnStart, keepFrom)
+        if (headEnd <= headStart) return false
 
-        val head = messages.take(headEnd)
+        val head = messages.subList(headStart, headEnd)
         if (head.isEmpty()) return false
+        if (startedAtZero && head.any { it.role == Role.USER }) return false
         // Nothing new since the last compaction: the only head content is the
         // existing summary. Skip the provider call so a long session cannot
         // re-summarize its own summary every step.

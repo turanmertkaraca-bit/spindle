@@ -225,6 +225,8 @@ data class ChatState(
     val error: String? = null,
     val model: String = "",
     val provider: String = "opencode-go",
+    /** Default model for `task` subagents (`provider/model`); "" = inherit main. */
+    val subagentModel: String = "",
     /** True until an API key is saved — the app shows the key form instead. */
     val needsKey: Boolean = true,
     /** Recent chats, newest first. */
@@ -403,6 +405,7 @@ class ChatViewModel(
             agentMode = if (keys.agentMode == "delegate") "build" else keys.agentMode,
             maxCostUsd = keys.maxCostUsd,
             autoCompactPercent = keys.autoCompactPercent,
+            subagentModel = keys.subagentModel,
             onboarded = keys.onboarded,
             githubLogin = keys.githubLogin,
             models = initialModels,
@@ -1154,6 +1157,13 @@ class ChatViewModel(
         refreshModelMetrics()
     }
 
+    /** Set the default subagent model; blank means "inherit the main model". */
+    fun setSubagentModel(ref: String) {
+        val value = ref.trim()
+        keys.subagentModel = value
+        _state.value = _state.value.copy(subagentModel = value)
+    }
+
     /**
      * Fetch the live catalogue for [provider] on the run scope (the Application
      * scope in production, so it survives the Activity), seeding the UI with
@@ -1345,6 +1355,27 @@ class ChatViewModel(
 
     fun deleteSession(id: String) {
         viewModelScope.launch {
+            // Cancel a live run for this session first: otherwise the loop keeps
+            // appending messages/parts/snapshots to a session row that no longer
+            // exists, and those orphans can never be reached by cascade delete.
+            if (runningSessionId == id || runningSessions?.contains(id) == true) {
+                runGeneration++
+                runJob?.cancel()
+                runJob = null
+                completionSuppressed = true
+                if (runningSessionId == id) runningSessionId = null
+                runningSessions?.remove(id)
+                syncRunningSessions()
+                // The run's own finally is skipped (generation was bumped), so
+                // tear down screen-bound resources here or the watcher keeps
+                // polling after the session is gone.
+                flushDeltas()
+                clearAsks()
+                watcher?.stop()
+                reportPerf(stopPerfNow())
+                context?.let { ctx -> runCatching { RunService.stop(ctx) } }
+                _state.value = _state.value.copy(busy = false, ask = null)
+            }
             store.deleteSession(SessionId(id))
             if (_state.value.currentSessionId == id) closeChat()
             refreshSessions()
@@ -2416,10 +2447,24 @@ class ChatViewModel(
         registryFactory?.invoke(provider, key) ?: ProviderCatalogue.registry(provider, key)
 
     private suspend fun collectEvents() {
+        // A single malformed event must never cancel the only subscriber: with
+        // replay=0 a dead collector drops every later event, including the
+        // terminal StateChanged that clears `busy`. Swallow per-event failures.
         bus.events.collect { e ->
-            val current = _state.value.currentSessionId
-            if (current == null || e.sessionId.value != current) return@collect
-            when (e) {
+            try {
+                handleEvent(e)
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
+                diag("event handler failed: ${t.message}")
+            }
+        }
+    }
+
+    private suspend fun handleEvent(e: AgentEvent) {
+        val current = _state.value.currentSessionId
+        if (current == null || e.sessionId.value != current) return
+        when (e) {
                 is AgentEvent.PartDelta -> {
                     val kind = if (e.kind == DeltaKind.REASONING) StepKind.THINKING else StepKind.ASSISTANT
                     val label = if (kind == StepKind.THINKING) "THINKING" else "ASSISTANT"
@@ -2480,7 +2525,6 @@ class ChatViewModel(
                 }
                 else -> Unit
             }
-        }
     }
 
     /** Fold a structural event into the buffer without dropping streamed text. */
@@ -2746,6 +2790,9 @@ class ChatViewModel(
                 questions = questionGate,
                 approval = approvalFor(keys.askBeforeTools) { keys.allowedPatterns },
                 snapshots = snapshots,
+                // Only honor a subagent model that belongs to the active provider;
+                // a stale value from a previous provider must not break spawning.
+                defaultSubagentModel = keys.subagentModel.takeIf { it.startsWith("${keys.provider}/") },
             )
             try {
                 startPerf(generation)

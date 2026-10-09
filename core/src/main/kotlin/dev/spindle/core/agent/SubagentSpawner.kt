@@ -39,7 +39,6 @@ class SubagentSpawner(
     private val store: SessionStore,
     private val bus: EventBus,
     private val maxChildSteps: Int = 12,
-    private val maxChildOutputChars: Int = 4_000,
 ) {
     suspend fun spawn(parentId: SessionId, spec: SubagentSpec, parentAgent: AgentConfig): SubagentResult {
         val parent = store.session(parentId) ?: return SubagentResult(parentId, "no parent session", false)
@@ -86,13 +85,14 @@ class SubagentSpawner(
 
         val text = finalMessage.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
             .ifBlank { "(subagent produced no text)" }
-        val clipped = if (text.length > maxChildOutputChars) text.take(maxChildOutputChars) + "…" else text
+        // Return the full report; the loop's tool-output clip bounds it. An
+        // artificial low cap here silently dropped findings the parent needed.
         val childUsage: Usage = store.messages(childId).fold(Usage()) { acc, m -> acc + m.usage }
         store.session(childId)?.let { store.updateSession(it.copy(updatedAt = System.currentTimeMillis())) }
 
         return SubagentResult(
             sessionId = childId,
-            text = clipped,
+            text = text,
             ok = finalMessage.error == null,
             childTokens = childUsage.totalTokens,
             costUsd = childUsage.costUsd,

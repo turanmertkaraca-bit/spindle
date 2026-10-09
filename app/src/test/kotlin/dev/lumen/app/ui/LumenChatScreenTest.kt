@@ -385,6 +385,24 @@ class LumenChatScreenTest {
     }
 
     @Test
+    fun `scrolling away from the tail shows the latest cue with no new content`() {
+        val many = (0 until 12).map { i ->
+            UiStep("s$i", StepKind.ASSISTANT, "ASSISTANT", "t$i", "summary $i", "BODY $i full text")
+        }
+        compose.setContent {
+            LumenChatScreen(many, input = "", busy = false, error = null, modifier = viewport, ambient = false, haptics = false)
+        }
+        compose.waitForIdle()
+        check(compose.onAllNodesWithTag("new-cue").fetchSemanticsNodes().isEmpty()) {
+            "no cue while the reader is at the tail"
+        }
+        // Scroll up with NO content change: the latest cue must appear.
+        compose.onNodeWithTag("timeline").performScrollToIndex(0)
+        compose.waitForIdle()
+        compose.onNodeWithTag("new-cue").assertIsDisplayed()
+    }
+
+    @Test
     fun `a new step below the fold shows the cue until the reader returns`() {
         val many = (0 until 12).map { i ->
             UiStep("s$i", StepKind.ASSISTANT, "ASSISTANT", "t$i", "summary $i", "BODY $i full text")

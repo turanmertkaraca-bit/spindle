@@ -31,6 +31,27 @@ interface ShellExecutor {
     ): ShellResult
 
     /**
+     * Run a command and stream merged output to [onChunk] as it is produced, so a
+     * long-running script can be monitored live instead of only after it exits.
+     *
+     * Semantics are identical to [run] except output delivery; the default
+     * implementation delegates to [run] (one final chunk) so executors that do
+     * not override it keep working. A [timeoutMs] `<= 0` means "no deadline": the
+     * command runs until it finishes or the caller cancels the coroutine.
+     */
+    suspend fun runStreaming(
+        command: String,
+        cwd: Path,
+        timeoutMs: Long,
+        env: Map<String, String> = emptyMap(),
+        onChunk: (String) -> Unit,
+    ): ShellResult {
+        val result = run(command, cwd, timeoutMs, env)
+        if (result.output.isNotEmpty()) onChunk(result.output)
+        return result
+    }
+
+    /**
      * Open an interactive terminal, or null when this executor has no PTY.
      * The default returns null so a missing PTY degrades to [run] instead of
      * failing.

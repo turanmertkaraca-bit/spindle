@@ -1,8 +1,13 @@
 package dev.spindle.tool
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -108,6 +113,36 @@ class HostShellExecutorTest {
     fun openPtyIsNullOnHost() = runTest {
         withShellDir { dir ->
             assertNull(shell.openPty("echo hi", dir))
+        }
+    }
+
+    @Test
+    fun zeroTimeoutRunsWithoutDeadline() = runTest {
+        withShellDir { dir ->
+            val result = shell.run("sleep 1; echo done", dir, 0)
+            assertFalse(result.timedOut, "timeoutMs=0 must mean no deadline")
+            assertEquals(0, result.exitCode)
+            assertTrue(result.output.contains("done"), result.output)
+        }
+    }
+
+    @Test
+    fun runStreamingDeliversOutputBeforeExit() = runTest {
+        withShellDir { dir ->
+            val chunks = CopyOnWriteArrayList<String>()
+            val firstSeen = CountDownLatch(1)
+            val job = launch(Dispatchers.IO) {
+                shell.runStreaming("printf first; sleep 1; printf second", dir, 5_000) { chunk ->
+                    chunks.add(chunk)
+                    if (chunk.contains("first")) firstSeen.countDown()
+                }
+            }
+            assertTrue(
+                firstSeen.await(3, TimeUnit.SECONDS),
+                "the first chunk must stream before the command exits",
+            )
+            job.join()
+            assertEquals("firstsecond", chunks.joinToString(""))
         }
     }
 }

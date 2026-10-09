@@ -490,6 +490,15 @@ private class OpenAiStreamState {
      */
     private var lastReasoning = ""
 
+    /**
+     * Last usage snapshot emitted for this stream. OpenAI-compatible providers
+     * send usage as a complete snapshot (usually one final frame), but some
+     * gateways repeat the same frame per chunk; emitting only when it changes
+     * stops the agent loop (which sums [ProviderEvent.UsageEvent]s) from
+     * double-counting the same prompt.
+     */
+    private var lastUsage: Usage? = null
+
     var sawFinish = false
         private set
 
@@ -535,7 +544,11 @@ private class OpenAiStreamState {
         }
 
         (root["usage"] as? JsonObject)?.let {
-            emit(ProviderEvent.UsageEvent(parseUsage(it)))
+            val parsed = parseUsage(it)
+            if (parsed != lastUsage) {
+                lastUsage = parsed
+                emit(ProviderEvent.UsageEvent(parsed))
+            }
         }
         return false
     }
@@ -582,17 +595,34 @@ private class OpenAiStreamState {
     }
 }
 
-private fun parseUsage(u: JsonObject): Usage = Usage(
-    inputTokens = u.int("prompt_tokens") ?: 0,
-    outputTokens = u.int("completion_tokens") ?: 0,
-    reasoningTokens = (u["completion_tokens_details"] as? JsonObject)?.int("reasoning_tokens") ?: 0,
-    cacheReadTokens = (u["prompt_tokens_details"] as? JsonObject)?.int("cached_tokens") ?: 0,
-    cacheWriteTokens = (u["prompt_tokens_details"] as? JsonObject)?.int("cache_write_tokens") ?: 0,
-    // OpenRouter reports the actual charge for the completion under `cost`
-    // (USD). Preserve it so the normalized usage carries the real amount even
-    // when the caller has no local pricing for the model.
-    costUsd = u["cost"].num() ?: 0.0,
-)
+private fun parseUsage(u: JsonObject): Usage {
+    val prompt = u.int("prompt_tokens") ?: u.int("input_tokens") ?: 0
+    val details = u["prompt_tokens_details"] as? JsonObject
+    val cachedFromDetails = details?.int("cached_tokens") ?: 0
+    val cacheWrite = details?.int("cache_write_tokens") ?: 0
+    // DeepSeek reports cache accounting top-level, and its prompt_tokens is
+    // already hit + miss. Prefer the explicit miss when present.
+    val deepseekHit = u.int("prompt_cache_hit_tokens") ?: 0
+    val deepseekMiss = u.int("prompt_cache_miss_tokens")
+    val cached = maxOf(cachedFromDetails, deepseekHit)
+    // Store inputTokens as the *uncached* (miss) portion so it matches Anthropic
+    // (whose input_tokens excludes cache) and [dev.spindle.core.agent.Wire.cost],
+    // which bills inputTokens at the full input rate and cacheRead/cacheWrite at
+    // their own discounted/premium rates. Storing the inclusive prompt_tokens
+    // here would double-charge the cached subset.
+    val miss = deepseekMiss ?: (prompt - cached - cacheWrite).coerceAtLeast(0)
+    return Usage(
+        inputTokens = miss,
+        outputTokens = u.int("completion_tokens") ?: 0,
+        reasoningTokens = (u["completion_tokens_details"] as? JsonObject)?.int("reasoning_tokens") ?: 0,
+        cacheReadTokens = cached,
+        cacheWriteTokens = cacheWrite,
+        // OpenRouter reports the actual charge for the completion under `cost`
+        // (USD). Preserve it so the normalized usage carries the real amount even
+        // when the caller has no local pricing for the model.
+        costUsd = u["cost"].num() ?: 0.0,
+    )
+}
 
 private fun mapFinish(reason: String): FinishReason = when (reason) {
     "tool_calls" -> FinishReason.TOOL_CALLS

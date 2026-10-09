@@ -20,15 +20,16 @@ class BashTool(
     override val spec = ToolSpec(
         name = "bash",
         description = "Run a shell command with /bin/sh. Standard error is merged into " +
-            "standard output. The command is killed and reported as an error if it runs " +
-            "longer than timeoutMs (default 120000ms, maximum 600000ms). Returns the " +
-            "combined output prefixed with the exit code.",
+            "standard output. Long-running commands stream output as it is produced. " +
+            "timeoutMs is an optional hard timeout (default 120000ms, max 600000ms); " +
+            "pass 0 or a negative value to run with no timeout until the run is stopped, " +
+            "which is the right choice for builds, servers and scripts you intend to monitor.",
         parametersJson = """
             {
               "type": "object",
               "properties": {
                 "command": {"type": "string", "description": "Shell command to run"},
-                "timeoutMs": {"type": "integer", "description": "Hard timeout in milliseconds (default 120000, max 600000)"},
+                "timeoutMs": {"type": "integer", "description": "Optional hard timeout in milliseconds (default 120000, max 600000). <= 0 means no timeout: run until the run is stopped."},
                 "cwd": {"type": "string", "description": "Directory to run in, relative to the working directory"}
               },
               "required": ["command"],
@@ -59,14 +60,26 @@ class BashTool(
             return ToolOutcome("cwd is not a directory: ${directory.path}", isError = true)
         }
 
-        val timeoutMs = (input.intOrNull("timeoutMs") ?: DEFAULT_TIMEOUT_MS)
-            .coerceAtLeast(1)
-            .coerceAtMost(MAX_TIMEOUT_MS)
+        // <= 0 means no deadline (cancel-only): the command runs until it exits or
+        // the run is stopped. Absent keeps the historical 120s default.
+        val requested = input.intOrNull("timeoutMs") ?: DEFAULT_TIMEOUT_MS
+        val timeoutMs = if (requested <= 0) 0L else requested.toLong().coerceIn(1, MAX_TIMEOUT_MS)
 
         ctx.emit(ToolProgress("Running: $command"))
 
+        // Throttled live progress from the reader thread (non-suspend emit).
+        var lastProgressAt = 0L
+        val onChunk: (String) -> Unit = { chunk ->
+            val now = System.currentTimeMillis()
+            if (now - lastProgressAt >= PROGRESS_INTERVAL_MS) {
+                lastProgressAt = now
+                val lastLine = chunk.trimEnd().lineSequence().lastOrNull()?.take(200).orEmpty()
+                if (lastLine.isNotEmpty()) ctx.emit(ToolProgress(lastLine))
+            }
+        }
+
         val result = try {
-            shell.run(command, directory.toPath(), timeoutMs.toLong())
+            shell.runStreaming(command, directory.toPath(), timeoutMs, onChunk = onChunk)
         } catch (e: Exception) {
             return ToolOutcome("Failed to start command: ${e.message}", isError = true)
         }
@@ -98,6 +111,7 @@ class BashTool(
 
     private companion object {
         const val DEFAULT_TIMEOUT_MS = 120_000
-        const val MAX_TIMEOUT_MS = 600_000
+        const val MAX_TIMEOUT_MS = 600_000L
+        const val PROGRESS_INTERVAL_MS = 300L
     }
 }

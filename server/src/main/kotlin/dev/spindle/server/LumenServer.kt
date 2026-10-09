@@ -215,7 +215,8 @@ class LumenServer(
         runLock.withLock {
             runs[id.value]?.cancel()
             val job = scope.launch {
-                runCatching {
+                val self = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
+                try {
                     store.updateSession(session.copy(title = titleFrom(text, session.title), updatedAt = System.currentTimeMillis()))
                     val loop = AgentLoop(
                         providers = SimpleProviderRegistry(providers),
@@ -226,11 +227,19 @@ class LumenServer(
                         questions = QuestionGate { _, _, options, _ -> listOf(options.firstOrNull() ?: "ok") },
                     )
                     loop.prompt(id, text, modelRef, AgentConfig(maxSteps = 16))
-                }.onFailure {
-                    bus.emit(AgentEvent.Error(id, it.message ?: it.toString()))
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // A user stop is not an error and must not be reported as one;
+                    // the loop already emits the terminal IDLE. Rethrow so the
+                    // cancellation is not swallowed.
+                    throw e
+                } catch (t: Throwable) {
+                    bus.emit(AgentEvent.Error(id, t.message ?: t.toString()))
                     bus.emit(AgentEvent.StateChanged(id, dev.spindle.core.model.SessionState.IDLE))
+                } finally {
+                    // Remove only our own mapping: a superseding run may already
+                    // own runs[id]; removing unconditionally would drop its handle.
+                    self?.let { runs.remove(id.value, it) }
                 }
-                runs.remove(id.value)
             }
             runs[id.value] = job
         }
@@ -241,8 +250,9 @@ class LumenServer(
         val id = path.removePrefix("/api/sessions/").removeSuffix("/stop")
         val job = runs.remove(id)
         if (job != null) {
+            // The loop's cancellation handler emits the single terminal IDLE;
+            // emitting another here would duplicate it.
             job.cancelAndJoin()
-            bus.emit(AgentEvent.StateChanged(SessionId(id), dev.spindle.core.model.SessionState.IDLE))
             respondJson(exchange, """{"ok":true}""")
         } else {
             respondJson(exchange, """{"ok":false,"reason":"not running"}""")

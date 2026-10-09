@@ -54,6 +54,7 @@ class WireTest {
             listOf(
                 userMessage(
                     listOf(
+                        Part.Text(PartId("p0"), "files"),
                         Part.File(PartId("p1"), "/tmp/a.txt", "text/plain", "aGk="),
                         Part.File(PartId("p2"), "/tmp/b.png", "image/png", null),
                         Part.File(PartId("p3"), "/tmp/c.png", null, "QUJD"),
@@ -144,5 +145,59 @@ class WireTest {
         )
 
         assertNull(req.responseFormat)
+    }
+
+    @Test
+    fun `empty user and reasoning-only assistant messages are skipped`() {
+        val emptyUser = userMessage(
+            listOf(Part.File(PartId("p1"), "/tmp/a.txt", "text/plain", "aGk=")),
+        )
+        val reasoningOnly = Message(
+            id = MessageId("msg_a"),
+            sessionId = SessionId("ses_1"),
+            role = Role.ASSISTANT,
+            parts = listOf(Part.Reasoning(PartId("r1"), "thinking...")),
+            createdAt = 0,
+        )
+
+        assertTrue(Wire.toWire(listOf(emptyUser, reasoningOnly)).isEmpty())
+    }
+
+    @Test
+    fun `request keeps the model's full output limit`() {
+        val req = Wire.request(
+            model = "gpt-4o",
+            system = "sys",
+            messages = listOf(WireMessage(role = "user", text = "hi")),
+            tools = emptyList(),
+            agent = AgentConfig(),
+            sessionHint = null,
+            maxOutputTokens = 64_000,
+        )
+
+        assertEquals(64_000, req.maxTokens)
+    }
+
+    @Test
+    fun `usage total counts cached tokens and cost bills the miss once`() {
+        val usage = dev.spindle.core.model.Usage(
+            inputTokens = 20,
+            outputTokens = 7,
+            cacheReadTokens = 80,
+            cacheWriteTokens = 5,
+        )
+        assertEquals(112, usage.totalTokens, "miss + output + cache read + cache write")
+
+        val model = dev.spindle.core.provider.ModelInfo(
+            providerId = "p",
+            id = "m",
+            inputCostPerM = 1.0,
+            outputCostPerM = 2.0,
+            cacheReadCostPerM = 0.1,
+            cacheWriteCostPerM = 1.25,
+        )
+        // 20 miss + 80 read + 5 write + 7 out, priced per 1M.
+        val expected = (20 + 7 * 2.0 + 80 * 0.1 + 5 * 1.25) / 1_000_000.0
+        assertEquals(expected, Wire.cost(model, usage), 1e-12)
     }
 }

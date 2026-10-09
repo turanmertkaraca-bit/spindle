@@ -43,6 +43,54 @@ class CompactionTest {
     }
 
     @Test
+    fun `a long single-prompt run still compacts and keeps the instruction`() = runTest {
+        val store = InMemorySessionStore()
+        val sid = SessionId("ses_first_prompt")
+        store.createSession(
+            Session(id = sid, cwd = System.getProperty("user.dir"), createdAt = 0, updatedAt = 0),
+        )
+
+        // Only ONE user message, at index 0, followed by enough assistant turns
+        // that compaction must engage. The old boundary returned false here and
+        // the run could never shrink.
+        val total = Compaction.KEEP_RECENT + 4
+        val originals = (0 until total).map { index ->
+            Message(
+                id = MessageId("m$index"),
+                sessionId = sid,
+                role = if (index == 0) Role.USER else Role.ASSISTANT,
+                parts = listOf(
+                    Part.Text(
+                        PartId("p$index"),
+                        if (index == 0) "the instruction" else "assistant $index",
+                    ),
+                ),
+                createdAt = index.toLong(),
+            )
+        }
+        originals.forEach { store.appendMessage(it) }
+
+        val provider = SummaryProvider()
+        val changed = Compaction.compact(
+            store = store,
+            sessionId = sid,
+            modelRef = "fake/fake-1",
+            providers = SimpleProviderRegistry(listOf(provider)),
+            bus = EventBus(),
+        )
+
+        assertTrue(changed, "compaction must engage for a long single-prompt run")
+        val after = store.messages(sid)
+        assertEquals("the instruction", after[0].parts.filterIsInstance<Part.Text>().single().text)
+        assertTrue(
+            after.drop(1).any { m ->
+                m.parts.filterIsInstance<Part.Text>().any { it.text.startsWith(AgentLoop.COMPACT_MARKER) }
+            },
+            "a summary should have been folded into the head: $after",
+        )
+    }
+
+    @Test
     fun `compact folds the head and keeps the recent tail verbatim`() = runTest {
         val store = InMemorySessionStore()
         val sid = SessionId("ses_compact")

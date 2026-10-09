@@ -28,7 +28,14 @@ data class Usage(
         costUsd = costUsd + other.costUsd,
     )
 
-    val totalTokens: Int get() = inputTokens + outputTokens
+    /**
+     * Total tokens attributable to this usage record. Cache reads/writes are
+     * added explicitly because [inputTokens] is the *uncached* (miss) portion:
+     * Anthropic's `input_tokens` excludes cache, and OpenAI-compatible usage is
+     * normalized to the same convention by the adapters. Reasoning tokens are a
+     * subset of [outputTokens] and are not added again.
+     */
+    val totalTokens: Int get() = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens
 }
 
 @Serializable

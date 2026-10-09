@@ -74,17 +74,13 @@ class AgentLoop(
     private val approval: ApprovalPolicy = AllowAllPolicy,
     /** Pre-edit snapshots; null disables the record-and-revert capability. */
     private val snapshots: SnapshotStore? = null,
+    /**
+     * Default `provider/model` for subagents when a `task` call does not name
+     * one. Null (the default) inherits the parent session's model.
+     */
+    private val defaultSubagentModel: String? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
-
-    /**
-     * One run lock per session, so two prompts for the same session serialize
-     * instead of interleaving (which would corrupt the shared history, finalize
-     * another run's in-flight tools, and split run-state). Distinct sessions
-     * still run concurrently. Entries are one small [Mutex] per session id ever
-     * prompted, i.e. bounded by the user's session count.
-     */
-    private val sessionRunLocks = ConcurrentHashMap<SessionId, Mutex>()
 
     suspend fun toolContext(sessionId: SessionId, gate: PermissionGate = permissions): ToolContext {
         val session = store.session(sessionId) ?: error("no session")
@@ -130,7 +126,7 @@ class AgentLoop(
         /** Extra host-supplied rules appended after any AGENTS.md content. */
         rules: String? = null,
     ): Message {
-        val runLock = sessionRunLocks.getOrPut(sessionId) { Mutex() }
+        val runLock = sharedRunLocks.computeIfAbsent(sessionId) { Mutex() }
         return runLock.withLock {
             promptLocked(sessionId, userText, modelRef, agent, onPermission, budget, rules)
         }
@@ -197,13 +193,13 @@ class AgentLoop(
                     bus.emit(AgentEvent.StateChanged(sessionId, SessionState.RUNNING))
                 }
                 when (decision.action) {
-                    OverflowAction.TRIM -> Compaction.trim(store, sessionId)
+                    OverflowAction.TRIM -> Compaction.trim(store, sessionId, bus)
                     OverflowAction.COMPACT -> {
                         // A compaction that has nothing new to fold (the head is
                         // already just a summary) still needs the fallback trim
                         // so an over-window session keeps shrinking.
                         if (!Compaction.compact(store, sessionId, modelRef, providers, bus)) {
-                            Compaction.trim(store, sessionId)
+                            Compaction.trim(store, sessionId, bus)
                         }
                     }
                     OverflowAction.NONE -> Unit
@@ -266,6 +262,13 @@ class AgentLoop(
                             // concatenates attempt-1 + attempt-2 text. Emitting here
                             // (rather than in the block) guarantees the reset is on
                             // the bus ahead of the retried attempt's first delta.
+                            //
+                            // Also clear any mid-stream checkpoint the failed attempt
+                            // persisted, so a UI rebuild triggered by PartReset cannot
+                            // resurrect the stale text and re-concatenate it.
+                            runCatching {
+                                store.updateMessage(assistant.copy(parts = emptyList(), usage = Usage()))
+                            }
                             bus.emit(AgentEvent.PartReset(sessionId, assistant.id.value, textPartId))
                             bus.emit(AgentEvent.PartReset(sessionId, assistant.id.value, reasoningPartId))
                             // A dropped link is not the user's failure: say we are
@@ -340,7 +343,7 @@ class AgentLoop(
                         overflowRetries++
                         bus.emit(AgentEvent.Error(sessionId, "context overflow — compacting and retrying"))
                         if (!Compaction.compact(store, sessionId, modelRef, providers, bus)) {
-                            Compaction.trim(store, sessionId)
+                            Compaction.trim(store, sessionId, bus)
                         }
                         val overflowParts = buildList {
                             if (reasoning.isNotEmpty()) add(Part.Reasoning(reasoningPartId, reasoning.toString()))
@@ -382,7 +385,7 @@ class AgentLoop(
                     if (text.isNotEmpty()) add(Part.Text(textPartId, text.toString()))
                     toolCalls.forEach { add(Part.Tool(PartId(Ids.new("prt")), it, ToolState.PENDING)) }
                 }
-                val cost = Wire.cost(model, usage)
+                val cost = usage.costUsd.takeIf { it > 0.0 } ?: Wire.cost(model, usage)
                 val finalized = assistant.copy(
                     parts = parts,
                     usage = usage.copy(costUsd = cost),
@@ -517,25 +520,21 @@ class AgentLoop(
         // Prefer the provider's own accounting from the latest assistant turn: it
         // is exact. The char-based estimator is only a fallback for the very first
         // request, when no real usage exists yet.
-        val latestUsage = history.lastOrNull { it.role == Role.ASSISTANT }?.usage
-        val est = if (latestUsage != null && latestUsage.inputTokens > 0) {
-            latestUsage.inputTokens + latestUsage.outputTokens +
-                latestUsage.cacheReadTokens + latestUsage.cacheWriteTokens
+        val lastAssistantIndex = history.indexOfLast { it.role == Role.ASSISTANT }
+        val latestUsage = if (lastAssistantIndex >= 0) history[lastAssistantIndex].usage else null
+        val accountTokens = latestUsage?.let {
+            it.inputTokens + it.outputTokens + it.cacheReadTokens + it.cacheWriteTokens
+        } ?: 0
+        val est = if (accountTokens > 0) {
+            // The assistant's usage predates the tool results appended after it, so
+            // add a char estimate of that tail or a large tool output is invisible
+            // to compaction and the next request overflows.
+            val (tailChars, tailImages) = estimateChars(history.drop(lastAssistantIndex + 1))
+            accountTokens + tailChars.sum() / 4 + tailImages
         } else {
-            val sysChars = system.length
-            val msgChars = history.map { m ->
-                m.parts.sumOf { p ->
-                    when (p) {
-                        is Part.Text -> p.text.length
-                        is Part.Reasoning -> p.text.length
-                        is Part.Tool -> p.call.argumentsJson.length + (p.result?.output?.length ?: 0)
-                        is Part.File -> p.dataBase64?.length ?: 16
-                        else -> 16
-                    }
-                }
-            }
+            val (msgChars, imageTokens) = estimateChars(history)
             val schemaChars = active.specs.sumOf { it.parametersJson.length + it.description.length }
-            TokenEstimator.estimateFromCharCounts(sysChars, msgChars, schemaChars)
+            TokenEstimator.estimateFromCharCounts(system.length, msgChars, schemaChars) + imageTokens
         }
         // Hold back room for the response we are about to ask for, so we compact
         // before the provider (which counts input+output against the window)
@@ -735,9 +734,45 @@ class AgentLoop(
         if (metadata.containsKey(DURATION_KEY)) metadata
         else metadata + (DURATION_KEY to (clock() - startedAt).toString())
 
-    /** Clip [text] to [max] characters, adding a marker when anything was cut. */
-    private fun clip(text: String, max: Int): String =
-        if (max in 0 until text.length) text.take(max) + "\n…[truncated ${text.length - max} chars]" else text
+    /**
+     * Clip [text] to [max] characters, keeping both the head and the tail so an
+     * error/log line at the end of a long output is never silently lost.
+     */
+    private fun clip(text: String, max: Int): String {
+        if (max <= 0 || text.length <= max) return text
+        val head = max * 2 / 3
+        val tail = max - head
+        return text.take(head) +
+            "\n…[truncated ${text.length - max} chars]…\n" +
+            text.takeLast(tail)
+    }
+
+    /**
+     * Per-message characters actually transmitted to the provider, plus a flat
+     * per-image token cost. Reasoning is persisted for the UI but never sent, so
+     * it is not counted; base64 bytes are a poor token proxy, so each image
+     * contributes a fixed vision estimate instead.
+     */
+    private fun estimateChars(messages: List<Message>): Pair<List<Int>, Int> {
+        var imageTokens = 0
+        val counts = messages.map { m ->
+            m.parts.sumOf { p ->
+                when (p) {
+                    is Part.Text -> p.text.length
+                    is Part.Reasoning -> 0
+                    is Part.Tool -> p.call.argumentsJson.length + (p.result?.output?.length ?: 0)
+                    is Part.File -> {
+                        if (p.dataBase64 != null && p.mime?.startsWith("image/") == true) {
+                            imageTokens += ESTIMATED_IMAGE_TOKENS
+                        }
+                        16
+                    }
+                    else -> 16
+                }
+            }
+        }
+        return counts to imageTokens
+    }
 
     /** Keep metadata values small so one tool cannot bloat a persisted result. */
     private fun clipMetadata(metadata: Map<String, String>): Map<String, String> {
@@ -793,8 +828,15 @@ class AgentLoop(
 
     /** Spawn (or delegate) a subagent and return its final text. */
     private suspend fun runSubagent(parentId: SessionId, spec: SubagentSpec, parentAgent: AgentConfig): SubagentResult {
-        subagents?.let { return it.run(toolContext(parentId), spec) }
-        return SubagentSpawner(this, store, bus).spawn(parentId, spec, parentAgent)
+        // A configured default model applies only when the call didn't name one,
+        // so an explicit per-task override still wins.
+        val effective = if (spec.model.isNullOrBlank() && !defaultSubagentModel.isNullOrBlank()) {
+            spec.copy(model = defaultSubagentModel)
+        } else {
+            spec
+        }
+        subagents?.let { return it.run(toolContext(parentId), effective) }
+        return SubagentSpawner(this, store, bus).spawn(parentId, effective, parentAgent)
     }
 
     private suspend fun finishTool(sessionId: SessionId, messageId: MessageId, part: Part.Tool) {
@@ -882,5 +924,16 @@ class AgentLoop(
 
         /** Minimum wall-clock gap between mid-stream partial-message checkpoints. */
         const val CHECKPOINT_INTERVAL_MS = 1_000L
+
+        /** Flat vision-token estimate per inline image for the char estimator. */
+        const val ESTIMATED_IMAGE_TOKENS = 1_000
+
+        /**
+         * Process-wide per-session run locks. Shared so a fresh [AgentLoop] built
+         * per send (app/server) still serializes same-session prompts; an instance
+         * field would not. Entries are one small [Mutex] per session id ever
+         * prompted, i.e. bounded by the user's session count.
+         */
+        private val sharedRunLocks = ConcurrentHashMap<SessionId, Mutex>()
     }
 }

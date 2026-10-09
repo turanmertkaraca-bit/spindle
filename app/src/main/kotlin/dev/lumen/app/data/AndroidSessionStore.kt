@@ -373,6 +373,10 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
      * pooled connection than the insert.
      */
     private fun insertMessage(message: Message): Boolean {
+        // Refuse to write into a session that no longer exists: after a delete
+        // the loop can still be mid-turn, and those rows would be permanent
+        // orphans no cascade or prune can ever reach.
+        if (!sessionExists(message.sessionId)) return false
         val seq = nextSeq(message.sessionId)
         val values = ContentValues().apply {
             put("id", message.id.value)
@@ -397,6 +401,7 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
 
     override suspend fun updateMessage(message: Message) = locked {
         transaction {
+            if (!sessionExists(message.sessionId)) return@transaction
             // A missing id is an insert, not a rewrite: allocate the next
             // sequence slot so it sorts after existing history rather than before.
             val existing = db.rawQuery("SELECT seq FROM messages WHERE id=?", arrayOf(message.id.value)).use { c ->
@@ -405,6 +410,10 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
             writeMessageRow(message, existing ?: nextSeq(message.sessionId))
         }
     }
+
+    /** True when [sessionId] still exists; guards writes racing a delete. */
+    private fun sessionExists(sessionId: SessionId): Boolean =
+        db.rawQuery("SELECT 1 FROM sessions WHERE id=?", arrayOf(sessionId.value)).use { it.moveToFirst() }
 
     /** Upsert/rewrite path: write the message row plus its parts and FTS entry. */
     private fun writeMessageRow(message: Message, seq: Long) {
@@ -614,7 +623,11 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
         // `keep` is a coerced non-negative Int, so inlining it is injection-safe
         // and avoids depending on SQLite coercing a text-bound LIMIT/OFFSET.
         val drop = db.rawQuery(
-            "SELECT id FROM sessions ORDER BY updated_at DESC LIMIT -1 OFFSET $keep",
+            // A NULL state (rows created before the state column existed) is not
+            // 'RUNNING', but `state != 'RUNNING'` is NULL for it, so it must be
+            // matched explicitly or it could never be pruned.
+            "SELECT id FROM sessions WHERE (state IS NULL OR state != 'RUNNING') " +
+                "ORDER BY updated_at DESC LIMIT -1 OFFSET $keep",
             null,
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
         transaction { for (id in drop) deleteSessionRows(id) }
@@ -628,6 +641,17 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
      */
     override suspend fun maintain() {
         locked {
+            // Sweep rows whose session no longer exists (a write racing a delete,
+            // or a non-cascading prune). prune() only walks live session ids, so
+            // without this these orphans would grow the DB forever.
+            runCatching {
+                transaction {
+                    db.execSQL("DELETE FROM parts WHERE session_id NOT IN (SELECT id FROM sessions)")
+                    db.execSQL("DELETE FROM messages WHERE session_id NOT IN (SELECT id FROM sessions)")
+                    db.execSQL("DELETE FROM todos WHERE session_id NOT IN (SELECT id FROM sessions)")
+                    db.execSQL("DELETE FROM snapshots WHERE session_id NOT IN (SELECT id FROM sessions)")
+                }
+            }
             // Only merge when enough rewrites have accumulated; calling optimize
             // on every run would make a subagent-heavy session pay O(index) each time.
             if (ftsReady && ftsWrites >= FTS_OPTIMIZE_AFTER) {

@@ -27,20 +27,29 @@ object Wire {
         val out = ArrayList<WireMessage>(messages.size * 2)
         for (m in messages) {
             when (m.role) {
-                Role.SYSTEM -> out.add(WireMessage(role = "system", text = m.parts.text().ifEmpty { null }))
-                Role.USER -> out.add(
-                    WireMessage(role = "user", text = m.parts.text().ifEmpty { null }, images = m.parts.images()),
-                )
+                Role.SYSTEM -> {
+                    val text = m.parts.text().ifEmpty { null } ?: continue
+                    out.add(WireMessage(role = "system", text = text))
+                }
+                Role.USER -> {
+                    val text = m.parts.text()
+                    val images = m.parts.images()
+                    // A compacted/empty user ghost carries no content and must not
+                    // be re-sent every turn as {"role":"user","content":""}.
+                    if (text.isEmpty() && images.isEmpty()) continue
+                    out.add(WireMessage(role = "user", text = text.ifEmpty { null }, images = images))
+                }
                 Role.ASSISTANT -> {
                     val text = m.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
-                    val reasoning = m.parts.filterIsInstance<Part.Reasoning>().joinToString("") { it.text }
                     val toolParts = m.parts.filterIsInstance<Part.Tool>()
-                    if (text.isNotEmpty() || reasoning.isNotEmpty() || toolParts.isNotEmpty()) {
+                    // Reasoning is persisted for the UI but has no wire slot the
+                    // adapters use; a reasoning-only turn would serialize as an
+                    // empty assistant message, so skip it.
+                    if (text.isNotEmpty() || toolParts.isNotEmpty()) {
                         out.add(
                             WireMessage(
                                 role = "assistant",
                                 text = text.ifEmpty { null },
-                                reasoning = reasoning.ifEmpty { null },
                                 toolCalls = toolParts.map { it.call },
                             ),
                         )
@@ -58,9 +67,11 @@ object Wire {
                         }
                     }
                 }
-                Role.TOOL -> out.add(
-                    WireMessage(role = "tool", text = m.parts.text()),
-                )
+                Role.TOOL -> {
+                    val text = m.parts.text()
+                    if (text.isEmpty()) continue
+                    out.add(WireMessage(role = "tool", text = text))
+                }
             }
         }
         return out
@@ -92,7 +103,7 @@ object Wire {
         messages = messages,
         tools = tools,
         temperature = agent.temperature,
-        maxTokens = maxOutputTokens?.takeIf { it > 0 }?.coerceAtMost(32_000),
+        maxTokens = maxOutputTokens?.takeIf { it > 0 },
         reasoningEffort = agent.reasoningEffort,
         sessionHint = sessionHint,
         responseFormat = agent.responseFormat,

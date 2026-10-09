@@ -374,6 +374,19 @@ class ToolsTest {
     }
 
     @Test
+    fun bashZeroTimeoutMeansNoDeadline() = runTest {
+        withTempDir { dir ->
+            val ctx = FakeToolContext(dir)
+            val shell = FakeShell(ShellResult(exitCode = 0, output = "ok\n"))
+            val outcome = BashTool(shell).run(obj("""{"command":"serve","timeoutMs":0}"""), ctx)
+
+            assertFalse(outcome.isError, outcome.output)
+            assertEquals(0L, shell.lastTimeoutMs, "timeoutMs=0 must reach the executor as no-deadline")
+            assertEquals("0", outcome.metadata["timeoutMs"])
+        }
+    }
+
+    @Test
     fun bashFormatsTruncationMarker() = runTest {
         withTempDir { dir ->
             val ctx = FakeToolContext(dir)

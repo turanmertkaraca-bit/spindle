@@ -532,9 +532,9 @@ fun LumenChatScreen(
     // single assistant Part only grows its body, so id/count alone never change.
     // Saveable so a detour to Files/Settings (or process death) restores whether
     // the reader was following the tail; without this a returned reader is yanked
-    // to the bottom even though they had scrolled up. showNewCue stays ephemeral.
+    // to the bottom even though they had scrolled up; the latest cue is driven
+    // from followTail (see below).
     var followTail by rememberSaveable { mutableStateOf(true) }
-    var showNewCue by remember { mutableStateOf(false) }
     LaunchedEffect(listState) {
         snapshotFlow {
             val info = listState.layoutInfo
@@ -542,7 +542,6 @@ fun LumenChatScreen(
             (info.totalItemsCount == 0) || (lastVisible != null && lastVisible.index >= info.totalItemsCount - 2)
         }.collect {
             followTail = it
-            if (it) showNewCue = false
         }
     }
     LaunchedEffect(count, last?.id, last?.body?.length) {
@@ -577,11 +576,11 @@ fun LumenChatScreen(
                 if (gap > 0) listState.scrollBy(gap.toFloat())
             }
     }
-    // The `↓ new` cue fires when the content grows off-screen. Growth is detected
-    // from the DATA (count OR last body length), because a streaming row scrolled
-    // far up may not be composed at all and so has no layout entry to observe.
-    // Layout clears the cue the moment the reader is back at the tail. `cueArmed`
-    // skips the first emission so opening a session never flashes the cue.
+    // The `↓ latest` affordance is driven purely by scroll position: it is shown
+    // whenever the reader is off the tail (any amount, new content or not) and
+    // disappears the moment they are back at the newest message. A growth-triggered
+    // haptic still fires once per new off-screen step. `cueArmed` skips the first
+    // emission so opening a session never buzzes.
     var cueArmed by remember { mutableStateOf(false) }
     LaunchedEffect(count, last?.id, last?.body?.length) {
         if (!cueArmed) {
@@ -589,25 +588,10 @@ fun LumenChatScreen(
             return@LaunchedEffect
         }
         if (count == 0 || followTail) return@LaunchedEffect
-        showNewCue = true
         val kind = last?.kind
         if (hapticsActive && kind != null && kind != StepKind.YOU && kind != StepKind.THINKING) {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         }
-    }
-    // Clear the cue as soon as the last row is fully visible again (or the list is
-    // short). This runs only on layout changes, so it never re-triggers growth.
-    LaunchedEffect(listState, count) {
-        snapshotFlow {
-            val info = listState.layoutInfo
-            val item = info.visibleItemsInfo.lastOrNull { it.index == count - 1 }
-            val lastVertex = info.visibleItemsInfo.lastOrNull()
-            val tailVisible = item != null &&
-                item.offset + item.size <= info.viewportEndOffset - info.afterContentPadding + 1
-            val atTail = info.totalItemsCount == 0 ||
-                (lastVertex != null && lastVertex.index >= info.totalItemsCount - 1)
-            tailVisible || atTail
-        }.collect { settled -> if (settled) showNewCue = false }
     }
 
     Box(modifier.fillMaxSize().background(colors.bg).imePadding()) {
@@ -718,16 +702,16 @@ fun LumenChatScreen(
                                 }
                             }
                         }
-                        // "new content below" cue: floats above the composer and
-                        // scrolls to the newest bubble on tap; hides once at the tail.
-                        if (showNewCue) {
+                        // "latest" cue: appears whenever the reader is away from
+                        // the newest message (not just on new content) and jumps
+                        // to the tail on tap; hides once back at the bottom.
+                        if (count > 0 && !followTail) {
                             Box(
                                 Modifier
                                     .align(Alignment.BottomCenter)
                                     .padding(bottom = 10.dp),
                             ) {
                                 NewCue(colors) {
-                                    showNewCue = false
                                     scope.launch { listState.animateScrollToItem((count - 1).coerceAtLeast(0)) }
                                 }
                             }
@@ -853,8 +837,10 @@ private fun NewCue(colors: LumenColors, onClick: () -> Unit) {
             .background(colors.surface)
             .border(1.dp, colors.outline, LumenShapes.pill)
             .clickable { onClick() }
-            .padding(horizontal = 11.dp, vertical = 5.dp)
-            .testTag("new-cue"),
+            .heightIn(min = LumenSize.touchMin)
+            .padding(horizontal = 12.dp, vertical = 5.dp)
+            .testTag("new-cue")
+            .semantics { contentDescription = "Jump to latest message" },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(

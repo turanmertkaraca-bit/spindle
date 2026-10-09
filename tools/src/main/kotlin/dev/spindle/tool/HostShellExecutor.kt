@@ -29,6 +29,22 @@ class HostShellExecutor : ShellExecutor {
         cwd: Path,
         timeoutMs: Long,
         env: Map<String, String>,
+    ): ShellResult = execute(command, cwd, timeoutMs, env, null)
+
+    override suspend fun runStreaming(
+        command: String,
+        cwd: Path,
+        timeoutMs: Long,
+        env: Map<String, String>,
+        onChunk: (String) -> Unit,
+    ): ShellResult = execute(command, cwd, timeoutMs, env, onChunk)
+
+    private suspend fun execute(
+        command: String,
+        cwd: Path,
+        timeoutMs: Long,
+        env: Map<String, String>,
+        onChunk: ((String) -> Unit)?,
     ): ShellResult {
         val process = ProcessBuilder(shellCommand(command))
             .directory(cwd.toFile())
@@ -45,20 +61,24 @@ class HostShellExecutor : ShellExecutor {
 
         val collected = StringBuilder()
         val truncated = AtomicBoolean(false)
-        val reader = Thread { drain(process.inputStream, collected, truncated) }
+        val reader = Thread { drain(process.inputStream, collected, truncated, onChunk) }
         reader.isDaemon = true
         reader.start()
 
+        // A non-positive timeout means "no deadline": run until the process exits
+        // or the caller cancels. This is what lets the agent monitor a long
+        // build/script without the harness killing it out from under the run.
+        val hasDeadline = timeoutMs > 0
         var finished = false
         var timedOut = false
         try {
-            val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+            val deadline = if (hasDeadline) System.nanoTime() + timeoutMs * 1_000_000L else Long.MAX_VALUE
             while (true) {
                 if (process.waitFor(POLL_MS, TimeUnit.MILLISECONDS)) {
                     finished = true
                     break
                 }
-                if (System.nanoTime() >= deadline) {
+                if (hasDeadline && System.nanoTime() >= deadline) {
                     timedOut = true
                     break
                 }
@@ -90,13 +110,19 @@ class HostShellExecutor : ShellExecutor {
     }
 
     /** Drain stdout/stderr into [collected], capping at [Limits.BASH_MAX_OUTPUT_CHARS]. */
-    private fun drain(input: InputStream, collected: StringBuilder, truncated: AtomicBoolean) {
+    private fun drain(
+        input: InputStream,
+        collected: StringBuilder,
+        truncated: AtomicBoolean,
+        onChunk: ((String) -> Unit)?,
+    ) {
         try {
             input.bufferedReader().use { stream ->
                 val buffer = CharArray(8192)
                 while (true) {
                     val read = stream.read(buffer)
                     if (read < 0) break
+                    var emitted: String? = null
                     synchronized(collected) {
                         val room = Limits.BASH_MAX_OUTPUT_CHARS - collected.length
                         if (room <= 0) {
@@ -105,8 +131,11 @@ class HostShellExecutor : ShellExecutor {
                             val take = minOf(room, read)
                             collected.append(buffer, 0, take)
                             if (take < read) truncated.set(true)
+                            if (onChunk != null && take > 0) emitted = String(buffer, 0, take)
                         }
                     }
+                    // A throwing consumer must never abort draining the process.
+                    emitted?.let { chunk -> runCatching { onChunk?.invoke(chunk) } }
                 }
             }
         } catch (_: Exception) {

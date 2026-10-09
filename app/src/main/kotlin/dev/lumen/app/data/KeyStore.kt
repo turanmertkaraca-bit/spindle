@@ -95,6 +95,15 @@ class KeyStore(context: Context) {
         get() = prefs.getString("model", defaultModel(provider)) ?: defaultModel(provider)
         set(value) = prefs.edit().putString("model", value).apply()
 
+    /**
+     * Default model for `task` subagents as a `provider/model` ref. Empty (the
+     * default) means "inherit the parent session's model", which is the
+     * historical behaviour. A `task` call may still override this per call.
+     */
+    var subagentModel: String
+        get() = prefs.getString("subagentModel", "") ?: ""
+        set(value) = prefs.edit().putString("subagentModel", value.trim()).apply()
+
     /** "system" | "light" | "dark". */
     var theme: String
         get() = prefs.getString("theme", "system") ?: "system"

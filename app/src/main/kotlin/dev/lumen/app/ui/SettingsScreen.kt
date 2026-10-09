@@ -48,6 +48,9 @@ fun SettingsScreen(
     onModel: (String) -> Unit,
     onTheme: (String) -> Unit,
     onEditKey: () -> Unit,
+    /** Default `task` subagent model (`provider/model`); "" inherits the chat model. */
+    subagentModel: String = "",
+    onSubagentModel: (String) -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     /** Active palette: "prism" | "ember" | "phosphor" | "abyss". */
@@ -172,6 +175,31 @@ fun SettingsScreen(
                 tag = "settings-browse-models",
                 onClick = onBrowseModels,
             )
+        }
+
+        Spacer(Modifier.height(LumenSpacing.xxl))
+        LumenSectionHeader(
+            colors,
+            "subagent model",
+            caption = "What `task` subagents use; inherit keeps the chat model",
+        )
+        Spacer(Modifier.height(LumenSpacing.md))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            chip(colors, "inherit", subagentModel.isBlank(), "subagent-inherit") { onSubagentModel("") }
+            for (m in models) {
+                val ref = "$provider/${m.id}"
+                chip(
+                    colors,
+                    m.label ?: m.id,
+                    subagentModel == ref,
+                    "subagent-${m.id}",
+                ) { onSubagentModel(ref) }
+            }
         }
 
         Spacer(Modifier.height(LumenSpacing.xxl))

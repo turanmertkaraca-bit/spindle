@@ -109,7 +109,7 @@ class OpenAiProviderTest {
                 ProviderEvent.ToolCallEnd(0),
                 ProviderEvent.Finished(FinishReason.TOOL_CALLS),
                 ProviderEvent.UsageEvent(
-                    Usage(inputTokens = 10, outputTokens = 5, reasoningTokens = 3, cacheReadTokens = 2),
+                    Usage(inputTokens = 8, outputTokens = 5, reasoningTokens = 3, cacheReadTokens = 2),
                 ),
             ),
             events,
@@ -923,6 +923,37 @@ class OpenAiProviderTest {
         assertEquals(chunks, events.count { it is ProviderEvent.TextDelta }, "no duplicate or missing deltas")
         assertEquals(1, events.count { it is ProviderEvent.Finished || it is ProviderEvent.Failure })
         assertEquals(1, events.count { it is ProviderEvent.UsageEvent }, "usage emitted once")
+    }
+
+    @Test
+    fun `deepseek top-level cache fields normalize to miss plus cached`() = runTest {
+        server.enqueue(
+            MockResponse().setChunkedBody(
+                "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+                    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":7," +
+                    "\"prompt_cache_hit_tokens\":80,\"prompt_cache_miss_tokens\":20}}\n\n" +
+                    "data: [DONE]\n\n",
+                19,
+            ),
+        )
+
+        val usage = provider().stream(request()).toList()
+            .filterIsInstance<ProviderEvent.UsageEvent>().single().usage
+
+        assertEquals(20, usage.inputTokens, "inputTokens must be the uncached miss portion")
+        assertEquals(80, usage.cacheReadTokens)
+        assertEquals(7, usage.outputTokens)
+        assertEquals(107, usage.totalTokens, "total counts miss + cached + output")
+    }
+
+    @Test
+    fun `repeated identical usage frames are emitted once`() = runTest {
+        val usageFrame = "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\n"
+        server.enqueue(MockResponse().setChunkedBody(usageFrame + usageFrame + usageFrame + "data: [DONE]\n\n", 13))
+
+        val events = provider().stream(request()).toList()
+
+        assertEquals(1, events.count { it is ProviderEvent.UsageEvent }, "duplicate usage snapshots must not be summed")
     }
 
     @Test
