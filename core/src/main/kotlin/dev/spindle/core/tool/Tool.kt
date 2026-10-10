@@ -81,8 +81,17 @@ data class ToolEdit(
     val snapshotPath: String? = null,
 )
 
+/** Default per-tool execution budget in milliseconds; `0` disables the timeout. */
+const val DEFAULT_TOOL_TIMEOUT_MS = 120_000L
+
 interface Tool {
     val spec: dev.spindle.core.provider.ToolSpec
+    /**
+     * Per-invocation wall-clock budget the loop enforces around [run]. `0` (or
+     * negative) means no loop-level timeout: the tool owns its own deadline
+     * (e.g. `bash`'s per-call `timeoutMs`, `task`'s subagent budget).
+     */
+    val timeoutMs: Long get() = DEFAULT_TOOL_TIMEOUT_MS
     suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome
 }
 

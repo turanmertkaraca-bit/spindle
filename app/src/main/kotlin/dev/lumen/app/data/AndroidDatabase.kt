@@ -22,16 +22,47 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
     @Volatile
     private var database: SQLiteDatabase? = null
 
-    /** Open (once) and return the shared connection. Safe from any thread. */
+    /** In-flight [lease] count; the handle closes when it drains to zero post-close. */
+    private var refs = 0
+
+    /** Set by [close]; once true the connection can never be opened again. */
+    @Volatile
+    private var closed = false
+
+    /**
+     * Open (once) and return the shared connection. Safe from any thread. The
+     * whole open runs under the monitor (no unlocked fast path) and refuses once
+     * [close] has run, so a read can neither race a close nor reopen a closed
+     * handle.
+     */
     fun db(): SQLiteDatabase {
-        database?.let { return it }
         synchronized(this) {
+            check(!closed) { "database is closed" }
             database?.let { return it }
             val opened = openHealthy()
             migrate(opened)
             checkpoint(opened)
             database = opened
             return opened
+        }
+    }
+
+    /**
+     * Run [block] with the connection held open, deferring the real close until
+     * the last in-flight lease drains. A store wraps its query section in this
+     * so a concurrent [close] cannot free the handle mid-query.
+     */
+    fun <T> lease(block: () -> T): T {
+        synchronized(this) {
+            check(!closed) { "database is closed" }
+            refs++
+        }
+        try {
+            return block()
+        } finally {
+            synchronized(this) {
+                if (--refs == 0 && closed) closeHandleLocked()
+            }
         }
     }
 
@@ -294,9 +325,15 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
 
     override fun close() {
         synchronized(this) {
-            database?.let { runCatching { it.close() } }
-            database = null
+            closed = true
+            if (refs == 0) closeHandleLocked()
         }
+    }
+
+    /** Close and clear the handle; only called while holding this monitor. */
+    private fun closeHandleLocked() {
+        database?.let { runCatching { it.close() } }
+        database = null
     }
 
     private companion object {

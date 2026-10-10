@@ -404,10 +404,14 @@ private fun processPid(process: Process): Long = runCatching {
 private fun killProcessTree(process: Process) {
     val pid = processPid(process)
     if (pid > 0) {
+        // Best-effort process-group TERM (the group leader is the pid when
+        // launched under `setsid`) so proot's `--kill-on-exit` can reap its
+        // tracees, then the grace window ON THE TARGET before any KILL.
         runCatching {
             Runtime.getRuntime().exec(arrayOf("kill", "-TERM", "-$pid"))
                 .waitFor(TERM_GRACE_MS, TimeUnit.MILLISECONDS)
         }
+        runCatching { process.waitFor(TERM_GRACE_MS, TimeUnit.MILLISECONDS) }
     }
     runCatching { process.destroy() }
     runCatching { process.waitFor(TERM_GRACE_MS, TimeUnit.MILLISECONDS) }

@@ -412,7 +412,10 @@ class MainActivity : ComponentActivity() {
                         onCreateDir = viewModel::createDir,
                         onRename = viewModel::renameEntry,
                         onDelete = viewModel::deleteEntry,
-                        onBack = { route = filesReturn },
+                        onBack = {
+                            viewModel.closeFiles()
+                            route = filesReturn
+                        },
                         onOpenCanvas = openCanvas,
                         modifier = modifier,
                     )

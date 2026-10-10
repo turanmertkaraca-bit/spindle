@@ -35,6 +35,8 @@ class GrepTool : Tool {
         """.trimIndent(),
     )
 
+    override val timeoutMs = 45_000L
+
     override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
         val patternText = input.requireString("pattern")
         val include = input.stringOrNull("include")

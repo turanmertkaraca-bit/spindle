@@ -38,6 +38,10 @@ class BashTool(
         """.trimIndent(),
     )
 
+    // The per-call `timeoutMs` argument owns the deadline; the loop must not
+    // wrap this tool or it would cancel a deliberate no-timeout run.
+    override val timeoutMs = 0L
+
     override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
         val command = input.requireString("command")
         if (command.isBlank()) return ToolOutcome("command must not be blank", isError = true)
@@ -63,7 +67,7 @@ class BashTool(
         // <= 0 means no deadline (cancel-only): the command runs until it exits or
         // the run is stopped. Absent keeps the historical 120s default.
         val requested = input.intOrNull("timeoutMs") ?: DEFAULT_TIMEOUT_MS
-        val timeoutMs = if (requested <= 0) 0L else requested.toLong().coerceIn(1, MAX_TIMEOUT_MS)
+        val deadlineMs = if (requested <= 0) 0L else requested.toLong().coerceIn(1, MAX_TIMEOUT_MS)
 
         ctx.emit(ToolProgress("Running: $command"))
 
@@ -79,17 +83,17 @@ class BashTool(
         }
 
         val result = try {
-            shell.runStreaming(command, directory.toPath(), timeoutMs, onChunk = onChunk)
+            shell.runStreaming(command, directory.toPath(), deadlineMs, onChunk = onChunk)
         } catch (e: Exception) {
             return ToolOutcome("Failed to start command: ${e.message}", isError = true)
         }
 
         if (result.timedOut) {
-            val message = "Command timed out after ${timeoutMs}ms"
+            val message = "Command timed out after ${deadlineMs}ms"
             return ToolOutcome(
                 output = "[timeout]\n$message" + if (result.output.isBlank()) "" else "\n${result.output}",
                 isError = true,
-                metadata = mapOf("timeout" to "true", "timeoutMs" to timeoutMs.toString()),
+                metadata = mapOf("timeout" to "true", "timeoutMs" to deadlineMs.toString()),
             )
         }
 
@@ -104,7 +108,7 @@ class BashTool(
             metadata = mapOf(
                 "exitCode" to result.exitCode.toString(),
                 "truncated" to result.truncated.toString(),
-                "timeoutMs" to timeoutMs.toString(),
+                "timeoutMs" to deadlineMs.toString(),
             ),
         )
     }

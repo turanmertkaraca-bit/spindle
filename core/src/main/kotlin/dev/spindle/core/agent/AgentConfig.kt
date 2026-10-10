@@ -19,6 +19,11 @@ data class AgentConfig(
     /** Retry budget for transient provider failures. */
     val maxRetries: Int = 5,
     /**
+     * Stop the turn once the same tool call (name + arguments) repeats this many
+     * times consecutively. Null disables the doom-loop guard.
+     */
+    val maxRepeatedCalls: Int? = 3,
+    /**
      * Opt-in structured output. Null (default) keeps provider request bodies
      * unchanged. Only the OpenAI-compatible surface honours it; Anthropic
      * ignores it (see [dev.spindle.core.provider.ResponseFormat]).

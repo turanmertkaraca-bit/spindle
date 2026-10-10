@@ -534,15 +534,31 @@ class DebianEnvironment(private val context: Context) {
     }
 
     /**
-     * SIGTERM first, then a short bounded grace so proot's `--kill-on-exit` can
-     * reap its tracees, then SIGKILL. Best-effort: never throws.
+     * TERM the whole process group first (the group leader is the pid when the
+     * child runs under `setsid`, and proot's `--kill-on-exit` reaps its tracees
+     * from that signal), plus the direct child as a fallback for a launch that
+     * is not a group leader. Then a short bounded grace, then SIGKILL.
+     * Best-effort: never throws.
      */
     private fun terminateProcess(process: Process) {
+        val pid = processPid(process)
+        if (pid > 0) {
+            runCatching {
+                Runtime.getRuntime().exec(arrayOf("kill", "-TERM", "-$pid"))
+                    .waitFor(TERM_GRACE_MS, TimeUnit.MILLISECONDS)
+            }
+        }
         runCatching { process.destroy() }
         val gone = runCatching { process.waitFor(TERM_GRACE_MS, TimeUnit.MILLISECONDS) }.getOrDefault(false)
         if (!gone) runCatching { process.destroyForcibly() }
         runCatching { process.waitFor(1, TimeUnit.SECONDS) }
     }
+
+    /** Best-effort pid from the (hidden) `Process.pid` field; -1 when unavailable. */
+    private fun processPid(process: Process): Long = runCatching {
+        val field = process.javaClass.getDeclaredField("pid").apply { isAccessible = true }
+        field.getInt(process).toLong()
+    }.getOrDefault(-1L)
 
     // ------------------------------------------------------------ assets
 

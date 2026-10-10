@@ -47,6 +47,9 @@ class TaskTool : Tool {
         """.trimIndent(),
     )
 
+    // A subagent owns its own runtime budget; the loop must not wrap it.
+    override val timeoutMs = 0L
+
     override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
         val description = input.requireString("description")
         val prompt = input.requireString("prompt")

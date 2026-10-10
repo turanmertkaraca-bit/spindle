@@ -4,6 +4,7 @@ import dev.spindle.core.provider.ToolSpec
 import dev.spindle.core.tool.Tool
 import dev.spindle.core.tool.ToolContext
 import dev.spindle.core.tool.ToolOutcome
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -42,6 +43,8 @@ class WebSearchTool(
         """.trimIndent(),
     )
 
+    override val timeoutMs = 60_000L
+
     override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
         val query = try {
             input.requireString("query").trim()
@@ -60,6 +63,8 @@ class WebSearchTool(
 
         val html = try {
             fetch(uri)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             return ToolOutcome("Search failed: ${e.message}", isError = true)
         }

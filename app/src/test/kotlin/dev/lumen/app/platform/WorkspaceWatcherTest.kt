@@ -201,4 +201,69 @@ class WorkspaceWatcherTest {
             root.deleteRecursively()
         }
     }
+
+    @Test
+    fun `snapshotDetailed flags truncation only when a file is dropped`() {
+        val root = tempRoot()
+        try {
+            repeat(3) { i -> File(root, "f$i.txt").writeText("x") }
+            // A tree that ends exactly at the cap is complete, not truncated.
+            assertFalse(snapshotDetailed(root, maxFiles = 3).truncated)
+            assertTrue(snapshotDetailed(root, maxFiles = 2).truncated)
+            assertEquals(3, snapshotDetailed(root, maxFiles = 10).entries.size)
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `watcher announces truncation once and still reports diffs`() = runBlocking {
+        val root = tempRoot()
+        val scope = CoroutineScope(Dispatchers.IO)
+        val events = LinkedBlockingQueue<Set<String>>()
+        val truncations = LinkedBlockingQueue<Boolean>()
+        val watcher = WorkspaceWatcher(root = root, scope = scope, intervalMs = 25) { events.put(it) }
+        watcher.maxFiles = 2
+        watcher.onTruncated = { truncations.put(it) }
+        try {
+            File(root, "baseline.txt").writeText("baseline")
+            watcher.start()
+
+            delay(60)
+            File(root, "a.txt").writeText("a")
+            File(root, "b.txt").writeText("b")
+            File(root, "c.txt").writeText("c")
+
+            val first = withTimeout(5_000) {
+                var signalled: Boolean? = null
+                while (signalled == null) {
+                    signalled = truncations.poll() ?: run { delay(20); null }
+                }
+                signalled
+            }
+            assertTrue(first == true, "crossing the cap must signal truncated=true")
+
+            // The capped walk still delivers the files it managed to see.
+            val observed = withTimeout(5_000) {
+                var found: Set<String> = emptySet()
+                while (found.isEmpty()) {
+                    val event = events.poll()
+                    if (event != null) found = event else delay(20)
+                }
+                found
+            }
+            assertTrue(
+                observed.any { it in setOf("a.txt", "b.txt", "c.txt") },
+                "a capped walk must still report its changes, got $observed",
+            )
+
+            // While the tree stays over the cap there is no second transition.
+            delay(150)
+            assertTrue(truncations.isEmpty(), "truncation must fire only on the transition")
+        } finally {
+            watcher.stop()
+            scope.cancel()
+            root.deleteRecursively()
+        }
+    }
 }

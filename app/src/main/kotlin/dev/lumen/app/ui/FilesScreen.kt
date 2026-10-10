@@ -170,6 +170,19 @@ fun FilesScreen(
                                         )
                                     }
                                 }
+                                if (listing.truncated) {
+                                    item(key = "__truncated") {
+                                        Text(
+                                            "\u2026 workspace scan truncated; some files may be hidden",
+                                            color = colors.faint,
+                                            fontFamily = Mono,
+                                            fontSize = LumenType.caption,
+                                            modifier = Modifier
+                                                .padding(horizontal = 6.dp, vertical = 4.dp)
+                                                .testTag("files-truncated"),
+                                        )
+                                    }
+                                }
                                 items(listing.entries, key = { it.path }) { entry ->
                                     EntryRow(
                                         colors = colors,

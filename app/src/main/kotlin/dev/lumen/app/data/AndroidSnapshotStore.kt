@@ -29,7 +29,11 @@ class AndroidSnapshotStore internal constructor(private val shared: AndroidDatab
     private val db: SQLiteDatabase get() = shared.db()
 
     private suspend fun <T> locked(block: () -> T): T = withContext(Dispatchers.IO) {
-        mutex.withLock { block() }
+        mutex.withLock {
+            // Hold a lease so a concurrent close() cannot free the connection
+            // while this store's query is in flight.
+            shared.lease { block() }
+        }
     }
 
     override suspend fun record(snapshot: Snapshot) = locked {

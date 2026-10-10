@@ -33,6 +33,9 @@ class QuestionTool : Tool {
         """.trimIndent(),
     )
 
+    /** Waits on the user's answer; must never be wrapped by the loop's deadline. */
+    override val timeoutMs = 0L
+
     override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
         val question = input.requireString("question")
         val options = input.stringList("options")

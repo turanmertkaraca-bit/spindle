@@ -36,12 +36,14 @@ import dev.spindle.core.tool.ToolProgress
 import dev.spindle.core.tool.ToolRegistry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -176,6 +178,10 @@ class AgentLoop(
             var step = 0
             var compacted = false
             var overflowRetries = 0
+            // Doom-loop guard: the signature of the last executed tool call and
+            // how many times it has repeated consecutively across steps.
+            var lastToolSignature: String? = null
+            var repeatedCalls = 0
             while (true) {
                 currentCoroutineContext().ensureActive()
                 step++
@@ -413,10 +419,42 @@ class AgentLoop(
                     break
                 }
 
-                for (part in finalized.parts.filterIsInstance<Part.Tool>()) {
+                var doomLoop = false
+                val toolParts = finalized.parts.filterIsInstance<Part.Tool>()
+                for ((index, part) in toolParts.withIndex()) {
                     currentCoroutineContext().ensureActive()
+                    val signature = toolSignature(part.call)
+                    repeatedCalls = if (signature == lastToolSignature) repeatedCalls + 1 else 1
+                    lastToolSignature = signature
+                    if (agent.maxRepeatedCalls != null && repeatedCalls >= agent.maxRepeatedCalls) {
+                        // Fail this call and every remaining call in the turn so no
+                        // part is left PENDING; the model sees the loop and stops.
+                        for (j in index until toolParts.size) {
+                            val pending = toolParts[j]
+                            updatePart(
+                                sessionId,
+                                finalized.id,
+                                pending.copy(
+                                    state = ToolState.ERROR,
+                                    result = ToolResult(
+                                        pending.call.id,
+                                        if (j == index) {
+                                            "doom loop: ${pending.call.name} called with identical arguments " +
+                                                "$repeatedCalls times; stopping to avoid an infinite loop"
+                                        } else {
+                                            "not run: the run stopped after a repeated identical call"
+                                        },
+                                        isError = true,
+                                    ),
+                                ),
+                            )
+                        }
+                        doomLoop = true
+                        break
+                    }
                     executeTool(sessionId, finalized.id, part, session.cwd, onPermission, agent)
                 }
+                if (doomLoop) break
             }
 
             terminalState = SessionState.IDLE
@@ -681,7 +719,24 @@ class AgentLoop(
                 policyApproved = policyApproved,
                 subagentRunner = { spec -> runSubagent(sessionId, spec, agent) },
             )
-            tool.run(input, ctx)
+            // The loop is the single owner of the per-tool deadline: `0` means
+            // the tool manages its own timeout, so never double-wrap it.
+            if (tool.timeoutMs <= 0L) {
+                tool.run(input, ctx)
+            } else {
+                withTimeout(tool.timeoutMs) { tool.run(input, ctx) }
+            }
+        } catch (e: TimeoutCancellationException) {
+            // A genuine parent cancellation (user Stop) is also a
+            // CancellationException; re-check liveness before blaming the tool,
+            // so a Stop still propagates instead of being reported as a timeout.
+            currentCoroutineContext().ensureActive()
+            ToolOutcome(
+                "[timeout] ${part.call.name} exceeded ${tool.timeoutMs}ms and was cancelled. " +
+                    "Retry with a narrower input or a higher timeout.",
+                isError = true,
+                metadata = mapOf("timeout" to "true", "timeoutMs" to tool.timeoutMs.toString()),
+            )
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -847,6 +902,15 @@ class AgentLoop(
     }
 
     /**
+     * Repeat-detection key for a tool call: its name plus its arguments with
+     * surrounding and internal whitespace collapsed. Deliberately does not
+     * re-serialize the JSON (that could throw on malformed input); whitespace
+     * normalization is enough to catch identical repeat calls.
+     */
+    private fun toolSignature(call: ToolCall): String =
+        call.name + "|" + call.argumentsJson.trim().replace(WHITESPACE, " ")
+
+    /**
      * The system prompt actually sent: the agent's base prompt plus project rules
      * read from `<cwd>/AGENTS.md` and any host-supplied [extraRules].
      */
@@ -980,6 +1044,9 @@ class AgentLoop(
 
         /** Characters outside this set in a tool name / call id are replaced. */
         val UNSAFE_PATH_CHARS = Regex("[^A-Za-z0-9_.-]")
+
+        /** Runs of whitespace collapsed when building a tool-call repeat signature. */
+        val WHITESPACE = Regex("\\s+")
 
         /** Minimum wall-clock gap between mid-stream partial-message checkpoints. */
         const val CHECKPOINT_INTERVAL_MS = 1_000L

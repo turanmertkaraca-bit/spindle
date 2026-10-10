@@ -22,6 +22,13 @@ internal val HEAVY_DIRS = setOf(".git", "node_modules", "build", ".gradle", ".id
 private const val MAX_FILES = 20_000
 private const val MAX_DEPTH = 40
 
+/** A bounded walk's result: its entries plus whether the file cap cut it short. */
+internal data class Snapshot(
+    val entries: Map<String, Long>,
+    /** True when the tree held more files than [snapshotDetailed]'s cap allowed. */
+    val truncated: Boolean,
+)
+
 /**
  * Walk the regular files under [root] and return a map of workspace-relative
  * paths (always forward-slash separated) to a cheap fingerprint
@@ -32,15 +39,28 @@ private const val MAX_DEPTH = 40
  * [File] tree and never throws — an unreadable or missing [root] yields an
  * empty map.
  */
-internal fun snapshot(root: File, skip: Set<String> = HEAVY_DIRS): Map<String, Long> {
+internal fun snapshot(root: File, skip: Set<String> = HEAVY_DIRS): Map<String, Long> =
+    snapshotDetailed(root, skip).entries
+
+/**
+ * The full result of [snapshot]'s walk. [truncated] is true when a file was
+ * skipped because the walk had already reached [maxFiles], so the caller can
+ * warn that the listing is partial. [maxFiles] is a test seam.
+ */
+internal fun snapshotDetailed(
+    root: File,
+    skip: Set<String> = HEAVY_DIRS,
+    maxFiles: Int = MAX_FILES,
+): Snapshot {
     val out = HashMap<String, Long>()
     val rootPath = root.absoluteFile.toPath().normalize()
-    if (!rootPath.toFile().isDirectory) return out
+    if (!rootPath.toFile().isDirectory) return Snapshot(out, truncated = false)
 
     val stack = ArrayDeque<Pair<File, Int>>()
     stack.addLast(rootPath.toFile() to 0)
+    var truncated = false
 
-    while (stack.isNotEmpty() && out.size < MAX_FILES) {
+    walk@ while (stack.isNotEmpty()) {
         val (dir, depth) = stack.removeLast()
         if (depth > MAX_DEPTH) continue
         val children = dir.listFiles() ?: continue
@@ -51,6 +71,12 @@ internal fun snapshot(root: File, skip: Set<String> = HEAVY_DIRS): Map<String, L
                 if (child.name in skip) continue
                 stack.addLast(child to depth + 1)
             } else if (child.isFile) {
+                // Check the cap before recording, so a tree that ends exactly at
+                // the cap is not mislabelled as truncated.
+                if (out.size >= maxFiles) {
+                    truncated = true
+                    break@walk
+                }
                 val rel = rootPath.relativize(path.normalize())
                     .toString()
                     .replace(File.separatorChar, '/')
@@ -59,7 +85,7 @@ internal fun snapshot(root: File, skip: Set<String> = HEAVY_DIRS): Map<String, L
             }
         }
     }
-    return out
+    return Snapshot(out, truncated)
 }
 
 /**
@@ -124,6 +150,15 @@ class WorkspaceWatcher(
     private val intervalMs: Long = 1500,
     private val onChange: (Set<String>) -> Unit,
 ) {
+    /**
+     * Fired only when the walk crosses into or out of truncation (the tree held
+     * more files than [maxFiles]). No-op by default; set before [start].
+     */
+    var onTruncated: (Boolean) -> Unit = {}
+
+    /** Test seam: the file cap for the walk. Lower it to exercise truncation. */
+    internal var maxFiles: Int = MAX_FILES
+
     private val started = AtomicBoolean(false)
     private var job: Job? = null
 
@@ -133,23 +168,36 @@ class WorkspaceWatcher(
     @Volatile
     private var previousDirs: Set<String> = emptySet()
 
+    @Volatile
+    private var previousTruncated: Boolean = false
+
     /** Take the baseline snapshot and begin polling. A second call is a no-op. */
     fun start() {
         if (!started.compareAndSet(false, true)) return
-        previous = snapshot(root)
+        val baseline = snapshotDetailed(root, maxFiles = maxFiles)
+        previous = baseline.entries
         previousDirs = snapshotDirs(root)
+        if (baseline.truncated != previousTruncated) {
+            previousTruncated = baseline.truncated
+            runCatching { onTruncated(baseline.truncated) }
+        }
         job = scope.launch {
             while (isActive) {
                 delay(intervalMs)
-                val current = withContext(Dispatchers.IO) { snapshot(root) }
+                val current = withContext(Dispatchers.IO) { snapshotDetailed(root, maxFiles = maxFiles) }
                 val currentDirs = withContext(Dispatchers.IO) { snapshotDirs(root) }
                 // Include directory adds/removes so a newly created (possibly
                 // empty) folder still triggers a Files re-list.
-                val changed = diff(previous, current) +
+                val changed = diff(previous, current.entries) +
                     (currentDirs - previousDirs) +
                     (previousDirs - currentDirs)
-                previous = current
+                previous = current.entries
                 previousDirs = currentDirs
+                // Only a genuine transition is worth telling the UI about.
+                if (current.truncated != previousTruncated) {
+                    previousTruncated = current.truncated
+                    runCatching { onTruncated(current.truncated) }
+                }
                 if (changed.isNotEmpty()) {
                     runCatching { onChange(changed) }
                 }
@@ -162,5 +210,7 @@ class WorkspaceWatcher(
         started.set(false)
         job?.cancel()
         job = null
+        // A fresh start re-announces truncation rather than inheriting stale state.
+        previousTruncated = false
     }
 }

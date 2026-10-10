@@ -30,7 +30,7 @@ JVM (including GitHub Actions).
 
 ## Status
 
-**`0.1.3`** (`versionCode 4`). Backend is feature-complete, and the native
+**`0.2.2`** (`versionCode 7`). Backend is feature-complete, and the native
 Android/Compose app (`:app`, `dev.lumen.app`) is built on it: streaming providers
 with per-model Zen/Go routing (`/messages` for Claude/Qwen, **fixture-tested**;
 GPT/Grok `/responses` deliberately rejected), durable sessions, 14 tools (incl.

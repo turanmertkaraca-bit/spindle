@@ -105,8 +105,12 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
      */
     private suspend fun <T> locked(block: () -> T): T = withContext(Dispatchers.IO) {
         mutex.withLock {
-            ensureFts()
-            block()
+            // Hold a lease for the whole section (FTS setup included) so a
+            // concurrent close() cannot free the connection mid-query.
+            shared.lease {
+                ensureFts()
+                block()
+            }
         }
     }
 

@@ -4,6 +4,7 @@ import dev.spindle.core.provider.ToolSpec
 import dev.spindle.core.tool.Tool
 import dev.spindle.core.tool.ToolContext
 import dev.spindle.core.tool.ToolOutcome
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -96,6 +97,8 @@ internal suspend fun fetchFollowingRedirects(
         }
         val response = try {
             transport.get(uri, maxBytes)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             return FetchResult.Failure("Fetch failed: ${e.message}")
         }
@@ -182,6 +185,8 @@ internal class WebFetchTool(
             }
         """.trimIndent(),
     )
+
+    override val timeoutMs = 60_000L
 
     override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
         val raw = input.requireString("url").trim()

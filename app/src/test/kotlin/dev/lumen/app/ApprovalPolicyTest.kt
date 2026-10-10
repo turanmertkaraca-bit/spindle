@@ -42,4 +42,41 @@ class ApprovalPolicyTest {
         val policy = approvalFor(askBeforeTools = false) { setOf("nothing") }
         assertEquals(ApprovalDecision.ALLOW, policy.decide(request()))
     }
+
+    @Test
+    fun `a wildcard rule remembers a family of patterns`() = runBlocking {
+        val policy = PatternApprovalPolicy { setOf("git *") }
+        // The request() pattern is "git", which "git *" does not cover.
+        assertEquals(ApprovalDecision.ASK, policy.decide(request()))
+        assertEquals(
+            ApprovalDecision.ALLOW,
+            policy.decide(ApprovalRequest("ses", "bash", "git status", "git status")),
+        )
+        assertEquals(
+            ApprovalDecision.ASK,
+            policy.decide(ApprovalRequest("ses", "bash", "npm install", "npm install")),
+        )
+    }
+
+    @Test
+    fun `a rule can match the tool name itself`() = runBlocking {
+        val policy = PatternApprovalPolicy { setOf("ba*") }
+        assertEquals(
+            ApprovalDecision.ALLOW,
+            policy.decide(ApprovalRequest("ses", "bash", "anything", "some command")),
+        )
+        assertEquals(
+            ApprovalDecision.ASK,
+            policy.decide(ApprovalRequest("ses", "read", "a.kt", "a.kt")),
+        )
+    }
+
+    @Test
+    fun `a blank request pattern never matches a pattern rule`() = runBlocking {
+        // "git *" cannot match the tool "read", so only a real pattern could
+        // allow this; a null/blank pattern must therefore stay an ASK.
+        val policy = PatternApprovalPolicy { setOf("git *") }
+        assertEquals(ApprovalDecision.ASK, policy.decide(ApprovalRequest("ses", "read", "x", null)))
+        assertEquals(ApprovalDecision.ASK, policy.decide(ApprovalRequest("ses", "read", "x", "   ")))
+    }
 }

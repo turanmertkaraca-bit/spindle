@@ -1,6 +1,7 @@
 package dev.lumen.app
 
 import android.content.Context
+import android.os.Environment
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.lumen.app.data.KeyStore
@@ -142,6 +143,8 @@ data class FilesState(
     val entries: List<FileEntry>,
     val loading: Boolean = false,
     val error: String? = null,
+    /** True when the workspace walk was capped, so the listing is partial. */
+    val truncated: Boolean = false,
 )
 
 /** The file open in the editor, capped at [ChatViewModel.MAX_PEEK_LINES]. */
@@ -499,7 +502,21 @@ class ChatViewModel(
      */
     private val watcher: WorkspaceWatcher? = context?.let {
         WorkspaceWatcher(workspace.toFile(), runScope ?: viewModelScope) { changed -> absorbIndirect(changed) }
+            .apply {
+                onTruncated = { truncated ->
+                    workspaceTruncated = truncated
+                    val current = _state.value
+                    val files = current.files
+                    if (files != null && files.truncated != truncated) {
+                        _state.value = current.copy(files = files.copy(truncated = truncated))
+                    }
+                }
+            }
     }
+
+    /** Set while the last workspace walk hit its file cap; seeds [FilesState]. */
+    @Volatile
+    private var workspaceTruncated: Boolean = false
 
     /**
      * Start the frame sampler and record which run owns it, so a superseded
@@ -1878,7 +1895,11 @@ class ChatViewModel(
         }
         try {
             _state.value = _state.value.copy(
-                files = FilesState(dir = relativeToWorkspace(target), entries = listEntries(target)),
+                files = FilesState(
+                    dir = relativeToWorkspace(target),
+                    entries = listEntries(target),
+                    truncated = workspaceTruncated,
+                ),
             )
         } catch (t: Throwable) {
             surfaceFilesError(t.message ?: "cannot open ${rel.ifEmpty { "workspace" }}", rel)
@@ -1887,6 +1908,12 @@ class ChatViewModel(
 
     /** Enter the workspace-relative folder [rel]. */
     fun enterDir(rel: String) = openFiles(rel)
+
+    /** Close the file browser, clearing the cached truncation notice. */
+    fun closeFiles() {
+        workspaceTruncated = false
+        _state.value = _state.value.copy(files = null)
+    }
 
     /** Move to the parent of the current folder, clamped at the workspace root. */
     fun filesUp() {
@@ -2859,12 +2886,28 @@ class ChatViewModel(
                     )
                 }
             }
+            // The external-directory tool is only useful when the host has
+            // granted roots; with none it always errors, so don't offer it.
+            // Shared Downloads access grants that public directory as its root.
+            val downloadsRoot = if (keys.downloadsAccess) {
+                runCatching {
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                }.getOrNull()
+            } else {
+                null
+            }
+            val tools = if (downloadsRoot != null) {
+                DefaultTools.registry(
+                    shell = shell ?: HostShellExecutor(),
+                    externalRoots = listOf(downloadsRoot.toPath()),
+                )
+            } else {
+                DefaultTools.registry(shell = shell ?: HostShellExecutor())
+                    .without(setOf("external-directory"))
+            }
             val loop = AgentLoop(
                 providers = providersFor(keys.provider, key),
-                // The external-directory tool is only useful when the host has
-                // granted roots; with none it always errors, so don't offer it.
-                tools = DefaultTools.registry(shell = shell ?: HostShellExecutor())
-                    .without(setOf("external-directory")),
+                tools = tools,
                 store = store,
                 bus = bus,
                 permissions = permissionGate,

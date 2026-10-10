@@ -421,4 +421,17 @@ class AndroidSessionStoreTest {
             assertNull(store.session(SessionId("grand")))
         }
     }
+
+    @Test
+    fun `close is idempotent and a store call after close fails fast`() = runTest {
+        val store = newStore()
+        store.createSession(Session(SessionId("ses_closed"), "t", "/tmp", 0, 0))
+        store.close()
+        // A second close must be safe: the shared connection closes once.
+        store.close()
+        assertTrue(
+            runCatching { store.session(SessionId("ses_closed")) }.isFailure,
+            "a store call after close must fail fast rather than touch a freed connection",
+        )
+    }
 }

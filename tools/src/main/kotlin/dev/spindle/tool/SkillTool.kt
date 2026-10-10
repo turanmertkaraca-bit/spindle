@@ -41,6 +41,8 @@ class SkillTool(
         """.trimIndent(),
     )
 
+    override val timeoutMs = 45_000L
+
     override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
         ctx.checkAborted()
 

@@ -137,6 +137,20 @@ class AgentLoopTest {
             ToolOutcome("ok", metadata = mapOf("blob" to "m".repeat(100_000)))
     }
 
+    /** Ignores its budget and hangs well past the loop's per-tool timeout. */
+    private class SlowTool : Tool {
+        override val timeoutMs = 100L
+        override val spec = ToolSpec(
+            name = "slow",
+            description = "hangs past its timeout",
+            parametersJson = """{"type":"object","properties":{}}""",
+        )
+        override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
+            delay(60_000)
+            return ToolOutcome("should never finish")
+        }
+    }
+
     /** Signals when it starts, then blocks until the run is cancelled. */
     private class BlockingTool(private val started: CompletableDeferred<Unit>) : Tool {
         override val spec = ToolSpec(
@@ -1273,5 +1287,76 @@ class AgentLoopTest {
         }
         b1.join(); b2.join()
         assertEquals(2, maxActive.get(), "different sessions must be able to overlap")
+    }
+
+    @Test
+    fun `a tool exceeding its timeout becomes an ERROR part without aborting the run`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_slow", "slow"),
+                ProviderEvent.ToolCallArgsDelta(0, "{}"),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            listOf(ProviderEvent.TextDelta("recovered"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(SlowTool())),
+            store = store,
+            bus = bus,
+        )
+        newSession(store, "ses_timeout")
+
+        val result = loop.prompt(SessionId("ses_timeout"), "go", "fake/fake-1")
+
+        // A tool timeout is a normal error part the model reacts to, not a
+        // run-level abort: the run reaches its normal STOP and an idle state.
+        assertEquals(FinishReason.STOP, result.finish)
+        assertEquals("recovered", result.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+        assertEquals(SessionState.IDLE, store.session(SessionId("ses_timeout"))!!.state)
+
+        val tool = store.messages(SessionId("ses_timeout"))
+            .flatMap { it.parts }.filterIsInstance<Part.Tool>().single()
+        assertEquals(ToolState.ERROR, tool.state)
+        assertTrue(tool.result!!.output.contains("[timeout]"), tool.result?.output)
+        assertEquals("true", tool.result!!.metadata["timeout"])
+        assertEquals("100", tool.result!!.metadata["timeoutMs"])
+    }
+
+    @Test
+    fun `repeated identical tool calls trip the doom-loop guard and stop the run`() = runTest {
+        fun sameCall() = listOf(
+            ProviderEvent.ToolCallStart(0, "call_1", "echo"),
+            ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"same\"}"),
+            ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+        )
+        // More turns than needed: the guard must stop before consuming them all.
+        val provider = ScriptedProvider(sameCall(), sameCall(), sameCall(), sameCall(), sameCall())
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        newSession(store, "ses_doom")
+
+        loop.prompt(SessionId("ses_doom"), "go", "fake/fake-1", agent = AgentConfig(maxRepeatedCalls = 3))
+
+        // Turn 1 and 2 run; the 3rd identical call is stopped before it runs.
+        assertEquals(3, provider.requests.size)
+        val tools = store.messages(SessionId("ses_doom"))
+            .flatMap { it.parts }.filterIsInstance<Part.Tool>()
+        assertEquals(3, tools.size)
+        assertEquals(ToolState.DONE, tools[0].state)
+        assertEquals(ToolState.DONE, tools[1].state)
+        assertEquals(ToolState.ERROR, tools[2].state)
+        assertTrue(
+            tools[2].result?.output?.contains("doom loop") == true,
+            "the stopping part must report a doom loop: ${tools[2].result?.output}",
+        )
+        assertEquals(SessionState.IDLE, store.session(SessionId("ses_doom"))!!.state)
     }
 }

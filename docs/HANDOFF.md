@@ -2,13 +2,14 @@
 
 Native Android agent app on the `spindle` engine. Repo
 `turanmertkaraca-bit/spindle`, branch `main`, package `dev.lumen.app`.
-Latest code HEAD = `7c3dfd1`, version **0.2.1** (`versionCode 6`). CI
-(`.github/workflows/ci.yml`) is **green at `7c3dfd1`** on both jobs
-(`jvm backend` + `android app (robolectric)`). Releases **v0.2.0** and
-**v0.2.1** are published, each with a `lumen-<ver>-debug.apk` asset. A fresh
-debug APK is staged on device at
-`/storage/emulated/0/Download/lumen-debug.apk`. Always re-verify CI by sha with
-the `ci.sh` poll in §4 before trusting a build.
+Latest code HEAD = `dceae4b`, version **0.2.2** (`versionCode 7`); this docs
+refresh for the 0.2.2 reliability wave lands on top of `dceae4b`. CI
+(`.github/workflows/ci.yml`) runs both jobs (`jvm backend` + `android app
+(robolectric)`) — always re-verify CI by sha with the `ci.sh` poll in §4 before
+trusting a build. Releases **v0.2.0** and **v0.2.1** are published, each with a
+`lumen-<ver>-debug.apk` asset; **v0.2.2** is the current version. A fresh debug
+APK is staged on device at
+`/storage/emulated/0/Download/lumen-debug.apk`.
 
 ```
 ██  NEVER COMMIT tokens/secrets. The git remote already embeds a PAT.      ██
@@ -51,22 +52,60 @@ The 0.2.x waves landed since the last handoff; all are CI-green.
   now compacts-and-retries instead of hard-erroring; retry hygiene (`maxRetries
   5`, saturating backoff, `Retry-After` honored); `max_tokens` set from the
   model; OpenAI/Anthropic parse in-band error frames.
+- **Token/cache accounting**: OpenAI/DeepSeek usage normalized to uncached-miss
+  `inputTokens`; DeepSeek `prompt_cache_hit/miss_tokens` parsed; `Usage.totalTokens`
+  counts cache read/write; overflow estimate is provider-consistent, handles
+  fully-cached turns, and includes the tool-result tail; provider-reported cost
+  (OpenRouter) preserved; duplicate usage frames deduped; empty/reasoning-only
+  wire turns skipped; estimator excludes reasoning/base64 and uses a flat
+  per-image cost; live provider context window wins over the embedded snapshot;
+  OpenAI `prompt_cache_key` sent from the session hint.
 - **Streaming**: partial streamed output is checkpointed (~1s) so a killed run
   keeps the answer.
+- **Durable event stream**: `EventBus` assigns a monotonic `seq` under one lock +
+  bounded replay ring (`replayAfter`/`lastSeq`); server SSE frames carry `id:`;
+  reconnect `Last-Event-ID` replay is atomic with broadcast and exactly-once per
+  subscriber (drops frames `<= lastSent`); app gap detection + store resync;
+  `onResume` re-reads the open session so a missed terminal cannot wedge `busy`.
 - **Runtime**: the device shell is cancellation-aware and kills the process
   group; per-file edit locks; bounded/cancellable glob; malformed tool args
-  return a rewrite-requesting error; proot tears down SIGTERM-first.
+  return a rewrite-requesting error; proot tears down SIGTERM-first. New: per-tool
+  timeout (`Tool.timeoutMs`, default 120s; web 60s, glob/grep/skill 45s;
+  bash/task/question `0` = none) enforced once in `AgentLoop.executeTool` with a
+  typed timeout ERROR that does not abort the run; doom-loop guard
+  (`AgentConfig.maxRepeatedCalls = 3`) fails repeated identical calls and stops;
+  wildcard permission matching (`ApprovalRules`: `*`/`**`/`?`) for remembered
+  rules; `external_directory` surfaced when `downloadsAccess` is granted;
+  proot/shell teardown waits on the target process between group-TERM and
+  group-KILL so `--kill-on-exit` reaps tracees; watcher truncation notice
+  surfaced in the Files view.
+- **Terminal**: `ShellExecutor.runStreaming` + no-deadline mode (`timeoutMs <= 0`
+  = run until the agent stops) with throttled live progress; bash keeps head AND
+  tail; over-cap tool output spills to `<cwd>/.spindle/truncated/<tool>-<call>.txt`
+  with a read hint.
+- **Run reliability**: retry clears the persisted partial; process-wide
+  per-session run locks; compaction folds long single-prompt runs and `trim`
+  reports to the UI; `RunRecovery` runs at process startup; crash-proof event
+  collector; deleting a live session cancels the run + sweeps orphan rows; prune
+  spares RUNNING.
 - **Storage**: versioned transactional migrations (`user_version`); retention
   janitor (startup + every 6h); FTS partial-index repair; corrupt-DB
   quarantine+recreate; per-part upsert (`SessionStore.updatePart`);
-  `RunRecovery.reconcile` + targeted `updateSessionState`.
+  `RunRecovery.reconcile` + targeted `updateSessionState`; content-addressed
+  snapshots (`snapshot_blobs(sha256 PK, content)`; migration 4 on Android, 3 on
+  store-sqlite; rows keep id/sequence; blank-sha legacy rows keyed by id so no
+  body is lost; orphan blobs GC'd); root-only session prune + cascade delete of
+  dropped subtrees + `sweepSubagentSessions` age sweep; DB connection
+  lease/refcount (`AndroidDatabase.lease`, `closed` flag, no reopen after close).
 - **UI**: palettes **prism / ember / phosphor / abyss** (default now **abyss**);
   adaptive "terminal window" launcher icon + cold-start `windowBackground`; Home
   **green LIVE badges** for running sessions; per-session completion/error
   notifications with a custom `res/raw/error_dong.wav` error chime, no body
   text, deep link to the session, Settings toggle; a11y content descriptions +
   minimum touch targets; composer is a wrapping multi-line field; the
-  **delegate** mode chip was removed (UI only; the agent config still exists).
+  **delegate** mode chip was removed (UI only; the agent config still exists);
+  Settings → subagent model (inherit or a provider model); scroll-position-
+  triggered `↓ latest` arrow; live model context window precedence fix.
 - **Features**: session export/import as redacted JSON (Home actions); guarded
   git commit/push from the GitHub screen (token via env only, never force).
 
@@ -75,13 +114,14 @@ The 0.2.x waves landed since the last handoff; all are CI-green.
 - **True multi-session view**: only the visible session streams live and Home
   shows LIVE badges; watching/streaming several sessions in one view is not
   built.
-- **Deferred reliability/features**: post-edit auto-format; custom commands /
-  `/init`; `json_schema` host opt-in; 401 key re-read; W5 runtime remainder
-  (per-tool timeout, bash output spill-to-file, wildcard permission rules /
-  `external_directory` / doom-loop, watcher truncation notices); W6 storage
-  remainder (connection refcount/close race, sha256 content-addressed snapshot
-  dedup); durable server event log with `Last-Event-ID` catch-up (low value for
-  the single-client app).
+- **Deferred features/reliability**: post-edit auto-format; custom commands /
+  `/init`; `json_schema` host opt-in; 401 key re-read (owner ships static keys, so
+  no credential refresh); incremental UI patching (parse/enrich already off-main
+  and coalesced — not a clear win); real foreign keys/cascade (5-table rebuild +
+  orphan purge for near-zero reward; manual cascade already enforces it); Anthropic
+  `cache_control` (dropped deliberately — the app routes everything through the
+  OpenAI-compatible adapter). `Last-Event-ID` catch-up is in-memory (the bounded
+  replay ring), not a persisted DB event log.
 - **On-device verification** of the new flows (kill-survival, wifi→hotspot
   retry, notifications, deep link, export/import, git push) is still pending —
   CI/Robolectric only so far.
@@ -116,8 +156,16 @@ The 0.2.x waves landed since the last handoff; all are CI-green.
   `MainActivity.animatedColors`.
 - Runtime/recovery: `ChatViewModel.kt`, `RunRecovery.kt`, `RunService.kt`,
   `platform/DebianEnvironment.kt` (`prootArgv`, `guestProcess`, `maintenance`).
-- Storage: `AndroidDatabase.kt` (`user_version` migrations, quarantine),
-  `SessionStore.updatePart`, `SessionArchive.kt` (redacted export/import).
+- Events/replay: `:core` `event/EventBus.kt` (monotonic `seq` under one lock,
+  bounded replay ring via `replayAfter`/`lastSeq`); `:server` SSE `id:`/
+  `Last-Event-ID` catch-up.
+- Tools/exec: `AgentLoop.executeTool` (single per-tool timeout gate + doom-loop),
+  `Tool.timeoutMs` (+ `AgentConfig.maxRepeatedCalls`), `ApprovalRules` wildcard
+  matching, `ShellExecutor.runStreaming` (no-deadline `timeoutMs <= 0`); over-cap
+  output spills to `<cwd>/.spindle/truncated/<tool>-<call>.txt`.
+- Storage: `AndroidDatabase.kt` (`user_version` migrations, quarantine, `lease`
+  refcount), `SessionStore.updatePart`, content-addressed `snapshot_blobs`
+  (`sha256` PK), `SessionArchive.kt` (redacted export/import).
 - Git: `platform/GitRunner.kt` (`activity`, `commitDiff`, guarded commit/push),
   `ui/GitHubScreen.kt`.
 - Mentions + links: `:core` `refs/ReferenceResolver.kt` (file refs; rejects
