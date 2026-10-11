@@ -2,13 +2,13 @@
 
 Native Android agent app on the `spindle` engine. Repo
 `turanmertkaraca-bit/spindle`, branch `main`, package `dev.lumen.app`.
-Latest code HEAD = `dceae4b`, version **0.2.2** (`versionCode 7`); this docs
-refresh for the 0.2.2 reliability wave lands on top of `dceae4b`. CI
+Latest code HEAD = `21de809`, version **0.2.3** (`versionCode 8`); this docs
+refresh for the 0.2.3 UI/notification wave lands on top of `21de809`. CI
 (`.github/workflows/ci.yml`) runs both jobs (`jvm backend` + `android app
 (robolectric)`) — always re-verify CI by sha with the `ci.sh` poll in §4 before
-trusting a build. Releases **v0.2.0** and **v0.2.1** are published, each with a
-`lumen-<ver>-debug.apk` asset; **v0.2.2** is the current version. A fresh debug
-APK is staged on device at
+trusting a build. Releases **v0.2.0**, **v0.2.1** and **v0.2.2** are published,
+each with a `lumen-<ver>-debug.apk` asset; **v0.2.3** is the current version. A
+fresh debug APK is staged on device at
 `/storage/emulated/0/Download/lumen-debug.apk`.
 
 ```
@@ -100,14 +100,28 @@ The 0.2.x waves landed since the last handoff; all are CI-green.
 - **UI**: palettes **prism / ember / phosphor / abyss** (default now **abyss**);
   adaptive "terminal window" launcher icon + cold-start `windowBackground`; Home
   **green LIVE badges** for running sessions; per-session completion/error
-  notifications with a custom `res/raw/error_dong.wav` error chime, no body
-  text, deep link to the session, Settings toggle; a11y content descriptions +
+  notifications with a custom `res/raw/error_dong.wav` error chime, a session-title
+  headline + `finished/failed · duration` body, deep link to the session, Settings
+  toggle; a11y content descriptions +
   minimum touch targets; composer is a wrapping multi-line field; the
   **delegate** mode chip was removed (UI only; the agent config still exists);
   Settings → subagent model (inherit or a provider model); scroll-position-
   triggered `↓ latest` arrow; live model context window precedence fix.
 - **Features**: session export/import as redacted JSON (Home actions); guarded
   git commit/push from the GitHub screen (token via env only, never force).
+- **UI + notifications (0.2.3)**: Settings regrouped into tight labelled cards
+  (**connection first; the API key is promoted to the top**; model/subagent model
+  are single rows into the shared picker); new shared primitives `LumenFonts`
+  (mono values / proportional labels), `LumenSegmented`, `LumenSwitch`,
+  `LumenSlider` (**the default Material purple slider is gone**) and
+  `LumenBottomSheet`; model **favourites** (pinned across providers, provider-
+  labelled) + recents in `KeyStore`/`ChatViewModel`; a dedicated in-chat
+  `ModelPickerSheet` off the composer chip; quick settings is now a minimal real
+  sheet (model shortcut · agent · compact now · links); the question card scrolls
+  and requires an explicit **answer** (a tap stages only); Home status pills
+  de-duplicated. Run completion notifications now headline the **session title**
+  with `finished/failed · 1m 35s` and the app icon (was bodyless "Run finished"
+  rows with a download glyph).
 
 ## 2. What's left (honest open gaps)
 
@@ -124,7 +138,9 @@ The 0.2.x waves landed since the last handoff; all are CI-green.
   replay ring), not a persisted DB event log.
 - **On-device verification** of the new flows (kill-survival, wifi→hotspot
   retry, notifications, deep link, export/import, git push) is still pending —
-  CI/Robolectric only so far.
+  CI/Robolectric only so far. The 0.2.3 UI (new Settings cards, bottom sheets,
+  in-chat model picker, redesigned completion notifications) is likewise only
+  CI/Robolectric-verified; the screenshot sweep is the visual evidence.
 - Non-goals (keep): MCP, LSP, plugins, share links, git worktrees, local models.
 
 ## 3. How to work here (saves tokens)
@@ -153,7 +169,11 @@ The 0.2.x waves landed since the last handoff; all are CI-green.
   `linkRuns`, `toolArg`, `toolBody`) + `ui/model/UiStep.kt`.
 - Theme/tokens: `ui/LumenTokens.kt` (`LumenShapes/Spacing/Type/Size/Elevation`,
   `LumenSectionHeader`), `LumenColors` in `LumenChatScreen.kt`,
-  `MainActivity.animatedColors`.
+  `MainActivity.animatedColors`. Shared controls: `ui/LumenControls.kt`
+  (`LumenFonts`, `LumenSegmented`, `LumenSwitch`, `LumenSlider`) and
+  `ui/LumenSheet.kt` (`LumenBottomSheet`). Model UI: `ui/ModelPickerScreen.kt`
+  (shared `ModelRow`/`ModelRowData`, favourites + recents) and
+  `ui/ModelPickerSheet.kt` (the in-chat popup).
 - Runtime/recovery: `ChatViewModel.kt`, `RunRecovery.kt`, `RunService.kt`,
   `platform/DebianEnvironment.kt` (`prootArgv`, `guestProcess`, `maintenance`).
 - Events/replay: `:core` `event/EventBus.kt` (monotonic `seq` under one lock,

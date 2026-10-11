@@ -174,3 +174,40 @@ Android SDK in the dev guest).
 6. Screenshot sweep: every screen, light + dark, read them all. — **landed
    `ea2e38e` + `189b695`**; the sweep now covers every screen in both themes
    (uploaded as the `lumen-screenshots` artifact).
+
+## Rework pass 6 — settings / sheets / model picking / question (0.2.3)
+
+The owner called the Settings screen and the in-chat quick settings sheet
+"confusing / not straight to the point" and asked for grounding primitives,
+minimal density, mono values, model favourites, and a real in-chat model popup.
+
+- **Shared grammar (new):** `LumenFonts` (values mono, labels/captions
+  proportional), `LumenSegmented` (one joined one-of-N control, active segment
+  filled with `water`), `LumenSwitch` (the 4× copy-pasted themed switch),
+  `LumenSlider` (**the default Material purple slider is gone** — track/thumb now
+  follow the palette), `LumenBottomSheet` (drag handle + slide/fade + scrim), and
+  a shared `ModelRow`. `LumenSectionHeader` now uses the proportional label, so
+  the split propagates app-wide.
+- **Settings** (`SettingsScreen.kt`) regrouped into tight labelled cards —
+  `connection / model / appearance / agent / limits / notifications /
+  integrations / system`. Back chevron instead of a loud "Done"; **the API key is
+  promoted to a top connection row**; the model + subagent-model sections collapse
+  to single rows into the shared picker; the dead `onStorage` is wired.
+- **Model picking:** favourites (**pinned across providers, each labelled with
+  its provider**) and recents persist in `KeyStore`/`ChatViewModel`; one live
+  catalogue (`state.models`) feeds the full-screen picker *and* a new
+  **dedicated in-chat `ModelPickerSheet`** opened from the composer chip. The old
+  inline embedded-list copies (Settings, quick sheet) are gone.
+- **Quick settings** is now a real sheet and genuinely quick: model shortcut,
+  agent mode, `compact now`, and key/settings/close links. The latent
+  "re-opens on return from the model picker" bug is fixed (the sheet is no longer
+  carried over a route swap).
+- **Question card:** the option list is height-capped and scrolls; a tap
+  **stages** a choice (filled highlight), and an explicit **answer** button sends
+  it — a stray tap/scroll can no longer submit a random option.
+- **Home:** de-duplicated the provider·model pill (was `provider · provider/model`),
+  monochrome GitHub glyph (was the ☺ emoji), honest `no sandbox` label.
+- New screenshot frames: `light/dark_model_sheet` (the in-chat popup). Updated
+  tests: `SettingsScreenTest` (github value), `AskCardTest` (stage-then-answer),
+  `LumenChatScreenTest` (minimal sheet), `RunServiceTest` (named notifications).
+
