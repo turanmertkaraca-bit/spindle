@@ -303,6 +303,10 @@ data class ChatState(
     val modelsRefreshing: Boolean = false,
     /** The last catalogue refresh error, or null when the last one succeeded. */
     val modelsError: String? = null,
+    /** Starred model refs (full `provider/model`), pinned on top of the pickers. */
+    val favoriteModels: Set<String> = emptySet(),
+    /** Recently used model refs, newest first, shown under favourites. */
+    val recentModels: List<String> = emptyList(),
     /** Context window of the selected model, in tokens (0 when unknown). */
     val contextWindow: Int = 0,
     /** Best-effort estimate of the next request's cost in USD; <0 when unknown. */
@@ -412,6 +416,8 @@ class ChatViewModel(
             onboarded = keys.onboarded,
             githubLogin = keys.githubLogin,
             models = initialModels,
+            favoriteModels = keys.favoriteModels,
+            recentModels = keys.recentModels,
             contextWindow = initialModels
                 .firstOrNull { it.id == keys.model.substringAfter('/') }?.contextWindow ?: 0,
         ),
@@ -1177,8 +1183,18 @@ class ChatViewModel(
 
     fun setModel(model: String) {
         keys.model = model
-        _state.value = _state.value.copy(model = model)
+        val recent = (listOf(model) + keys.recentModels.filter { it != model }).take(KeyStore.MAX_RECENT_MODELS)
+        keys.recentModels = recent
+        _state.value = _state.value.copy(model = model, recentModels = recent)
         refreshModelMetrics()
+    }
+
+    /** Star or unstar a model ref; favourites stay pinned regardless of provider. */
+    fun toggleFavorite(ref: String) {
+        val current = keys.favoriteModels
+        val next = if (ref in current) current - ref else current + ref
+        keys.favoriteModels = next
+        _state.value = _state.value.copy(favoriteModels = next)
     }
 
     /** Set the default subagent model; blank means "inherit the main model". */

@@ -1127,7 +1127,8 @@ private fun StatusStrip(
     onDiagnostics: (() -> Unit)?,
     onGitHub: (() -> Unit)?,
 ) {
-    val modelLabel = listOf(provider, model).filter { it.isNotBlank() }
+    val modelPart = model.removePrefix("$provider/").ifBlank { model }
+    val modelLabel = listOf(provider, modelPart).filter { it.isNotBlank() }
         .joinToString(" \u00b7 ")
         .ifBlank { "no model" }
     Row(
@@ -1138,11 +1139,11 @@ private fun StatusStrip(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         StatusPill(colors, "\u25c8", modelLabel, "status-provider", onSettings)
-        StatusPill(colors, "\u25a0", sandboxLabel.ifBlank { "sandbox" }, "status-sandbox", onDiagnostics)
+        StatusPill(colors, "\u25a0", sandboxLabel.ifBlank { "no sandbox" }, "status-sandbox", onDiagnostics)
         StatusPill(colors, "\u0024", budgetLabel(maxCostUsd), "status-budget", onSettings)
         StatusPill(
             colors,
-            "\u263a",
+            "\u25c7",
             if (githubLogin.isNotBlank()) "@$githubLogin" else "connect github",
             "status-github",
             onGitHub,

@@ -80,7 +80,7 @@ class SettingsScreenTest {
             )
         }
 
-        compose.onNodeWithText("connected as octocat").assertExists()
+        compose.onNodeWithText("octocat").assertExists()
         compose.onNodeWithTag("settings-github").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         assertTrue(tapped)

@@ -811,7 +811,7 @@ class LumenChatScreenTest {
     }
 
     @Test
-    fun `quick settings sheet renders its sections`() {
+    fun `quick settings sheet renders its minimal controls`() {
         compose.setContent {
             LumenChatScreen(
                 steps(1), input = "", busy = false, error = null, modifier = viewport, ambient = false,
@@ -825,15 +825,13 @@ class LumenChatScreenTest {
         }
         // The scrim is the sheet's dismissible boundary.
         compose.onNodeWithTag("quick-settings").assertIsDisplayed()
-        // Provider, model, theme, budget and tools all render.
-        compose.onNodeWithTag("quick-provider-deepseek").assertExists()
-        compose.onNodeWithTag("quick-provider-opencode-go").assertExists()
-        compose.onNodeWithTag("quick-model-deepseek-flash").assertExists()
-        compose.onNodeWithTag("quick-theme-dark").assertExists()
-        compose.onNodeWithTag("quick-budget-2").assertExists()
-        compose.onNodeWithTag("quick-ask-before-tools").assertExists()
+        // Just the chat-scoped controls: model shortcut + agent mode.
+        compose.onNodeWithTag("quick-model").assertExists()
+        compose.onNodeWithTag("quick-agent-build").assertExists()
+        compose.onNodeWithTag("quick-agent-delegate").assertExists()
         // Footer reaches the key screen and the full Settings page.
         compose.onNodeWithTag("quick-edit-key").assertExists()
         compose.onNodeWithTag("quick-full-settings").assertExists()
+        compose.onNodeWithTag("quick-close").assertExists()
     }
 }

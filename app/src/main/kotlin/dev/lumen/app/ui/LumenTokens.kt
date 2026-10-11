@@ -100,9 +100,8 @@ object LumenSpacing {
 }
 
 /**
- * A compact, shared typography scale. All text is still monospace; the scale
- * just makes it easy to keep headings, body, captions and microcopy aligned
- * without hunting for literals.
+ * A compact, shared typography scale. Headings, body, captions and microcopy
+ * stay aligned through the named sizes rather than scattered literals.
  */
 object LumenType {
     val hero = 28.sp
@@ -114,6 +113,23 @@ object LumenType {
     val micro = 10.sp
     val lineTight = 16.sp
     val lineBody = 19.sp
+}
+
+/**
+ * The one place the mono/proportional split is decided. Values (model ids,
+ * paths, costs, commands, numbers) keep the terminal face; labels, captions and
+ * prose use the calm proportional face so settings read as a normal product
+ * instead of a wall of code.
+ */
+object LumenFonts {
+    /** Labels, captions, prose — proportional. */
+    val label: FontFamily = FontFamily.Default
+
+    /** Values, identifiers, costs, code — monospace. */
+    val value: FontFamily = FontFamily.Monospace
+
+    /** Alias kept for chat-side call sites that want the terminal face. */
+    val code: FontFamily = FontFamily.Monospace
 }
 
 /**
@@ -130,7 +146,7 @@ object LumenSize {
 
 /**
  * One section header for both Settings and the in-chat Quick Settings sheet: a
- * medium-weight foreground label with identical size, colour and tracking in
+ * medium-weight proportional label with identical size, colour and tracking in
  * both surfaces, plus an optional dim one-line caption that grounds it. Lower-
  * case on purpose — call sites pass their own text and never uppercase it.
  */
@@ -139,7 +155,7 @@ internal fun LumenSectionHeader(colors: LumenColors, text: String, caption: Stri
     Text(
         text,
         color = colors.fg,
-        fontFamily = FontFamily.Monospace,
+        fontFamily = LumenFonts.label,
         fontSize = LumenType.heading,
         fontWeight = FontWeight.Medium,
         letterSpacing = 0.3.sp,
@@ -149,7 +165,7 @@ internal fun LumenSectionHeader(colors: LumenColors, text: String, caption: Stri
         Text(
             caption,
             color = colors.dim,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = LumenFonts.label,
             fontSize = LumenType.caption,
         )
     }

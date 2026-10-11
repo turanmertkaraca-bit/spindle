@@ -701,6 +701,37 @@ class ScreenshotTest {
 
     @Test fun dark_quick_settings() = quickSettingsShot("dark_quick_settings.png", LumenColors.Dark)
 
+    /** The dedicated in-chat model picker sheet: favourites + recents + live models. */
+    private fun modelSheetShot(name: String, colors: LumenColors) = shoot(name) {
+        LumenChatScreen(
+            steps = sample(),
+            input = "",
+            busy = false,
+            error = null,
+            colors = colors,
+            title = "make the timeline a spine",
+            onHome = {},
+            ambient = false,
+            model = "deepseek/deepseek-flash",
+            provider = "deepseek",
+            modelPicker = true,
+            onCloseModelPicker = {},
+            pickerModels = listOf(
+                ModelInfo("deepseek", "deepseek-flash", label = "DeepSeek Flash", contextWindow = 1_000_000),
+                ModelInfo("deepseek", "deepseek-v4-pro", label = "DeepSeek V4 Pro", contextWindow = 1_000_000),
+                ModelInfo("deepseek", "deepseek-future", label = "DeepSeek Future", contextWindow = 500_000),
+            ),
+            favoriteModels = setOf("deepseek/deepseek-v4-pro"),
+            recentModels = listOf("deepseek/deepseek-flash"),
+            onModelSelect = {},
+            onToggleFavorite = {},
+        )
+    }
+
+    @Test fun light_model_sheet() = modelSheetShot("light_model_sheet.png", LumenColors.Light)
+
+    @Test fun dark_model_sheet() = modelSheetShot("dark_model_sheet.png", LumenColors.Dark)
+
     /** A populated folder listing, plus an html file so the canvas affordance shows. */
     private fun filesSample(): FilesState = FilesState(
         dir = "",

@@ -128,6 +128,7 @@ import dev.spindle.core.model.RunChanges
 import dev.spindle.core.model.TodoItem
 import dev.spindle.core.model.TodoStatus
 import dev.spindle.core.model.Usage
+import dev.spindle.core.provider.ModelInfo
 import dev.spindle.core.refs.FileKind
 import java.util.Locale
 import kotlin.math.abs
@@ -461,6 +462,24 @@ fun LumenChatScreen(
     onModelSelect: ((String) -> Unit)? = null,
     /** Open the full-screen live model picker from the composer's model chip. */
     onOpenModels: (() -> Unit)? = null,
+    /** Show the dedicated in-chat model picker sheet. */
+    modelPicker: Boolean = false,
+    /** Dismiss the in-chat model picker sheet. */
+    onCloseModelPicker: () -> Unit = {},
+    /** Live catalogue for the active provider, shown in the picker sheet. */
+    pickerModels: List<ModelInfo> = emptyList(),
+    /** True while the picker sheet's catalogue refresh is in flight. */
+    pickerRefreshing: Boolean = false,
+    /** Starred model refs, pinned on top of the picker sheet. */
+    favoriteModels: Set<String> = emptySet(),
+    /** Recently used model refs, under favourites in the picker sheet. */
+    recentModels: List<String> = emptyList(),
+    /** Star/unstar a model ref from the picker sheet. */
+    onToggleFavorite: ((String) -> Unit)? = null,
+    /** Refresh the picker sheet's catalogue. */
+    onRefreshModels: (() -> Unit)? = null,
+    /** Open the full-screen catalogue from the picker sheet. */
+    onBrowseAllModels: (() -> Unit)? = null,
 ) {
     val listState = rememberLazyListState()
     val flingBehavior = remember { calmFling() }
@@ -769,33 +788,40 @@ fun LumenChatScreen(
                 },
             )
         }
-        if (quickSettings) {
-            QuickSettingsSheet(
-                colors = colors,
-                provider = provider,
-                model = model,
-                theme = theme,
-                palette = palette,
-                askBeforeTools = askBeforeTools,
-                budgetUsd = budgetUsd,
-                onProvider = onProvider,
-                onModel = onModelSelect,
-                onTheme = onTheme,
-                onPalette = onPalette,
-                onMaxCost = onMaxCost,
-                onAskBeforeTools = onAskBeforeTools,
-                agentMode = agentMode,
-                onAgentMode = onAgentMode,
-                autoCompactPercent = autoCompactPercent,
-                onAutoCompactPercent = onAutoCompactPercent,
-                onCompactNow = onCompactNow,
-                busy = busy,
-                onEditKey = onEditKey,
-                onOpenFullSettings = onOpenFullSettings,
-                onBrowseModels = onOpenModels,
-                onClose = onCloseQuickSettings,
-            )
-        }
+        QuickSettingsSheet(
+            colors = colors,
+            visible = quickSettings,
+            model = model,
+            onOpenModel = {
+                onCloseQuickSettings()
+                onOpenModels?.invoke()
+            },
+            agentMode = agentMode,
+            onAgentMode = onAgentMode,
+            onCompactNow = onCompactNow,
+            busy = busy,
+            onEditKey = onEditKey,
+            onOpenFullSettings = onOpenFullSettings,
+            onClose = onCloseQuickSettings,
+        )
+        ModelPickerSheet(
+            visible = modelPicker,
+            onDismiss = onCloseModelPicker,
+            colors = colors,
+            provider = provider,
+            models = pickerModels,
+            selected = model,
+            favorites = favoriteModels,
+            recents = recentModels,
+            refreshing = pickerRefreshing,
+            onSelect = { ref ->
+                onModelSelect?.invoke(ref)
+                onCloseModelPicker()
+            },
+            onToggleFavorite = { ref -> onToggleFavorite?.invoke(ref) },
+            onRefresh = { onRefreshModels?.invoke() },
+            onBrowseAll = { onBrowseAllModels?.invoke() },
+        )
     }
 }
 
@@ -2384,7 +2410,13 @@ private fun QuestionAsk(
     Spacer(Modifier.height(6.dp))
     Text(ask.question, color = colors.fg, fontFamily = FontFamily.Default, fontSize = 13.sp, lineHeight = 18.sp)
     Spacer(Modifier.height(10.dp))
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(max = 280.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         ask.options.forEachIndexed { index, option ->
             val isSelected = option in selected
             Text(
@@ -2395,12 +2427,14 @@ private fun QuestionAsk(
                     .fillMaxWidth()
                     .clip(LumenShapes.inset)
                     .border(1.dp, if (isSelected) colors.water else colors.outline, LumenShapes.inset)
-                    .background(if (isSelected) colors.bg.copy(alpha = 0.35f) else Color.Transparent)
+                    .background(if (isSelected) colors.water.copy(alpha = 0.18f) else Color.Transparent)
                     .clickable {
-                        if (ask.multiple) {
-                            selected = if (isSelected) selected - option else selected + option
+                        // Stage the choice; the answer button sends it. A single
+                        // tap therefore cannot submit a random option by accident.
+                        selected = if (ask.multiple) {
+                            if (isSelected) selected - option else selected + option
                         } else {
-                            onAnswer(listOf(option))
+                            setOf(option)
                         }
                     }
                     .padding(horizontal = 12.dp, vertical = 9.dp)
@@ -2410,7 +2444,7 @@ private fun QuestionAsk(
     }
     Spacer(Modifier.height(10.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (ask.multiple) {
+        if (ask.options.isNotEmpty()) {
             AskAction(colors, "answer", "ask-answer", accent = true) { onAnswer(selected.toList()) }
         }
         AskAction(colors, "skip", "ask-skip", accent = false) { onSkip() }
@@ -3077,290 +3111,108 @@ private fun PeekBacklinks(
 }
 
 /**
- * The lightweight in-chat settings surface: provider, model, theme, budget and the
- * ask-before-tools switch, plus a footer that reaches the key screen and the full
- * Settings page. Rendered over the transcript like [FilePeekOverlay] — a `surface`
- * sheet with an [LumenColors.outline] hairline — so tuning a chat never yanks the
- * reader out to the full Settings screen.
+ * The lightweight in-chat settings surface: the model shortcut, the agent mode
+ * and "compact now", plus links to the key screen and the full Settings page.
+ * A real bottom sheet — deliberately not a shrunken copy of Settings.
  */
 @Composable
 private fun QuickSettingsSheet(
     colors: LumenColors,
-    provider: String,
+    visible: Boolean,
     model: String,
-    theme: String,
-    palette: String,
-    askBeforeTools: Boolean,
-    budgetUsd: Double,
-    onProvider: ((String) -> Unit)?,
-    onModel: ((String) -> Unit)?,
-    onTheme: ((String) -> Unit)?,
-    onPalette: (String) -> Unit,
-    onMaxCost: ((Double) -> Unit)?,
-    onAskBeforeTools: ((Boolean) -> Unit)?,
+    onOpenModel: (() -> Unit)?,
     agentMode: String = "build",
     onAgentMode: ((String) -> Unit)? = null,
-    autoCompactPercent: Int = 80,
-    onAutoCompactPercent: ((Int) -> Unit)? = null,
     onCompactNow: (() -> Unit)? = null,
     busy: Boolean = false,
-    onEditKey: (() -> Unit)?,
-    onOpenFullSettings: (() -> Unit)?,
-    onBrowseModels: (() -> Unit)? = null,
+    onEditKey: (() -> Unit)? = null,
+    onOpenFullSettings: (() -> Unit)? = null,
     onClose: () -> Unit,
 ) {
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = if (colors.dark) 0.62f else 0.38f))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClose,
-            )
-            .testTag("quick-settings"),
+    LumenBottomSheet(
+        visible = visible,
+        onDismiss = onClose,
+        colors = colors,
+        maxHeight = 420.dp,
+        tag = "quick-settings",
     ) {
-        Column(
+        Text(
+            "quick settings",
+            color = colors.fg,
+            fontFamily = LumenFonts.label,
+            fontSize = LumenType.heading,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(Modifier.height(LumenSpacing.lg))
+
+        Row(
             Modifier
-                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .shadow(LumenElevation.floating, LumenShapes.sheet)
-                .clip(LumenShapes.sheet)
-                .background(colors.surface)
-                .border(1.dp, colors.outline, LumenShapes.sheet)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                ) {}
-                .heightIn(max = 460.dp)
-                .verticalScroll(rememberScrollState())
-                .padding(
-                    start = LumenSpacing.page,
-                    end = LumenSpacing.page,
-                    top = LumenSpacing.lg,
-                    bottom = LumenSpacing.page,
-                ),
+                .clip(LumenShapes.card)
+                .background(colors.surface.copy(alpha = 0.4f))
+                .border(1.dp, colors.outline, LumenShapes.card)
+                .clickable(enabled = onOpenModel != null) { onOpenModel?.invoke() }
+                .padding(horizontal = 14.dp, vertical = 14.dp)
+                .testTag("quick-model"),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                "quick settings",
-                color = colors.fg,
-                fontFamily = Mono,
-                fontSize = LumenType.heading,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = 0.4.sp,
-            )
-            Spacer(Modifier.height(LumenSpacing.lg))
-
-            LumenSectionHeader(colors, "provider", caption = "which API endpoint the agent talks to")
-            Spacer(Modifier.height(LumenSpacing.md))
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                for ((id, label) in ProviderCatalogue.choices) {
-                    QuickChip(label, provider == id, "quick-provider-$id", colors) { onProvider?.invoke(id) }
-                }
-            }
-
-            Spacer(Modifier.height(LumenSpacing.xl))
-            LumenSectionHeader(colors, "model", caption = "the default model for new chats")
-            Spacer(Modifier.height(LumenSpacing.md))
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                for (m in ProviderCatalogue.defaultModels(provider)) {
-                    val ref = "$provider/${m.id}"
-                    val selected = model == ref
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(LumenShapes.row)
-                            .background(if (selected) colors.bg.copy(alpha = 0.35f) else Color.Transparent)
-                            .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.row)
-                            .clickable { onModel?.invoke(ref) }
-                            .padding(horizontal = 12.dp, vertical = 10.dp)
-                            .testTag("quick-model-${m.id}"),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            Modifier.size(7.dp)
-                                .background(
-                                    if (selected) colors.water else Color.Transparent,
-                                    WaterShapes.droplet(tail = 0.5f),
-                                ),
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            m.label ?: m.id,
-                            color = if (selected) colors.fg else colors.dim,
-                            fontFamily = Mono,
-                            fontSize = LumenType.body,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(
-                            "${m.contextWindow / 1000}k",
-                            color = colors.faint,
-                            fontFamily = Mono,
-                            fontSize = LumenType.micro,
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(LumenSpacing.xl))
-            LumenSectionHeader(colors, "theme", caption = "light, dark or follow the system")
-            Spacer(Modifier.height(LumenSpacing.md))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (value in listOf("system", "light", "dark")) {
-                    QuickChip(value, theme == value, "quick-theme-$value", colors) { onTheme?.invoke(value) }
-                }
-            }
-
-            Spacer(Modifier.height(LumenSpacing.xl))
-            LumenSectionHeader(colors, "palette", caption = "the colour mood of the app")
-            Spacer(Modifier.height(LumenSpacing.md))
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                for (id in LumenColors.PaletteIds) {
-                    val label = when (id) {
-                        "ember" -> "Ember"
-                        "phosphor" -> "Phosphor"
-                        "abyss" -> "Abyss"
-                        else -> "Prism"
-                    }
-                    QuickChip(label, palette == id, "quick-palette-$id", colors) { onPalette(id) }
-                }
-            }
-
-            Spacer(Modifier.height(LumenSpacing.xl))
-            LumenSectionHeader(
-                colors,
-                "agent",
-                caption = "build acts directly; plan stays read-only",
-            )
-            Spacer(Modifier.height(LumenSpacing.md))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QuickChip("build", agentMode == "build", "quick-agent-build", colors) { onAgentMode?.invoke("build") }
-                QuickChip("plan", agentMode == "plan", "quick-agent-plan", colors) { onAgentMode?.invoke("plan") }
-            }
-
-            Spacer(Modifier.height(LumenSpacing.xl))
-            LumenSectionHeader(
-                colors,
-                "budget",
-                caption = "Stop a session before it spends more than this",
-            )
-            Spacer(Modifier.height(LumenSpacing.md))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QuickChip("off", budgetUsd <= 0.0, "quick-budget-off", colors) { onMaxCost?.invoke(0.0) }
-                QuickChip("\$0.50", budgetUsd == 0.5, "quick-budget-050", colors) { onMaxCost?.invoke(0.5) }
-                QuickChip("\$2", budgetUsd == 2.0, "quick-budget-2", colors) { onMaxCost?.invoke(2.0) }
-                QuickChip("\$5", budgetUsd == 5.0, "quick-budget-5", colors) { onMaxCost?.invoke(5.0) }
-            }
-
-            Spacer(Modifier.height(LumenSpacing.xl))
-            LumenSectionHeader(
-                colors,
-                "context",
-                caption = "auto-compact at $autoCompactPercent% of the model window",
-            )
-            Spacer(Modifier.height(LumenSpacing.md))
-            Slider(
-                value = autoCompactPercent.toFloat(),
-                onValueChange = { onAutoCompactPercent?.invoke(it.roundToInt()) },
-                valueRange = 50f..95f,
-                modifier = Modifier.fillMaxWidth().testTag("quick-context-compact"),
-            )
-            if (onCompactNow != null && !busy) {
+            Column(Modifier.weight(1f)) {
+                Text("model", color = colors.dim, fontFamily = LumenFonts.label, fontSize = LumenType.caption)
+                Spacer(Modifier.height(3.dp))
                 Text(
-                    "compact now",
-                    color = colors.accent, fontFamily = Mono, fontSize = LumenType.body,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .clip(LumenShapes.small)
-                        .clickable { onCompactNow() }
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                        .testTag("quick-compact-now"),
-                )
-            }
-
-            Spacer(Modifier.height(LumenSpacing.xl))
-            LumenSectionHeader(colors, "tools", caption = "what the agent may run on its own")
-            Spacer(Modifier.height(LumenSpacing.md))
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(LumenShapes.row)
-                    .background(colors.surface.copy(alpha = 0.25f))
-                    .border(1.dp, colors.outline, LumenShapes.row)
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "ask before tools",
+                    model.substringAfterLast('/').ifBlank { "none" },
                     color = colors.fg,
-                    fontFamily = Mono,
-                    fontSize = LumenType.body,
-                )
-                Switch(
-                    checked = askBeforeTools,
-                    onCheckedChange = { onAskBeforeTools?.invoke(it) },
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = colors.bg,
-                        checkedTrackColor = colors.water,
-                        uncheckedThumbColor = colors.dim,
-                        uncheckedTrackColor = colors.surface,
-                        uncheckedBorderColor = colors.outline,
-                    ),
-                    modifier = Modifier.testTag("quick-ask-before-tools"),
+                    fontFamily = LumenFonts.value,
+                    fontSize = LumenType.bodyLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
+            Text("\u203a", color = colors.accent, fontFamily = LumenFonts.value, fontSize = 20.sp)
+        }
 
-            Spacer(Modifier.height(LumenSpacing.xl))
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                QuickAction("API key", "quick-edit-key", colors) { onEditKey?.invoke() }
-                QuickAction("All settings", "quick-full-settings", colors) { onOpenFullSettings?.invoke() }
-                if (onBrowseModels != null) {
-                    QuickAction("all models", "quick-models", colors) { onBrowseModels() }
-                }
-                Spacer(Modifier.weight(1f))
-                QuickAction("close", "quick-close", colors) { onClose() }
-            }
+        Spacer(Modifier.height(LumenSpacing.xl))
+        LumenSectionHeader(colors, "agent")
+        Spacer(Modifier.height(LumenSpacing.sm))
+        LumenSegmented(
+            segments = listOf(
+                LumenSegment("build", "build", "quick-agent-build"),
+                LumenSegment("plan", "plan", "quick-agent-plan"),
+                LumenSegment("delegate", "delegate", "quick-agent-delegate"),
+            ),
+            selected = agentMode,
+            onSelect = { onAgentMode?.invoke(it) },
+            colors = colors,
+        )
+
+        if (onCompactNow != null && !busy) {
+            Spacer(Modifier.height(LumenSpacing.lg))
+            Text(
+                "compact now",
+                color = colors.accent,
+                fontFamily = LumenFonts.label,
+                fontSize = LumenType.body,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clip(LumenShapes.small)
+                    .clickable { onCompactNow() }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("quick-compact-now"),
+            )
+        }
+
+        Spacer(Modifier.height(LumenSpacing.xl))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            QuickAction("API key", "quick-edit-key", colors) { onEditKey?.invoke() }
+            QuickAction("All settings", "quick-full-settings", colors) { onOpenFullSettings?.invoke() }
+            Spacer(Modifier.weight(1f))
+            QuickAction("close", "quick-close", colors) { onClose() }
         }
     }
-}
-
-/** A selectable pill chip in the quick-settings sheet. */
-@Composable
-private fun QuickChip(
-    text: String,
-    selected: Boolean,
-    tag: String,
-    colors: LumenColors,
-    onClick: () -> Unit,
-) {
-    Text(
-        text,
-        color = if (selected) colors.fg else colors.dim,
-        fontFamily = Mono,
-        fontSize = LumenType.body,
-        maxLines = 1,
-        modifier = Modifier
-            .heightIn(min = 44.dp)
-            .clip(LumenShapes.pill)
-            .background(if (selected) colors.bg.copy(alpha = 0.35f) else Color.Transparent)
-            .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.pill)
-            .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 9.dp)
-            .testTag(tag),
-    )
 }
 
 /** A quiet text action in the quick-settings footer. */
@@ -3374,14 +3226,14 @@ private fun QuickAction(
     Text(
         label,
         color = colors.accent,
-        fontFamily = Mono,
+        fontFamily = LumenFonts.label,
         fontSize = LumenType.body,
         fontWeight = FontWeight.Medium,
         modifier = Modifier
-            .heightIn(min = 44.dp)
+            .heightIn(min = 40.dp)
             .clip(LumenShapes.pill)
             .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 9.dp)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
             .testTag(tag),
     )
 }

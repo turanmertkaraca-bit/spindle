@@ -14,6 +14,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 /** The pinned ask card: permission buttons and question chips wire to callbacks. */
 @RunWith(RobolectricTestRunner::class)
@@ -49,7 +50,7 @@ class AskCardTest {
     }
 
     @Test
-    fun `question card shows option chips and a tap answers`() {
+    fun `question card stages a chip and only answers on the button`() {
         var answered: List<String>? = null
         compose.setContent {
             LumenChatScreen(
@@ -61,7 +62,11 @@ class AskCardTest {
         }
         compose.onNodeWithTag("ask-option-0").assertIsDisplayed()
         compose.onNodeWithTag("ask-option-1").assertIsDisplayed()
+        // Tapping an option only stages it; nothing is sent yet.
         compose.onNodeWithTag("ask-option-0").performClick()
+        compose.waitForIdle()
+        assertNull(answered, "a stray tap must not send an answer")
+        compose.onNodeWithTag("ask-answer").performClick()
         compose.waitForIdle()
         assertEquals(listOf("debug"), answered)
     }

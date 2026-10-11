@@ -103,6 +103,16 @@ class MainActivity : ComponentActivity() {
             var canvasReturn by rememberSaveable { mutableStateOf("chat") }
             // The route to return to when leaving the full model picker.
             var modelsReturn by rememberSaveable { mutableStateOf("settings") }
+            // The dedicated in-chat model picker sheet; never a route on its own.
+            var modelPicker by rememberSaveable { mutableStateOf(false) }
+            // Which slot the full-screen picker is filling: "default" | "subagent".
+            var modelsTarget by rememberSaveable { mutableStateOf("default") }
+            // Selecting a model may cross providers, so switch first then set.
+            val pickModel: (String) -> Unit = { ref ->
+                val refProvider = ref.substringBefore('/')
+                if (refProvider != state.provider) viewModel.setProvider(refProvider)
+                viewModel.setModel(ref)
+            }
             // Preserves per-screen rememberSaveable state while the exclusive
             // `when` below swaps branches, so the chat timeline keeps its scroll
             // offset when the user detours to Files/Settings and back. Chat is
@@ -209,6 +219,7 @@ class MainActivity : ComponentActivity() {
 
             BackHandler(enabled = route != "home" || state.currentSessionId != null) {
                 when {
+                    modelPicker -> modelPicker = false
                     quickSettings -> quickSettings = false
                     state.peek != null -> viewModel.closePeek()
                     state.editor != null -> viewModel.closeEditor()
@@ -372,8 +383,17 @@ class MainActivity : ComponentActivity() {
                         quickSettings = false
                         route = "settings"
                     },
-                    onModelSelect = viewModel::setModel,
-                    onOpenModels = { modelsReturn = "chat"; route = "models" },
+                    onModelSelect = pickModel,
+                    onOpenModels = { modelPicker = true },
+                    modelPicker = modelPicker,
+                    onCloseModelPicker = { modelPicker = false },
+                    pickerModels = state.models,
+                    pickerRefreshing = state.modelsRefreshing,
+                    favoriteModels = state.favoriteModels,
+                    recentModels = state.recentModels,
+                    onToggleFavorite = viewModel::toggleFavorite,
+                    onRefreshModels = { viewModel.refreshModels() },
+                    onBrowseAllModels = { modelPicker = false; modelsReturn = "chat"; route = "models" },
                 )
                 route == "models" -> ModelPickerScreen(
                     colors = colors,
@@ -384,12 +404,15 @@ class MainActivity : ComponentActivity() {
                     error = state.modelsError,
                     onProvider = viewModel::setProvider,
                     onSelect = { ref ->
-                        viewModel.setModel(ref)
+                        if (modelsTarget == "subagent") viewModel.setSubagentModel(ref) else pickModel(ref)
                         route = modelsReturn
                     },
                     onRefresh = { viewModel.refreshModels() },
                     onBack = { route = modelsReturn },
                     modifier = modifier,
+                    favorites = state.favoriteModels,
+                    recents = state.recentModels,
+                    onToggleFavorite = viewModel::toggleFavorite,
                 )
                 route == "files" -> {
                     // Always re-list on entry so external/agent changes show.
@@ -508,7 +531,9 @@ class MainActivity : ComponentActivity() {
                     onDiagnostics = { route = "diagnostics" },
                     onGitHub = { route = "github" },
                     githubLogin = state.githubLogin,
-                    onBrowseModels = { modelsReturn = "settings"; route = "models" },
+                    hasKey = !state.needsKey,
+                    onBrowseModels = { modelsTarget = "default"; modelsReturn = "settings"; route = "models" },
+                    onBrowseSubagent = { modelsTarget = "subagent"; modelsReturn = "settings"; route = "models" },
                 )
                 route == "key" -> KeyScreen(
                     colors = colors,

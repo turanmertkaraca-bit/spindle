@@ -3,25 +3,20 @@ package dev.lumen.app.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -29,15 +24,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.data.ProviderCatalogue
 import kotlin.math.roundToInt
 
-private val Mono = FontFamily.Monospace
-
-/** Provider, model and theme. The key itself is managed on the key screen. */
+/**
+ * Settings, regrouped from a flat 13-section scroll into tight, labelled cards.
+ * Values are mono, labels proportional; the API key sits at the top as a
+ * connection row instead of buried at the bottom, and model choice is a single
+ * row into the shared picker rather than three inline options.
+ */
 @Composable
 fun SettingsScreen(
     colors: LumenColors,
@@ -79,8 +77,12 @@ fun SettingsScreen(
     onGitHub: (() -> Unit)? = null,
     /** Non-secret GitHub login shown on the GitHub link's status line. */
     githubLogin: String = "",
-    /** Open the full-screen live model picker, when supplied. */
+    /** Open the full-screen live model picker for the default model, when supplied. */
     onBrowseModels: (() -> Unit)? = null,
+    /** Open the live picker aimed at the subagent model, when supplied. */
+    onBrowseSubagent: (() -> Unit)? = null,
+    /** Whether an API key is currently stored (drives the connection row). */
+    hasKey: Boolean = true,
 ) {
     Column(
         modifier
@@ -88,407 +90,319 @@ fun SettingsScreen(
             .background(colors.bg)
             .imePadding()
             .verticalScroll(rememberScrollState())
-            .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 8.dp, bottom = LumenSpacing.xxl),
+            .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 4.dp, bottom = LumenSpacing.xxl),
     ) {
         LumenTopBar(
             colors = colors,
             title = "Settings",
+            onBack = onBack,
+            backTag = "settings-back",
             titleSize = LumenType.title,
-            actions = {
-                LumenBarAction(colors, "Done", "settings-done", onBack, primary = true)
-            },
         )
-        Spacer(Modifier.height(LumenSpacing.xl))
+        Spacer(Modifier.height(LumenSpacing.lg))
 
-        LumenSectionHeader(colors, "provider", caption = "which API endpoint the agent talks to")
-        Spacer(Modifier.height(LumenSpacing.md))
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            for (p in ProviderCatalogue.choices) {
-                chip(colors, p.second, provider == p.first, "provider-${p.first}") { onProvider(p.first) }
+        // ---- connection ----
+        LumenSectionHeader(colors, "connection")
+        Spacer(Modifier.height(LumenSpacing.sm))
+        SettingsCard(colors) {
+            FieldRow(colors, "provider") {
+                LumenSegmented(
+                    segments = ProviderCatalogue.choices.map {
+                        LumenSegment(it.first, it.second, "provider-${it.first}")
+                    },
+                    selected = provider,
+                    onSelect = onProvider,
+                    colors = colors,
+                )
             }
-        }
-
-        Spacer(Modifier.height(LumenSpacing.xxl))
-        LumenSectionHeader(colors, "model", caption = "the default model for new chats")
-        Spacer(Modifier.height(LumenSpacing.md))
-        val models = ProviderCatalogue.defaultModels(provider)
-        if (models.isEmpty()) {
-            StateHint(
-                colors,
-                "No models configured",
-                detail = "Check the provider or add a key",
-                tag = "models-empty",
-            )
-        }
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            for (m in models) {
-                val ref = "$provider/${m.id}"
-                val selected = model == ref
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(LumenShapes.panel)
-                        .background(if (selected) colors.surface else Color.Transparent)
-                        .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.panel)
-                        .clickable { onModel(ref) }
-                        .padding(horizontal = 14.dp, vertical = 13.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            Modifier
-                                .size(8.dp)
-                                .background(
-                                    if (selected) colors.water else Color.Transparent,
-                                    WaterShapes.droplet(tail = 0.5f),
-                                ),
-                        )
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            m.label ?: m.id,
-                            color = if (selected) colors.fg else colors.dim,
-                            fontFamily = Mono,
-                            fontSize = LumenType.bodyLarge,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    Text(
-                        "${m.contextWindow / 1000}k",
-                        color = colors.faint,
-                        fontFamily = Mono,
-                        fontSize = LumenType.caption,
-                    )
-                }
-            }
-        }
-        if (onBrowseModels != null) {
-            Spacer(Modifier.height(LumenSpacing.md))
-            LumenBarAction(
+            RowDivider(colors)
+            NavRow(
                 colors = colors,
-                label = "Browse all models",
-                tag = "settings-browse-models",
-                onClick = onBrowseModels,
+                label = "api key",
+                value = if (hasKey) "change" else "not set",
+                tag = "edit-key",
+                onClick = onEditKey,
             )
         }
 
-        Spacer(Modifier.height(LumenSpacing.xxl))
-        LumenSectionHeader(
-            colors,
-            "subagent model",
-            caption = "What `task` subagents use; inherit keeps the chat model",
-        )
-        Spacer(Modifier.height(LumenSpacing.md))
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            chip(colors, "inherit", subagentModel.isBlank(), "subagent-inherit") { onSubagentModel("") }
-            for (m in models) {
-                val ref = "$provider/${m.id}"
-                chip(
-                    colors,
-                    m.label ?: m.id,
-                    subagentModel == ref,
-                    "subagent-${m.id}",
-                ) { onSubagentModel(ref) }
-            }
-        }
-
-        Spacer(Modifier.height(LumenSpacing.xxl))
-        LumenSectionHeader(colors, "theme", caption = "light, dark or follow the system")
-        Spacer(Modifier.height(LumenSpacing.md))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            chip(colors, "system", theme == "system", "theme-system") { onTheme("system") }
-            chip(colors, "light", theme == "light", "theme-light") { onTheme("light") }
-            chip(colors, "dark", theme == "dark", "theme-dark") { onTheme("dark") }
-        }
-
+        // ---- model ----
         Spacer(Modifier.height(LumenSpacing.xl))
-        LumenSectionHeader(colors, "palette", caption = "the colour mood of the app")
-        Spacer(Modifier.height(LumenSpacing.md))
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            for (id in LumenColors.PaletteIds) {
-                val label = when (id) {
-                    "ember" -> "Ember"
-                    "phosphor" -> "Phosphor"
-                    "abyss" -> "Abyss"
-                    else -> "Prism"
-                }
-                chip(colors, label, palette == id, "palette-$id") { onPalette(id) }
-            }
+        LumenSectionHeader(colors, "model")
+        Spacer(Modifier.height(LumenSpacing.sm))
+        SettingsCard(colors) {
+            NavRow(
+                colors = colors,
+                label = "default model",
+                value = model.substringAfterLast('/').ifBlank { "none" },
+                tag = "settings-model",
+                onClick = { onBrowseModels?.invoke() ?: onModel(model) },
+                enabled = onBrowseModels != null,
+            )
+            RowDivider(colors)
+            NavRow(
+                colors = colors,
+                label = "subagent model",
+                value = if (subagentModel.isBlank()) "inherit" else subagentModel.substringAfterLast('/'),
+                tag = "settings-subagent-model",
+                onClick = { onBrowseSubagent?.invoke() },
+                enabled = onBrowseSubagent != null,
+            )
         }
 
-        Spacer(Modifier.height(LumenSpacing.xxl))
-        LumenSectionHeader(
-            colors,
-            "agent",
-            caption = "Delegate thinks more and talks less, handing work to subagents",
-        )
-        Spacer(Modifier.height(LumenSpacing.md))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            chip(colors, "build", agentMode == "build", "agent-build") { onAgentMode("build") }
-            chip(colors, "plan", agentMode == "plan", "agent-plan") { onAgentMode("plan") }
-            chip(colors, "delegate", agentMode == "delegate", "agent-delegate") { onAgentMode("delegate") }
-        }
-
-        Spacer(Modifier.height(LumenSpacing.xxl))
-        LumenSectionHeader(
-            colors,
-            "budget",
-            caption = "Stop a session before it spends more than this",
-        )
-        Spacer(Modifier.height(LumenSpacing.md))
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            chip(colors, "off", maxCostUsd <= 0.0, "budget-off") { onMaxCost(0.0) }
-            chip(colors, "\$0.50", maxCostUsd == 0.5, "budget-050") { onMaxCost(0.5) }
-            chip(colors, "\$2", maxCostUsd == 2.0, "budget-2") { onMaxCost(2.0) }
-            chip(colors, "\$5", maxCostUsd == 5.0, "budget-5") { onMaxCost(5.0) }
-        }
-
-        Spacer(Modifier.height(LumenSpacing.xxl))
-        LumenSectionHeader(
-            colors,
-            "context",
-            caption = "Auto-compact at $autoCompactPercent% of the model's context window",
-        )
-        Spacer(Modifier.height(LumenSpacing.md))
-        Slider(
-            value = autoCompactPercent.toFloat(),
-            onValueChange = { onAutoCompactPercent(it.roundToInt()) },
-            valueRange = 50f..95f,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("context-slider"),
-        )
-
-        Spacer(Modifier.height(LumenSpacing.xxl))
-        LumenSectionHeader(colors, "tools", caption = "what the agent may run on its own")
-        Spacer(Modifier.height(LumenSpacing.md))
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clip(LumenShapes.card)
-                .background(colors.surface)
-                .border(1.dp, colors.outline, LumenShapes.card)
-                .clickable { onAskBeforeTools(!askBeforeTools) }
-                .padding(horizontal = 14.dp, vertical = 13.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "ask before tools",
-                    color = colors.fg,
-                    fontFamily = Mono,
-                    fontSize = LumenType.bodyLarge,
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    "Confirm each tool before it runs",
-                    color = colors.dim,
-                    fontFamily = Mono,
-                    fontSize = LumenType.caption,
+        // ---- appearance ----
+        Spacer(Modifier.height(LumenSpacing.xl))
+        LumenSectionHeader(colors, "appearance")
+        Spacer(Modifier.height(LumenSpacing.sm))
+        SettingsCard(colors) {
+            FieldRow(colors, "theme") {
+                LumenSegmented(
+                    segments = listOf(
+                        LumenSegment("system", "system", "theme-system"),
+                        LumenSegment("light", "light", "theme-light"),
+                        LumenSegment("dark", "dark", "theme-dark"),
+                    ),
+                    selected = theme,
+                    onSelect = onTheme,
+                    colors = colors,
                 )
             }
-            Spacer(Modifier.width(12.dp))
-            Switch(
+            RowDivider(colors)
+            FieldRow(colors, "palette") {
+                LumenSegmented(
+                    segments = LumenColors.PaletteIds.map {
+                        LumenSegment(it, paletteLabel(it), "palette-$it")
+                    },
+                    selected = palette,
+                    onSelect = onPalette,
+                    colors = colors,
+                )
+            }
+        }
+
+        // ---- agent ----
+        Spacer(Modifier.height(LumenSpacing.xl))
+        LumenSectionHeader(colors, "agent")
+        Spacer(Modifier.height(LumenSpacing.sm))
+        SettingsCard(colors) {
+            FieldRow(colors, "mode") {
+                LumenSegmented(
+                    segments = listOf(
+                        LumenSegment("build", "build", "agent-build"),
+                        LumenSegment("plan", "plan", "agent-plan"),
+                        LumenSegment("delegate", "delegate", "agent-delegate"),
+                    ),
+                    selected = agentMode,
+                    onSelect = onAgentMode,
+                    colors = colors,
+                )
+            }
+            RowDivider(colors)
+            ToggleRow(
+                colors = colors,
+                label = "ask before tools",
                 checked = askBeforeTools,
                 onCheckedChange = onAskBeforeTools,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = colors.bg,
-                    checkedTrackColor = colors.water,
-                    uncheckedThumbColor = colors.dim,
-                    uncheckedTrackColor = colors.surface,
-                    uncheckedBorderColor = colors.outline,
-                ),
-                modifier = Modifier.testTag("ask-before-tools"),
+                tag = "ask-before-tools",
             )
         }
 
-        Spacer(Modifier.height(LumenSpacing.xxl))
-        LumenSectionHeader(colors, "notifications", caption = "what Lumen tells you when a run ends")
-        Spacer(Modifier.height(LumenSpacing.md))
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clip(LumenShapes.card)
-                .background(colors.surface)
-                .border(1.dp, colors.outline, LumenShapes.card)
-                .clickable { onNotifyOnComplete(!notifyOnComplete) }
-                .padding(horizontal = 14.dp, vertical = 13.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "Notify when a run finishes",
-                    color = colors.fg,
-                    fontFamily = Mono,
-                    fontSize = LumenType.bodyLarge,
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    "A notification when a background run finishes or fails",
-                    color = colors.dim,
-                    fontFamily = Mono,
-                    fontSize = LumenType.caption,
+        // ---- limits ----
+        Spacer(Modifier.height(LumenSpacing.xl))
+        LumenSectionHeader(colors, "limits")
+        Spacer(Modifier.height(LumenSpacing.sm))
+        SettingsCard(colors) {
+            FieldRow(colors, "budget") {
+                LumenSegmented(
+                    segments = listOf(
+                        LumenSegment("off", "unlimited", "budget-off"),
+                        LumenSegment("050", "\$0.50", "budget-050"),
+                        LumenSegment("2", "\$2", "budget-2"),
+                        LumenSegment("5", "\$5", "budget-5"),
+                    ),
+                    selected = budgetValue(maxCostUsd),
+                    onSelect = { onMaxCost(budgetUsd(it)) },
+                    colors = colors,
                 )
             }
-            Spacer(Modifier.width(12.dp))
-            Switch(
+            RowDivider(colors)
+            FieldRow(colors, "auto-compact \u00b7 $autoCompactPercent%") {
+                LumenSlider(
+                    value = autoCompactPercent.toFloat(),
+                    onValueChange = { onAutoCompactPercent(it.roundToInt()) },
+                    colors = colors,
+                    valueRange = 50f..95f,
+                    tag = "context-slider",
+                )
+            }
+        }
+
+        // ---- notifications ----
+        Spacer(Modifier.height(LumenSpacing.xl))
+        LumenSectionHeader(colors, "notifications")
+        Spacer(Modifier.height(LumenSpacing.sm))
+        SettingsCard(colors) {
+            ToggleRow(
+                colors = colors,
+                label = "notify when a run finishes",
                 checked = notifyOnComplete,
                 onCheckedChange = onNotifyOnComplete,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = colors.bg,
-                    checkedTrackColor = colors.water,
-                    uncheckedThumbColor = colors.dim,
-                    uncheckedTrackColor = colors.surface,
-                    uncheckedBorderColor = colors.outline,
-                ),
-                modifier = Modifier.testTag("notify-on-complete"),
+                tag = "notify-on-complete",
             )
         }
 
+        // ---- integrations ----
         if (onGitHub != null) {
-            Spacer(Modifier.height(LumenSpacing.xxl))
-            LumenSectionHeader(colors, "integrations", caption = "connect outside services")
-            Spacer(Modifier.height(LumenSpacing.md))
-            SettingsLink(
-                colors = colors,
-                label = "github",
-                subtitle = if (githubLogin.isBlank()) {
-                    "connect a personal access token"
-                } else {
-                    "connected as $githubLogin"
-                },
-                tag = "settings-github",
-                onClick = onGitHub,
-            )
+            Spacer(Modifier.height(LumenSpacing.xl))
+            LumenSectionHeader(colors, "integrations")
+            Spacer(Modifier.height(LumenSpacing.sm))
+            SettingsCard(colors) {
+                NavRow(
+                    colors = colors,
+                    label = "github",
+                    value = if (githubLogin.isBlank()) "connect" else githubLogin,
+                    tag = "settings-github",
+                    onClick = onGitHub,
+                )
+            }
         }
 
-        Spacer(Modifier.height(LumenSpacing.xxl))
-        LumenSectionHeader(colors, "system", caption = "storage and the linux environment")
-        Spacer(Modifier.height(LumenSpacing.md))
-        SettingsLink(
-            colors,
-            "storage",
-            "what is using space \u00b7 clear safe caches",
-            "settings-storage",
-            onStorage,
-        )
+        // ---- system ----
+        Spacer(Modifier.height(LumenSpacing.xl))
+        LumenSectionHeader(colors, "system")
         Spacer(Modifier.height(LumenSpacing.sm))
-        SettingsLink(
-            colors,
-            "diagnostics",
-            "linux environment \u00b7 event log",
-            "settings-diagnostics",
-            onDiagnostics,
-        )
-
-        Spacer(Modifier.height(LumenSpacing.xxl))
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .clip(LumenShapes.pill)
-                .background(colors.surface)
-                .border(1.dp, colors.outline, LumenShapes.pill)
-                .clickable { onEditKey() }
-                .padding(vertical = 15.dp)
-                .testTag("edit-key"),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                "Change API key",
-                color = colors.dim,
-                fontFamily = Mono,
-                fontSize = LumenType.bodyLarge,
-            )
+        SettingsCard(colors) {
+            NavRow(colors, "storage", "space \u00b7 caches", "settings-storage", onStorage)
+            RowDivider(colors)
+            NavRow(colors, "diagnostics", "environment \u00b7 log", "settings-diagnostics", onDiagnostics)
         }
     }
 }
 
+/** A grouped card: one surface with a hairline boundary holding sibling rows. */
 @Composable
-private fun SettingsLink(
-    colors: LumenColors,
-    label: String,
-    subtitle: String,
-    tag: String,
-    onClick: () -> Unit,
-) {
-    Row(
+private fun SettingsCard(colors: LumenColors, content: @Composable ColumnScope.() -> Unit) {
+    Column(
         Modifier
             .fillMaxWidth()
             .clip(LumenShapes.card)
             .background(colors.surface)
-            .border(1.dp, colors.outline, LumenShapes.card)
-            .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 13.dp)
+            .border(1.dp, colors.outline, LumenShapes.card),
+        content = content,
+    )
+}
+
+@Composable
+private fun RowDivider(colors: LumenColors) {
+    Box(Modifier.fillMaxWidth().height(1.dp).background(colors.outline.copy(alpha = 0.6f)))
+}
+
+/** A navigational row: label left, mono value + chevron right. */
+@Composable
+private fun NavRow(
+    colors: LumenColors,
+    label: String,
+    value: String,
+    tag: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 14.dp, vertical = 14.dp)
             .testTag(tag),
-        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                label,
-                color = colors.fg,
-                fontFamily = Mono,
-                fontSize = LumenType.bodyLarge,
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                subtitle,
-                color = colors.dim,
-                fontFamily = Mono,
-                fontSize = LumenType.caption,
-            )
-        }
         Text(
-            "\u203a",
-            color = colors.accent,
-            fontFamily = Mono,
-            fontSize = 20.sp,
+            label,
+            color = colors.fg,
+            fontFamily = LumenFonts.label,
+            fontSize = LumenType.bodyLarge,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            value,
+            color = colors.dim,
+            fontFamily = LumenFonts.value,
+            fontSize = LumenType.body,
+            maxLines = 1,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text("\u203a", color = colors.accent, fontFamily = LumenFonts.value, fontSize = 20.sp)
+    }
+}
+
+/** A toggle row: label left, themed switch right. */
+@Composable
+private fun ToggleRow(
+    colors: LumenColors,
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    tag: String,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            color = colors.fg,
+            fontFamily = LumenFonts.label,
+            fontSize = LumenType.bodyLarge,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(12.dp))
+        LumenSwitch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = colors,
+            tag = tag,
         )
     }
 }
 
+/** A labelled control row inside a card: small label above, control below. */
 @Composable
-private fun chip(
-    colors: LumenColors,
-    text: String,
-    selected: Boolean,
-    tag: String,
-    onClick: () -> Unit,
-) {
-    Text(
-        text,
-        color = if (selected) colors.fg else colors.dim,
-        fontFamily = Mono,
-        fontSize = LumenType.body,
-        modifier = Modifier
-            .heightIn(min = LumenSize.touchMin)
-            .clip(LumenShapes.inset)
-            .background(if (selected) colors.surface else Color.Transparent)
-            .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.inset)
-            .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 9.dp)
-            .testTag(tag),
-    )
+private fun FieldRow(colors: LumenColors, label: String, content: @Composable () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        Text(
+            label,
+            color = colors.dim,
+            fontFamily = LumenFonts.label,
+            fontSize = LumenType.caption,
+            fontWeight = FontWeight.Normal,
+        )
+        Spacer(Modifier.height(LumenSpacing.sm))
+        content()
+    }
+}
+
+private fun paletteLabel(id: String): String = when (id) {
+    "ember" -> "ember"
+    "phosphor" -> "phosphor"
+    "abyss" -> "abyss"
+    else -> "prism"
+}
+
+private fun budgetValue(maxCostUsd: Double): String = when {
+    maxCostUsd <= 0.0 -> "off"
+    maxCostUsd == 0.5 -> "050"
+    maxCostUsd == 2.0 -> "2"
+    maxCostUsd == 5.0 -> "5"
+    else -> "off"
+}
+
+private fun budgetUsd(segment: String): Double = when (segment) {
+    "050" -> 0.5
+    "2" -> 2.0
+    "5" -> 5.0
+    else -> 0.0
 }

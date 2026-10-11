@@ -133,6 +133,20 @@ class KeyStore(context: Context) {
         get() = prefs.getBoolean("onboarded", false)
         set(value) = prefs.edit().putBoolean("onboarded", value).apply()
 
+    /**
+     * Starred model refs as `<provider>/<model id>`. Stored full because bare
+     * ids collide across providers and may themselves contain a slash.
+     */
+    var favoriteModels: Set<String>
+        get() = refList("favoriteModels").toSet()
+        set(value) = writeRefList("favoriteModels", value.toList().takeLast(MAX_FAVORITE_MODELS))
+
+    /** Most-recently-used model refs, newest first, capped so it stays a shortcut. */
+    var recentModels: List<String>
+        get() = refList("recentModels")
+        set(value) =
+            writeRefList("recentModels", value.distinct().take(MAX_RECENT_MODELS))
+
     /** True when the user granted shared Downloads access to the sandbox. */
     var downloadsAccess: Boolean
         get() = prefs.getBoolean("downloadsAccess", false)
@@ -196,6 +210,20 @@ class KeyStore(context: Context) {
 
     val hasKey: Boolean get() = !apiKey.isNullOrBlank()
 
+    /** Read a delimited list of model refs, preserving order. */
+    private fun refList(key: String): List<String> =
+        prefs.getString(key, null)
+            ?.split(PATTERN_DELIM)
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?: emptyList()
+
+    /** Write a delimited list of model refs. */
+    private fun writeRefList(key: String, value: List<String>) {
+        val clean = value.map { it.trim() }.filter { it.isNotEmpty() }
+        prefs.edit().putString(key, clean.joinToString(PATTERN_DELIM)).apply()
+    }
+
     /** True when a GitHub token has been stored (and can be decrypted). */
     val hasGithubToken: Boolean get() = !githubToken.isNullOrBlank()
 
@@ -207,6 +235,12 @@ class KeyStore(context: Context) {
 
         /** Most remembered "always allow" scope keys retained; oldest drop first. */
         const val MAX_ALLOWED_PATTERNS = 200
+
+        /** Cap on starred models so the favourites row stays a shortcut. */
+        const val MAX_FAVORITE_MODELS = 50
+
+        /** Cap on recently used models. */
+        const val MAX_RECENT_MODELS = 6
 
         /**
          * The model id is `<provider>/<model id>`. OpenRouter model ids may
