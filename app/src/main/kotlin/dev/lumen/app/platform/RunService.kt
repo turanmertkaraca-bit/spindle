@@ -37,6 +37,10 @@ class RunService : Service() {
     @Volatile
     private var wakeLock: PowerManager.WakeLock? = null
 
+    /** The active run's session title, so progress updates keep a name in the shade. */
+    @Volatile
+    private var currentTitle: String = "Lumen"
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -48,8 +52,8 @@ class RunService : Service() {
         when (intent?.action) {
             ACTION_STOP -> stopRun()
             ACTION_START -> {
-                val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "running" }
-                show(notification(title))
+                currentTitle = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "Lumen" }
+                show(notification("starting\u2026"))
             }
             ACTION_UPDATE -> {
                 val text = intent.getStringExtra(EXTRA_TEXT).orEmpty().ifBlank { "running" }
@@ -115,11 +119,12 @@ class RunService : Service() {
 
     private fun notification(text: String): Notification =
         NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(NOTIFICATION_TITLE)
+            .setContentTitle(currentTitle)
             .setContentText(text)
-            .setSmallIcon(SMALL_ICON)
+            .setSmallIcon(R.drawable.ic_launcher_monochrome)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(openAppIntent())
             .addAction(0, "Stop", stopIntent())
@@ -168,7 +173,6 @@ class RunService : Service() {
         private const val CHANNEL_ID = "lumen-run"
         private const val CHANNEL_NAME = "Agent runs"
         private const val NOTIFICATION_ID = 4711
-        private const val NOTIFICATION_TITLE = "Lumen"
         private const val WAKE_LOCK_TAG = "lumen:run"
 
         /** Result channels are created on demand, one per outcome/sound. */
@@ -177,19 +181,12 @@ class RunService : Service() {
         private const val CHANNEL_NAME_DONE = "Run finished"
         private const val CHANNEL_NAME_ERROR = "Run failed"
 
-        /** Title-only result notifications: never carry agent output. */
-        private const val NOTIFICATION_TITLE_DONE = "Run finished"
-        private const val NOTIFICATION_TITLE_FAILED = "Run failed"
-
         internal const val ACTION_START = "dev.lumen.app.action.RUN_START"
         internal const val ACTION_UPDATE = "dev.lumen.app.action.RUN_UPDATE"
         internal const val ACTION_STOP = "dev.lumen.app.action.RUN_STOP"
         internal const val EXTRA_SESSION_ID = "sessionId"
         internal const val EXTRA_TITLE = "title"
         internal const val EXTRA_TEXT = "text"
-
-        /** No custom art in the repo, so fall back to a system drawable. */
-        private val SMALL_ICON = android.R.drawable.stat_sys_download
 
         /** Begin (or re-assert) the foreground run notification. */
         fun start(context: Context, sessionId: String, title: String) {
@@ -220,11 +217,12 @@ class RunService : Service() {
         }
 
         /**
-         * Post a title-only notification when a run ends on its own: "Run
-         * finished" on success or "Run failed" when the run ended in error. No
-         * body text is ever attached (agent output is long and reads badly in
-         * the shade). Tapping it opens [MainActivity] at [sessionId] via
-         * [EXTRA_SESSION_ID].
+         * Post a result notification when a run ends on its own. The session
+         * title is the headline and the outcome (plus how long it ran) is the
+         * body, so a shade full of runs is scannable instead of a stack of
+         * identical "Run finished" rows. Agent output is never attached — it is
+         * long and reads badly in the shade. Tapping it opens [MainActivity] at
+         * [sessionId] via [EXTRA_SESSION_ID].
          *
          * The error outcome uses a distinct channel whose sound is the bundled
          * [R.raw.error_dong] water-drop, so a failure is audibly different from a
@@ -232,20 +230,28 @@ class RunService : Service() {
          * [ensureChannel] so an install that never finishes a run never creates
          * them. Best-effort: a missing notification permission degrades to a
          * no-op instead of crashing the process that just finished a run.
-         *
-         * [title] is the session title, carried only as the (non-body) ticker so
-         * the notification itself stays title-only.
          */
-        fun notifyComplete(context: Context, sessionId: String, title: String, failed: Boolean) {
+        fun notifyComplete(
+            context: Context,
+            sessionId: String,
+            title: String,
+            failed: Boolean,
+            durationMs: Long? = null,
+        ) {
             runCatching {
                 val manager = context.getSystemService(NotificationManager::class.java) ?: return
                 ensureResultChannel(context, manager, failed)
                 val channelId = if (failed) CHANNEL_ID_ERROR else CHANNEL_ID_DONE
+                val outcome = if (failed) "run failed" else "run finished"
+                val body = durationLabel(durationMs)?.let { "$outcome \u00b7 $it" } ?: outcome
                 val notification = NotificationCompat.Builder(context, channelId)
-                    .setContentTitle(if (failed) NOTIFICATION_TITLE_FAILED else NOTIFICATION_TITLE_DONE)
-                    .setSmallIcon(SMALL_ICON)
+                    .setContentTitle(title.ifBlank { "Lumen" })
+                    .setContentText(body)
+                    .setSmallIcon(R.drawable.ic_launcher_monochrome)
                     .setContentIntent(sessionIntent(context, sessionId))
-                    .setTicker(title)
+                    .setTicker("$title \u2014 $outcome")
+                    .setCategory(NotificationCompat.CATEGORY_STATUS)
+                    .setShowWhen(true)
                     .setAutoCancel(true)
                     .setOnlyAlertOnce(false)
                     .setPriority(NotificationCompat.PRIORITY_DEFAULT)
@@ -258,6 +264,15 @@ class RunService : Service() {
                     .build()
                 manager.notify(resultNotificationId(sessionId), notification)
             }
+        }
+
+        /** "2m 10s" / "45s" / null when the run time is unknown or negligible. */
+        private fun durationLabel(durationMs: Long?): String? {
+            if (durationMs == null || durationMs < 1_000) return null
+            val totalSeconds = durationMs / 1_000
+            val minutes = totalSeconds / 60
+            val seconds = totalSeconds % 60
+            return if (minutes > 0) "${minutes}m ${seconds}s" else "${seconds}s"
         }
 
         /** Tap target that opens the app at [sessionId] (singleTask -> onNewIntent). */

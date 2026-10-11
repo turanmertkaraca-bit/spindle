@@ -426,6 +426,9 @@ class ChatViewModel(
 
     private var runJob: Job? = null
 
+    /** Wall-clock start of the current run, for the completion notification's duration. */
+    private var runStartedAt: Long = 0L
+
     /** Auto-dismiss timer for the current revert-undo banner. */
     private var revertUndoExpiry: Job? = null
 
@@ -2871,6 +2874,7 @@ class ChatViewModel(
 
         val generation = ++runGeneration
         completionSuppressed = false
+        runStartedAt = System.currentTimeMillis()
         runningSessionId = currentId
         runningSessions?.add(currentId)
         syncRunningSessions()
@@ -2974,7 +2978,8 @@ class ChatViewModel(
                             val failed = _state.value.error != null
                             val title = runCatching { store.session(sid)?.title }
                                 .getOrNull().orEmpty().ifBlank { "Lumen run" }
-                            runCatching { RunService.notifyComplete(ctx, sid.value, title, failed) }
+                            val duration = (System.currentTimeMillis() - runStartedAt).takeIf { it > 0 }
+                            runCatching { RunService.notifyComplete(ctx, sid.value, title, failed, duration) }
                         }
                     }
                 }

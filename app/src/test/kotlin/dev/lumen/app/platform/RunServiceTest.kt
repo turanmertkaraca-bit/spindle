@@ -68,8 +68,8 @@ class RunServiceTest {
             .putExtra(RunService.EXTRA_TITLE, "working")
 
     @Test
-    fun `completion notifications are title-only with distinct channels`() {
-        RunService.notifyComplete(context, "session-done", "my chat", failed = false)
+    fun `completion notifications name the session and its outcome`() {
+        RunService.notifyComplete(context, "session-done", "my chat", failed = false, durationMs = 95_000)
         RunService.notifyComplete(context, "session-fail", "my chat", failed = true)
 
         val manager = assertNotNull(context.getSystemService(NotificationManager::class.java))
@@ -89,12 +89,9 @@ class RunServiceTest {
 
         val posted = shadowOf(manager).allNotifications
         assertEquals(2, posted.size, "one notification per finished session")
-        val failed = posted.first {
-            it.extras.getString(Notification.EXTRA_TITLE) == "Run failed"
-        }
-        assertNull(
-            failed.extras.getCharSequence(Notification.EXTRA_TEXT),
-            "the result notification must never carry a body",
-        )
+        val failed = posted.first { it.extras.getString(Notification.EXTRA_TEXT) == "run failed" }
+        assertEquals("my chat", failed.extras.getString(Notification.EXTRA_TITLE))
+        val done = posted.first { it.extras.getString(Notification.EXTRA_TEXT) == "run finished \u00b7 1m 35s" }
+        assertEquals("my chat", done.extras.getString(Notification.EXTRA_TITLE))
     }
 }
