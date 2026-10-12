@@ -58,6 +58,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -470,6 +471,8 @@ fun LumenChatScreen(
     pickerModels: List<ModelInfo> = emptyList(),
     /** True while the picker sheet's catalogue refresh is in flight. */
     pickerRefreshing: Boolean = false,
+    /** True while the composer's model catalogue is loading; its chip spins. */
+    catalogueLoading: Boolean = false,
     /** Starred model refs, pinned on top of the picker sheet. */
     favoriteModels: Set<String> = emptySet(),
     /** Recently used model refs, under favourites in the picker sheet. */
@@ -760,6 +763,7 @@ fun LumenChatScreen(
                 input, busy, colors, onInput, onSend, onStop, onToggleTheme, onEditKey, agentMode, onAgentMode,
                 model = model,
                 onModel = onModel,
+                catalogueLoading = catalogueLoading,
                 onQuickSettings = onQuickSettings,
                 onOpenModels = onOpenModels,
                 attachments = attachments,
@@ -2487,6 +2491,7 @@ private fun Composer(
     onAgentMode: (String) -> Unit,
     model: String = "",
     onModel: (() -> Unit)? = null,
+    catalogueLoading: Boolean = false,
     onQuickSettings: (() -> Unit)? = null,
     onOpenModels: (() -> Unit)? = null,
     attachments: List<PendingImage> = emptyList(),
@@ -2599,7 +2604,7 @@ private fun Composer(
                         Spacer(Modifier.width(5.dp))
                         // Tapping the model opens the full picker when wired;
                         // otherwise it keeps the historical picker + quick sheet.
-                        ModelChip(modelLabel, colors) {
+                        ModelChip(modelLabel, colors, catalogueLoading) {
                             if (onOpenModels != null) {
                                 onOpenModels()
                             } else {
@@ -2731,7 +2736,7 @@ private fun ComposerControl(
  * picker). Kept dim so the send circle stays the loudest control in the row.
  */
 @Composable
-private fun ModelChip(label: String, colors: LumenColors, onClick: () -> Unit) {
+private fun ModelChip(label: String, colors: LumenColors, loading: Boolean = false, onClick: () -> Unit) {
     Box(
         Modifier
             .heightIn(min = 34.dp)
@@ -2744,11 +2749,21 @@ private fun ModelChip(label: String, colors: LumenColors, onClick: () -> Unit) {
             .testTag("model-chip"),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            label,
-            color = colors.dim, fontFamily = Mono, fontSize = 10.5.sp, fontWeight = FontWeight.Medium,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (loading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(11.dp),
+                    color = colors.water,
+                    strokeWidth = 1.4.dp,
+                )
+                Spacer(Modifier.width(5.dp))
+            }
+            Text(
+                label,
+                color = colors.dim, fontFamily = Mono, fontSize = 10.5.sp, fontWeight = FontWeight.Medium,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 

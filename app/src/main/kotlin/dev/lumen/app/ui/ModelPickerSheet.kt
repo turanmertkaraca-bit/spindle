@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -59,18 +62,30 @@ internal fun ModelPickerSheet(
                 fontWeight = FontWeight.Medium,
             )
             Spacer(Modifier.weight(1f))
-            Text(
-                if (refreshing) "refreshing" else "refresh",
-                color = colors.accent,
-                fontFamily = LumenFonts.label,
-                fontSize = LumenType.body,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier
+            Row(
+                Modifier
                     .clip(LumenShapes.small)
                     .clickable(enabled = !refreshing) { onRefresh() }
                     .padding(horizontal = 8.dp, vertical = 6.dp)
                     .testTag("model-sheet-refresh"),
-            )
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (refreshing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        color = colors.accent,
+                        strokeWidth = 1.5.dp,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(
+                    if (refreshing) "refreshing" else "refresh",
+                    color = colors.accent,
+                    fontFamily = LumenFonts.label,
+                    fontSize = LumenType.body,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
         }
         Spacer(Modifier.height(LumenSpacing.md))
 
@@ -104,19 +119,36 @@ internal fun ModelPickerSheet(
 
         LumenSectionHeader(colors, "all models")
         Spacer(Modifier.height(LumenSpacing.sm))
-        for (m in models) {
-            val ref = "$provider/${m.id}"
-            ModelRow(
-                colors,
-                modelRowData(provider, m).copy(
-                    tag = if (selected == ref) "sheet-model-selected-${m.id}" else "sheet-model-${m.id}",
-                ),
-                selected = selected == ref,
-                favorite = ref in favorites,
-                onSelect = onSelect,
-                onToggleFavorite = onToggleFavorite,
-            )
-            Spacer(Modifier.height(LumenSpacing.sm))
+        when {
+            models.isEmpty() && refreshing -> {
+                LumenLoading(colors, "loading\u2026", tag = "model-sheet-loading")
+                Spacer(Modifier.height(LumenSpacing.sm))
+            }
+            models.isEmpty() -> {
+                Text(
+                    "no models",
+                    color = colors.faint,
+                    fontFamily = LumenFonts.label,
+                    fontSize = LumenType.caption,
+                )
+                Spacer(Modifier.height(LumenSpacing.sm))
+            }
+            else -> {
+                for (m in models) {
+                    val ref = "$provider/${m.id}"
+                    ModelRow(
+                        colors,
+                        modelRowData(provider, m).copy(
+                            tag = if (selected == ref) "sheet-model-selected-${m.id}" else "sheet-model-${m.id}",
+                        ),
+                        selected = selected == ref,
+                        favorite = ref in favorites,
+                        onSelect = onSelect,
+                        onToggleFavorite = onToggleFavorite,
+                    )
+                    Spacer(Modifier.height(LumenSpacing.sm))
+                }
+            }
         }
 
         Spacer(Modifier.height(LumenSpacing.sm))

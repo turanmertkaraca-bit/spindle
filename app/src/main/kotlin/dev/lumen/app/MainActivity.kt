@@ -2,8 +2,10 @@ package dev.lumen.app
 
 import android.Manifest
 import android.app.Activity
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.PowerManager
@@ -82,6 +84,11 @@ class MainActivity : ComponentActivity() {
                 else -> systemDark
             }
             val colors = animatedColors(state.palette, dark)
+            val versionName = remember {
+                runCatching {
+                    packageManager.getPackageInfo(packageName, 0).versionName
+                }.getOrNull().orEmpty()
+            }
             val toggleTheme = { viewModel.setTheme(if (dark) "light" else "dark") }
 
             // Keep the system bar icons legible against our own background.
@@ -200,9 +207,13 @@ class MainActivity : ComponentActivity() {
             // Pull the live catalogue once on start; the embedded snapshot is
             // already seeded in state so the UI is never empty offline.
             LaunchedEffect(Unit) { viewModel.refreshModels() }
+            // Keep the launcher icon in step with the chosen palette (the icon
+            // tracks the theme, never a separate picker).
+            LaunchedEffect(state.palette) { syncLauncherAlias(state.palette) }
             // Boot housekeeping once per launch; idempotent and never fatal.
+            // The staged progress keeps the boot screen honest on a slow start.
             LaunchedEffect(Unit) {
-                bootMessage = viewModel.runStartupMaintenance()
+                bootMessage = viewModel.runStartupMaintenance { bootMessage = it }
                 booted = true
             }
 
@@ -270,6 +281,9 @@ class MainActivity : ComponentActivity() {
                         route = "home"
                     },
                     modifier = modifier,
+                    palette = state.palette,
+                    onPalette = { viewModel.setPalette(it) },
+                    versionName = versionName,
                 )
             } else {
                 val screenKey = if (onChat) "chat:${state.currentSessionId}" else route
@@ -389,6 +403,7 @@ class MainActivity : ComponentActivity() {
                     onCloseModelPicker = { modelPicker = false },
                     pickerModels = state.models,
                     pickerRefreshing = state.modelsRefreshing,
+                    catalogueLoading = state.modelsRefreshing,
                     favoriteModels = state.favoriteModels,
                     recentModels = state.recentModels,
                     onToggleFavorite = viewModel::toggleFavorite,
@@ -534,6 +549,7 @@ class MainActivity : ComponentActivity() {
                     hasKey = !state.needsKey,
                     onBrowseModels = { modelsTarget = "default"; modelsReturn = "settings"; route = "models" },
                     onBrowseSubagent = { modelsTarget = "subagent"; modelsReturn = "settings"; route = "models" },
+                    modelsLoading = state.modelsRefreshing,
                 )
                 route == "key" -> KeyScreen(
                     colors = colors,
@@ -632,6 +648,32 @@ class MainActivity : ComponentActivity() {
      * clears a possibly wedged `busy` from the store. Read-only and a no-op
      * when no chat is open.
      */
+    /**
+     * Point the launcher icon at the palette's activity-alias. Android only lets
+     * an app change its home-screen icon by toggling the enabled alias, so keep
+     * exactly one enabled and switch the rest off. Best-effort and idempotent:
+     * a launcher that caches the icon simply updates on its next refresh.
+     */
+    private fun syncLauncherAlias(palette: String) {
+        val target = LAUNCHER_ALIASES[palette] ?: LAUNCHER_ALIASES.getValue("abyss")
+        for (alias in LAUNCHER_ALIASES.values) {
+            val component = ComponentName(this, alias)
+            val wanted = if (alias == target) {
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+            } else {
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+            }
+            if (packageManager.getComponentEnabledSetting(component) == wanted) continue
+            runCatching {
+                packageManager.setComponentEnabledSetting(
+                    component,
+                    wanted,
+                    PackageManager.DONT_KILL_APP,
+                )
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         viewModel.reconcileOpenSession()
@@ -659,6 +701,14 @@ class MainActivity : ComponentActivity() {
         pendingSessionId = id
     }
 }
+
+/** Palette id -> launcher activity-alias that carries that palette's icon. */
+private val LAUNCHER_ALIASES = mapOf(
+    "prism" to "dev.lumen.app.LauncherPrism",
+    "ember" to "dev.lumen.app.LauncherEmber",
+    "phosphor" to "dev.lumen.app.LauncherPhosphor",
+    "abyss" to "dev.lumen.app.LauncherAbyss",
+)
 
 /** A filesystem-safe `lumen-<title>.json` name for the document picker. */
 private fun archiveFileName(title: String): String {

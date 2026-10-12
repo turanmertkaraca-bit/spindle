@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Environment
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.lumen.app.data.AndroidSessionStore
 import dev.lumen.app.data.KeyStore
 import dev.lumen.app.data.ModelCatalogue
 import dev.lumen.app.data.ProviderCatalogue
@@ -719,19 +720,104 @@ class ChatViewModel(
     }
 
     /**
-     * Launch housekeeping shown on the boot screen: prune sandbox temp/partial
-     * files. Best-effort and idempotent; resolves to a short status string.
+     * The one staged self-maintenance pass, run once on every boot. Each stage
+     * is best-effort and idempotent (one failure never aborts the rest), and
+     * [onProgress] is told a short label before each so the boot screen can
+     * narrate progress. The final string is a short status ("ready" or
+     * "reclaimed N KiB" when a stage freed bytes).
+     *
+     * Stages: repair stale RUNNING sessions, prune local history, compact the
+     * database, clear regenerable caches (tool-output spill + quarantined DB
+     * copies), prune sandbox temp/part files, and refresh the environment. The
+     * live catalogue refresh is deliberately left to its existing path
+     * ([refreshModels]/[ModelCatalogue]); this pass never dials the network on
+     * its own.
      */
-    suspend fun runStartupMaintenance(): String {
-        refreshLinuxEnvironment()
-        val env = debian ?: return "environment ready"
-        return try {
-            env.maintenance()
+    suspend fun runStartupMaintenance(onProgress: (String) -> Unit = {}): String {
+        onProgress("recovering runs…")
+        stage { RunRecovery.reconcile(store, runningSessions ?: emptySet()) }
+
+        onProgress("pruning history…")
+        stage { store.prune(keepSessions = KEEP_SESSIONS) }
+        // Subagent sweep is a concrete-store refinement, absent on the in-memory
+        // and headless stores a test or alternate host may pass.
+        stage { (store as? AndroidSessionStore)?.sweepSubagentSessions(SUBAGENT_TTL_MS) }
+
+        onProgress("compacting database…")
+        stage { snapshots?.pruneBounded() }
+        stage { store.maintain() }
+
+        onProgress("cleaning caches…")
+        val reclaimed = try {
+            cleanStartupCaches()
         } catch (e: CancellationException) {
             throw e
-        } catch (t: Throwable) {
-            "environment ready"
+        } catch (_: Throwable) {
+            0L
         }
+
+        onProgress("pruning sandbox…")
+        val sandbox = try {
+            debian?.maintenance()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            null
+        }
+
+        onProgress("refreshing models…")
+        stage { refreshLinuxEnvironment() }
+
+        return when {
+            reclaimed > 0 -> "reclaimed ${reclaimed / 1024} KiB"
+            !sandbox.isNullOrBlank() && sandbox != ENVIRONMENT_READY -> sandbox
+            else -> "ready"
+        }
+    }
+
+    /**
+     * Run one best-effort maintenance stage. A failure is swallowed so the next
+     * stage still runs, but cancellation is rethrown so a torn-down boot screen
+     * stops the sequence instead of finishing it invisibly.
+     */
+    private suspend fun stage(block: suspend () -> Unit) {
+        // Every stage is best-effort: one failure must not abort the rest. A
+        // cancellation, though, is a real teardown and must still propagate.
+        runCatching { block() }.onFailure { if (it is CancellationException) throw it }
+    }
+
+    /**
+     * Delete the regenerable boot caches and return the bytes reclaimed: the
+     * truncated-tool-output spill directory under the workspace, and stale
+     * `.corrupt-<ts>` quarantine copies of the app database. The quarantine
+     * pattern requires the suffix, so it can never match the live `lumen.db`,
+     * its `-wal` or its `-shm`.
+     */
+    private suspend fun cleanStartupCaches(): Long = withContext(io) {
+        var freed = 0L
+        val deadline = System.currentTimeMillis() + SCAN_BUDGET_MS
+
+        val spill = workspace.resolve(SPILL_DIR).toFile()
+        spill.listFiles()?.forEach { child ->
+            freed += sizeOf(child, deadline)
+            deleteTree(child)
+        }
+
+        context?.let { ctx ->
+            val dirs = buildList {
+                ctx.getDatabasePath(DB_NAME).parentFile?.let { add(it) }
+                add(ctx.filesDir)
+            }
+            for (dir in dirs) {
+                dir.listFiles()?.forEach { file ->
+                    if (file.isFile && DB_QUARANTINE.matches(file.name)) {
+                        val size = file.length()
+                        if (file.delete()) freed += size
+                    }
+                }
+            }
+        }
+        freed
     }
 
     /**
@@ -3085,6 +3171,28 @@ class ChatViewModel(
 
         /** Most tags one session may carry; further adds are ignored. */
         const val MAX_TAGS_PER_SESSION = 10
+
+        /** Sessions retained (newest first) by the boot maintenance pass. */
+        private const val KEEP_SESSIONS = 100
+
+        /** Hidden subagent children older than a day are swept on boot. */
+        private const val SUBAGENT_TTL_MS = 24L * 60L * 60L * 1_000L
+
+        /** Over-cap tool output spilled under `<workspace>/.spindle/truncated/`. */
+        private const val SPILL_DIR = ".spindle/truncated"
+
+        /** The shared app database's filename (see AndroidDatabase). */
+        private const val DB_NAME = "lumen.db"
+
+        /**
+         * Quarantined copies of [DB_NAME] renamed by AndroidDatabase on a failed
+         * open. The `.corrupt-<ts>` suffix is mandatory, so the live database and
+         * its WAL/SHM sidecars can never match.
+         */
+        private val DB_QUARANTINE = Regex("""^lumen\.db(?:-wal|-shm)?\.corrupt-\d+$""")
+
+        /** The Debian maintenance "nothing to reclaim" status, filtered from the summary. */
+        private const val ENVIRONMENT_READY = "environment ready"
 
         /** Storage scan budget, shared across every measured tree. */
         private const val SCAN_BUDGET_MS = 20_000L

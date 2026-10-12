@@ -48,16 +48,40 @@ class GitRunner(
     suspend fun isInstalled(): Boolean = probe().installed
 
     /**
-     * Install git via the sandbox package manager when the environment layer is
-     * present. Returns [GitResult.Failed] with a readable message otherwise.
+     * Install git in whichever sandbox userland is active. The old code always
+     * ran the Alpine `pkg` front-end, which does not exist on a Debian guest
+     * (its shell is bash/apt), so the button failed with
+     * "pkg: command not found". Detect the active package manager first:
+     * `apt-get` on Debian, `pkg` (the apk front-end) on Alpine; anything else is
+     * a clear "no sandbox" failure instead of a cryptic shell error.
      */
     suspend fun installGit(): GitResult {
         ensureWorkspace()
-        val result = shell.run("pkg install git", workspace, INSTALL_TIMEOUT_MS)
+        val detection = shell.run(
+            "if command -v apt-get >/dev/null 2>&1; then echo debian; " +
+                "elif command -v pkg >/dev/null 2>&1; then echo alpine; " +
+                "else echo none; fi",
+            workspace,
+            PROBE_TIMEOUT_MS,
+        )
+        val manager = detection.output.lineSequence()
+            .map { it.trim() }
+            .lastOrNull { it.isNotEmpty() }
+            .orEmpty()
+        val command = when (manager) {
+            "debian" -> "DEBIAN_FRONTEND=noninteractive apt-get update -qq || true; " +
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y git"
+            "alpine" -> "pkg install git"
+            else -> return GitResult.Failed(
+                -1,
+                "no sandbox package manager found - install the Linux sandbox first",
+            )
+        }
+        val result = shell.run(command, workspace, INSTALL_TIMEOUT_MS)
         return if (result.exitCode == 0) {
             GitResult.Ok(result.output.trim().ifBlank { "git installed" })
         } else {
-            GitResult.Failed(result.exitCode, result.output.trim().ifBlank { "package manager unavailable" })
+            GitResult.Failed(result.exitCode, result.output.trim().ifBlank { "could not install git" })
         }
     }
 

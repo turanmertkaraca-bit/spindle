@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.dp
@@ -129,5 +130,28 @@ class ModelPickerScreenTest {
         compose.onNodeWithTag("models-provider-openrouter").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         assertEquals("openrouter", provider)
+    }
+
+    @Test
+    fun `a refresh with no models shows loading, never an empty state`() {
+        compose.setContent {
+            ModelPickerScreen(
+                colors = LumenColors.Dark,
+                provider = "deepseek",
+                models = emptyList(),
+                selected = "deepseek/alpha",
+                refreshing = true,
+                error = null,
+                onProvider = {},
+                onSelect = {},
+                onRefresh = {},
+                onBack = {},
+                modifier = viewport,
+            )
+        }
+        compose.onNodeWithTag("models-loading").assertExists()
+        check(compose.onAllNodesWithTag("models-empty").fetchSemanticsNodes().isEmpty()) {
+            "an empty state must never render while a refresh is in flight"
+        }
     }
 }

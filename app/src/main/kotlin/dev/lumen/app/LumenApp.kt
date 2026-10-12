@@ -53,20 +53,25 @@ class LumenApp : Application() {
     }
 
     /**
-     * Bounded retention, run once at startup and then on a slow cadence. Local
-     * history and whole-file snapshots must not grow without limit, and FTS/WAL
-     * housekeeping should happen even when no run reaches its end boundary.
+     * Bounded retention on a slow cadence. Local history and whole-file
+     * snapshots must not grow without limit, and FTS/WAL housekeeping should
+     * happen even when no run reaches its end boundary.
+     *
+     * This is the periodic backstop only: the staged boot sequence
+     * ([ChatViewModel.runStartupMaintenance]) performs the same pass once at
+     * launch, so the loop waits a full interval before its first pass instead of
+     * racing it at startup.
      *
      * Every step is individually best-effort: a failed prune must never crash the
      * process, so each call is wrapped in [runCatching].
      */
     private suspend fun retentionJanitor() {
         while (true) {
+            delay(JANITOR_INTERVAL_MS)
             runCatching { container.store.prune(keepSessions = KEEP_SESSIONS) }
             runCatching { container.store.sweepSubagentSessions(SUBAGENT_TTL_MS) }
             runCatching { container.snapshots.pruneBounded() }
             runCatching { container.store.maintain() }
-            delay(JANITOR_INTERVAL_MS)
         }
     }
 

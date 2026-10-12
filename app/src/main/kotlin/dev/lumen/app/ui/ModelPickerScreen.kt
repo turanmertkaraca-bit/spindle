@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -228,6 +229,16 @@ fun ModelPickerScreen(
             }
         }
 
+        // A refresh over an already-populated list still needs to be visible: a
+        // slim spectral bar under the provider row, rather than a silent swap.
+        if (refreshing && models.isNotEmpty()) {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                color = colors.water,
+                trackColor = Color.Transparent,
+            )
+        }
+
         if (error != null && models.isEmpty()) {
             Spacer(Modifier.height(LumenSpacing.md))
             Text(
@@ -249,12 +260,16 @@ fun ModelPickerScreen(
                 Modifier.fillMaxWidth().padding(top = LumenSpacing.xxl),
                 contentAlignment = Alignment.Center,
             ) {
-                StateHint(
-                    colors,
-                    "No models available",
-                    detail = "Refresh or check the provider key",
-                    tag = "models-empty",
-                )
+                if (refreshing) {
+                    LumenLoading(colors, "loading models\u2026", tag = "models-loading")
+                } else {
+                    StateHint(
+                        colors,
+                        "No models available",
+                        detail = "Refresh or check the provider key",
+                        tag = "models-empty",
+                    )
+                }
             }
         } else {
             Spacer(Modifier.height(LumenSpacing.sm))

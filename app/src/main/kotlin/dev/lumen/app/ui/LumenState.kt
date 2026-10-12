@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -34,24 +35,33 @@ fun StateHint(
     detail: String? = null,
     tint: Color = colors.water,
     tag: String? = null,
+    loading: Boolean = false,
 ) {
     Column(
         modifier.padding(horizontal = 40.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Box(
-            Modifier
-                .size(LumenSize.droplet * 1.8f)
-                .clip(WaterShapes.droplet(tail = 0.55f))
-                .background(tint.copy(alpha = 0.5f)),
-            contentAlignment = Alignment.Center,
-        ) {
+        if (loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(LumenSize.droplet * 3f),
+                color = tint,
+                strokeWidth = 2.5.dp,
+            )
+        } else {
             Box(
                 Modifier
-                    .size(LumenSize.droplet)
-                    .clip(WaterShapes.droplet(tail = 0.5f))
-                    .background(tint.copy(alpha = 0.85f)),
-            )
+                    .size(LumenSize.droplet * 1.8f)
+                    .clip(WaterShapes.droplet(tail = 0.55f))
+                    .background(tint.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    Modifier
+                        .size(LumenSize.droplet)
+                        .clip(WaterShapes.droplet(tail = 0.5f))
+                        .background(tint.copy(alpha = 0.85f)),
+                )
+            }
         }
         Spacer(Modifier.height(16.dp))
         Text(

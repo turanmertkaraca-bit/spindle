@@ -14,9 +14,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -83,6 +85,8 @@ fun SettingsScreen(
     onBrowseSubagent: (() -> Unit)? = null,
     /** Whether an API key is currently stored (drives the connection row). */
     hasKey: Boolean = true,
+    /** True while the live model catalogue is loading; the default-model row spins. */
+    modelsLoading: Boolean = false,
 ) {
     Column(
         modifier
@@ -137,6 +141,7 @@ fun SettingsScreen(
                 tag = "settings-model",
                 onClick = { onBrowseModels?.invoke() ?: onModel(model) },
                 enabled = onBrowseModels != null,
+                loading = modelsLoading,
             )
             RowDivider(colors)
             NavRow(
@@ -305,6 +310,7 @@ private fun NavRow(
     tag: String,
     onClick: () -> Unit,
     enabled: Boolean = true,
+    loading: Boolean = false,
 ) {
     Row(
         Modifier
@@ -321,13 +327,21 @@ private fun NavRow(
             fontSize = LumenType.bodyLarge,
             modifier = Modifier.weight(1f),
         )
-        Text(
-            value,
-            color = colors.dim,
-            fontFamily = LumenFonts.value,
-            fontSize = LumenType.body,
-            maxLines = 1,
-        )
+        if (loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(14.dp),
+                color = colors.water,
+                strokeWidth = 1.5.dp,
+            )
+        } else {
+            Text(
+                value,
+                color = colors.dim,
+                fontFamily = LumenFonts.value,
+                fontSize = LumenType.body,
+                maxLines = 1,
+            )
+        }
         Spacer(Modifier.width(8.dp))
         Text("\u203a", color = colors.accent, fontFamily = LumenFonts.value, fontSize = 20.sp)
     }

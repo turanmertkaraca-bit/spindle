@@ -246,6 +246,39 @@ class ScreenshotTest {
         )
     }
 
+    /** A just-started, blank-body tool hosts the thinking as a collapsed header. */
+    @Test fun dark_thinking_tool() = shoot("dark_thinking_tool.png") {
+        LumenChatScreen(
+            steps = listOf(
+                UiStep("u1", StepKind.YOU, "YOU", "a1b2c3", "check the file", "check the file"),
+                UiStep(
+                    "t1", StepKind.THINKING, "THINKING", "c3d4e5", "considering",
+                    "The redirect guard reads a boolean before the session cookie is written, so I should open the layout rule and read where the guard flips.",
+                ),
+                UiStep("k1", StepKind.TOOL, "READ", "", "calling…", "", running = true),
+            ),
+            input = "", busy = true, error = null,
+            colors = LumenColors.Dark,
+            onHome = {}, ambient = false, onToggleTheme = {}, onEditKey = {},
+        )
+    }
+
+    @Test fun light_thinking_tool() = shoot("light_thinking_tool.png") {
+        LumenChatScreen(
+            steps = listOf(
+                UiStep("u1", StepKind.YOU, "YOU", "a1b2c3", "check the file", "check the file"),
+                UiStep(
+                    "t1", StepKind.THINKING, "THINKING", "c3d4e5", "considering",
+                    "The redirect guard reads a boolean before the session cookie is written, so I should open the layout rule and read where the guard flips.",
+                ),
+                UiStep("k1", StepKind.TOOL, "READ", "", "calling…", "", running = true),
+            ),
+            input = "", busy = true, error = null,
+            colors = LumenColors.Light,
+            onHome = {}, ambient = false, onToggleTheme = {}, onEditKey = {},
+        )
+    }
+
     @Test fun light_answered() = shoot("light_answered.png") {
         LumenChatScreen(
             steps = listOf(

@@ -782,6 +782,22 @@ class LumenChatScreenTest {
     }
 
     @Test
+    fun `the model picker sheet shows a loading row for an empty refreshing catalogue`() {
+        compose.setContent {
+            LumenChatScreen(
+                steps(1), input = "", busy = false, error = null, modifier = viewport, ambient = false,
+                modelPicker = true,
+                provider = "deepseek",
+                model = "deepseek/alpha",
+                pickerRefreshing = true,
+                pickerModels = emptyList(),
+            )
+        }
+        compose.onNodeWithTag("model-picker-sheet").assertIsDisplayed()
+        compose.onNodeWithTag("model-sheet-loading", useUnmergedTree = true).assertExists()
+    }
+
+    @Test
     fun `send keeps its full target with the model chip present on a narrow screen`() {
         // Regression: the bottom control row used to squeeze the send box to a
         // sliver once the model chip rendered (which only happens on device,

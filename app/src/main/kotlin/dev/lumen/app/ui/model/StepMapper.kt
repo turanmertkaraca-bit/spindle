@@ -150,6 +150,13 @@ object StepMapper {
      * expanded while it is alone and collapses it to a header once the host has
      * a body. Pure, so the fold is unit-tested and can run on every frame of a
      * stream (the raw rows stay untouched, so deltas still find their part id).
+     *
+     * A running/blank tool still hosts the fold: the live row created by
+     * [applyEvent] on `ToolCallStarted` has `body = ""`, and its thinking must
+     * merge onto it instead of flushing as standalone prose. Only a pending
+     * thinking with no body *of its own* (the synthetic "working" row) has
+     * nothing to fold, so when a host follows it is dropped rather than emitted
+     * as a `thinking · 0 chars` pill; with no host it stays as the placeholder.
      */
     fun groupSteps(steps: List<UiStep>): List<UiStep> {
         val out = ArrayList<UiStep>(steps.size)
@@ -164,7 +171,7 @@ object StepMapper {
                 continue
             }
             val host = if (s.kind == StepKind.ASSISTANT || isMergeable(s.kind)) pending else null
-            if (host != null && s.body.isNotBlank()) {
+            if (host != null && host.body.isNotBlank()) {
                 // Keep the THINKING row's identity so the LazyColumn key is stable
                 // across the think→answer transition: the item grows in place and
                 // the list never removes+re-inserts (which caused a scroll jump).
@@ -175,10 +182,13 @@ object StepMapper {
                 )
                 pending = null
             } else {
-                if (pending != null) {
+                // A blank pending has no reasoning to show; when a host follows,
+                // drop it instead of emitting a `thinking · 0 chars` pill. With
+                // no host it is the lone "thinking…" placeholder and is kept.
+                if (pending != null && host == null) {
                     out += pending
-                    pending = null
                 }
+                pending = null
                 out += s
             }
         }

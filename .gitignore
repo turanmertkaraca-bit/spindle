@@ -26,6 +26,11 @@ local.properties
 .env
 secrets.properties
 
+# The DEBUG signing key is intentionally committed: it is not a secret (default
+# store/key password "android") and a stable signature lets a new debug APK
+# install cleanly over the previous one.
+!debug.keystore
+
 # test output
 **/test-results/
 **/reports/

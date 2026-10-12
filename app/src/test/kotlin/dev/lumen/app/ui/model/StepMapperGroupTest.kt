@@ -83,12 +83,68 @@ class StepMapperGroupTest {
     }
 
     @Test
-    fun `an answer with an empty body does not swallow the thinking yet`() {
+    fun `an answer with an empty body still folds the thinking`() {
         val out = StepMapper.groupSteps(
             listOf(step("t", StepKind.THINKING, "reasoning"), step("a", StepKind.ASSISTANT, "")),
         )
-        assertEquals(2, out.size)
+        assertEquals(1, out.size)
+        assertEquals(StepKind.ASSISTANT, out[0].kind)
+        assertEquals("a", out[0].id)
+        assertEquals("reasoning", out[0].think)
+        assertEquals("", out[0].body)
+    }
+
+    @Test
+    fun `thinking folds into a running tool with a blank body`() {
+        val out = StepMapper.groupSteps(
+            listOf(
+                step("t", StepKind.THINKING, "let me check"),
+                UiStep("k", StepKind.TOOL, "READ", "tagk", "calling…", "", running = true),
+            ),
+        )
+        assertEquals(1, out.size)
+        assertEquals(StepKind.TOOL, out[0].kind)
+        assertEquals("k", out[0].id)
+        assertEquals("let me check", out[0].think)
+        assertEquals("tagt", out[0].thinkTag)
+        assertEquals("", out[0].body)
+    }
+
+    @Test
+    fun `thinking folds into a finished tool with a blank body`() {
+        val out = StepMapper.groupSteps(
+            listOf(
+                step("t", StepKind.THINKING, "let me check"),
+                UiStep("k", StepKind.TOOL, "READ", "tagk", "no output", ""),
+            ),
+        )
+        assertEquals(1, out.size)
+        assertEquals(StepKind.TOOL, out[0].kind)
+        assertEquals("k", out[0].id)
+        assertEquals("let me check", out[0].think)
+        assertEquals("tagt", out[0].thinkTag)
+    }
+
+    @Test
+    fun `a blank thinking followed by a host does not create a think`() {
+        val out = StepMapper.groupSteps(
+            listOf(
+                step("t", StepKind.THINKING, ""),
+                UiStep("k", StepKind.TOOL, "READ", "tagk", "calling…", "", running = true),
+            ),
+        )
+        assertEquals(1, out.size)
+        assertEquals(StepKind.TOOL, out[0].kind)
+        assertEquals("k", out[0].id)
+        assertNull(out[0].think)
+    }
+
+    @Test
+    fun `a blank thinking with no host stays as the placeholder`() {
+        val out = StepMapper.groupSteps(listOf(step("t", StepKind.THINKING, "")))
+        assertEquals(1, out.size)
         assertEquals(StepKind.THINKING, out[0].kind)
+        assertEquals("", out[0].body)
         assertNull(out[0].think)
     }
 

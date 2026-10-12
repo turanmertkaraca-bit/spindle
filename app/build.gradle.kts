@@ -19,14 +19,25 @@ android {
         // The app is sideloaded, so Play policy does not apply.
         minSdk = 28
         targetSdk = 28
-        versionCode = 8
-        versionName = "0.2.3"
+        versionCode = 9
+        versionName = "0.2.4"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     // Keep bundled sandbox binaries (.bin) uncompressed so exec sees a real ELF.
     androidResources {
         noCompress += listOf("bin")
+    }
+
+    // A committed, non-secret debug key so every CI-built debug APK shares one
+    // signature and a new build installs cleanly over the previous one.
+    signingConfigs {
+        getByName("debug") {
+            storeFile = rootProject.file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {

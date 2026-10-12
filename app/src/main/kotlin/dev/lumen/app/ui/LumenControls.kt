@@ -4,11 +4,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
@@ -128,4 +132,35 @@ internal fun LumenSlider(
             inactiveTickColor = Color.Transparent,
         ),
     )
+}
+
+/**
+ * The one loading primitive: a centered spectral spinner over a proportional
+ * label. Every catalogue surface uses this so a refresh reads as intentional
+ * work instead of a dead, empty screen the user taps at.
+ */
+@Composable
+internal fun LumenLoading(
+    colors: LumenColors,
+    text: String,
+    modifier: Modifier = Modifier,
+    tag: String? = null,
+) {
+    Column(
+        modifier.then(if (tag != null) Modifier.testTag(tag) else Modifier),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(30.dp),
+            color = colors.water,
+            strokeWidth = 2.5.dp,
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text,
+            color = colors.dim,
+            fontFamily = LumenFonts.label,
+            fontSize = LumenType.body,
+        )
+    }
 }
