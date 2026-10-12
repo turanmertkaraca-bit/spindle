@@ -220,7 +220,8 @@ fun OnboardingScreen(
                 colors,
                 if (step == 0) "Get started" else "Continue",
                 "onboarding-next",
-            ) { step++ }
+                onClick = { step++ },
+            )
         }
 
         Spacer(Modifier.height(LumenSpacing.xxl))
