@@ -2,13 +2,14 @@
 
 Native Android agent app on the `spindle` engine. Repo
 `turanmertkaraca-bit/spindle`, branch `main`, package `dev.lumen.app`.
-Latest code HEAD = `21de809`, version **0.2.3** (`versionCode 8`); this docs
-refresh for the 0.2.3 UI/notification wave lands on top of `21de809`. CI
+Latest code HEAD = `623f4b7`, version **0.2.4** (`versionCode 9`); this docs
+refresh for the 0.2.4 wave lands on top of `623f4b7`. CI
 (`.github/workflows/ci.yml`) runs both jobs (`jvm backend` + `android app
 (robolectric)`) — always re-verify CI by sha with the `ci.sh` poll in §4 before
-trusting a build. Releases **v0.2.0**, **v0.2.1** and **v0.2.2** are published,
-each with a `lumen-<ver>-debug.apk` asset; **v0.2.3** is the current version. A
-fresh debug APK is staged on device at
+trusting a build. Releases **v0.2.0**–**v0.2.3** are published, each with a
+`lumen-<ver>-debug.apk` asset; **v0.2.4** is the current version. The debug APK
+is signed with the committed `debug.keystore` so it installs over the previous
+build. A fresh debug APK is staged on device at
 `/storage/emulated/0/Download/lumen-debug.apk`.
 
 ```
@@ -122,6 +123,28 @@ The 0.2.x waves landed since the last handoff; all are CI-green.
   de-duplicated. Run completion notifications now headline the **session title**
   with `finished/failed · 1m 35s` and the app icon (was bodyless "Run finished"
   rows with a download glyph).
+- **0.2.4 wave**: **GitHub "Install git" fixed** — `GitRunner.installGit()`
+  detects the active sandbox package manager (`apt-get` on Debian, `pkg` on
+  Alpine) instead of always calling the Alpine `pkg` front-end (which failed on a
+  Debian guest with `pkg: command not found`). **Palette-following launcher
+  icon**: a monogram-L mark on a per-palette gradient, shipped as four
+  `activity-alias` launchers (`LauncherPrism/Ember/Phosphor/Abyss`) switched from
+  the chosen palette in `MainActivity.syncLauncherAlias`; the theme drives the
+  icon, there is no icon picker. **Thinking-merge fix**:
+  `StepMapper.groupSteps` folds a pending thinking into the next host regardless
+  of the host body, so a just-started (blank-body) tool no longer strands the
+  reasoning as expanded prose; a blank pending is dropped rather than emitted as a
+  `thinking · 0 chars` pill. **Catalogue loading feedback**: new `LumenLoading`
+  primitive + `StateHint.loading`; picker/sheet/settings/composer show progress
+  instead of a silent or empty state. **Setup rework**: onboarding on the new
+  grammar with a palette chooser, step dots, Back, the real version, and a
+  loading/disabled Debian install; the boot screen shows a spinner.
+  **Self-maintenance**: one staged pass on every boot (`runStartupMaintenance`)
+  that recovers runs, prunes history, compacts the DB, clears caches + the
+  `.spindle/truncated` spill + stale `.corrupt-*` quarantine copies, prunes
+  sandbox temp, and refreshes the environment, narrating each stage.
+  **Update-in-place**: committed non-secret `debug.keystore` + a debug signing
+  config so CI APKs share a signature and install over the previous build.
 
 ## 2. What's left (honest open gaps)
 
@@ -154,6 +177,11 @@ The 0.2.x waves landed since the last handoff; all are CI-green.
   `source` it; never write a key into a file or log; never commit. Remote
   embeds a PAT, so `git push origin main` works. Scan before every commit:
   `grep -rInE 'oc_sk_|sk-or-v1-|ghp_' --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle .`
+- **Debug signing**: the repo commits a non-secret `debug.keystore` (store/key
+  password `android`, alias `androiddebugkey`) wired into the `debug`
+  signing config in `app/build.gradle.kts`, so CI APKs keep one signature and a
+  new build installs over the previous one. Bump `versionCode`/`versionName` per
+  release (`app/build.gradle.kts`); never reuse a version.
 
 ### 3.2 Subagent discipline
 - `:app` UI is concentrated in `app/src/main/kotlin/dev/lumen/app/ui/`. Files are
@@ -174,8 +202,14 @@ The 0.2.x waves landed since the last handoff; all are CI-green.
   `ui/LumenSheet.kt` (`LumenBottomSheet`). Model UI: `ui/ModelPickerScreen.kt`
   (shared `ModelRow`/`ModelRowData`, favourites + recents) and
   `ui/ModelPickerSheet.kt` (the in-chat popup).
-- Runtime/recovery: `ChatViewModel.kt`, `RunRecovery.kt`, `RunService.kt`,
+- Runtime/recovery: `ChatViewModel.kt` (`runStartupMaintenance` staged boot pass),
+  `RunRecovery.kt`, `RunService.kt`,
   `platform/DebianEnvironment.kt` (`prootArgv`, `guestProcess`, `maintenance`).
+- Launcher icon: four adaptive icons `res/mipmap-anydpi-v26/ic_launcher_<palette>.xml`
+  over `res/drawable/ic_launcher_background_<palette>.xml` with the shared
+  monogram `ic_launcher_foreground.xml`; the manifest declares four
+  `activity-alias` launchers and `MainActivity.syncLauncherAlias(palette)` keeps
+  exactly one enabled.
 - Events/replay: `:core` `event/EventBus.kt` (monotonic `seq` under one lock,
   bounded replay ring via `replayAfter`/`lastSeq`); `:server` SSE `id:`/
   `Last-Event-ID` catch-up.

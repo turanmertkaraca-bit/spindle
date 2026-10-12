@@ -211,3 +211,41 @@ minimal density, mono values, model favourites, and a real in-chat model popup.
   tests: `SettingsScreenTest` (github value), `AskCardTest` (stage-then-answer),
   `LumenChatScreenTest` (minimal sheet), `RunServiceTest` (named notifications).
 
+## Rework pass 7 — icon, thinking merge, loading, setup, maintenance (0.2.4)
+
+- **Launcher icon follows the palette.** A monogram-L mark on a per-palette
+  gradient, shipped as four adaptive icons + four `activity-alias` launchers;
+  `MainActivity.syncLauncherAlias` enables the one matching the chosen palette
+  (the theme drives the icon — there is intentionally **no icon picker**). The
+  `<monochrome>` layer is the monogram too, for Android 13+ themed icons.
+  Concept chosen from rendered example sheets (5 concepts × 4 palettes).
+- **Thinking always merges with its action.** `StepMapper.groupSteps` now folds a
+  pending thinking onto the next `ASSISTANT`/`TOOL`/`SUBAGENT` host regardless of
+  the host body, so a just-started (blank-body) tool shows the collapsed
+  `thinking · N chars` header instead of stranding the reasoning as expanded
+  prose. A blank pending is dropped rather than shown as `thinking · 0 chars`.
+  New frames `light/dark_thinking_tool.png`.
+- **Catalogue loading feedback.** New `LumenLoading` primitive +
+  `StateHint.loading`. The full picker shows a centered spinner when the list is
+  empty-and-loading (never "No models available" mid-load) and a slim bar when
+  refreshing a populated list; the in-chat sheet shows a header spinner and a
+  loading row; the Settings default-model row and the composer model chip spin
+  while the catalogue loads.
+- **Setup rework + palette chooser.** `OnboardingScreen` on the new grammar: a
+  palette chooser on the welcome step (`onboarding-palette-<id>`), step dots, a
+  Back affordance, the real version from `PackageManager`, and a spinner +
+  disabled button while Debian installs. `BootScreen` shows a spinner.
+- **Self-maintenance on every boot.** `ChatViewModel.runStartupMaintenance`
+  is one staged pass (recover runs → prune history → compact DB → clear caches,
+  the `.spindle/truncated` spill and stale `.corrupt-*` quarantine copies →
+  prune sandbox temp → refresh environment) that narrates progress to the boot
+  screen; `LumenApp.retentionJanitor` remains the 6-hourly backstop.
+- **Update-in-place.** Committed the non-secret `debug.keystore` + a debug
+  signing config so CI debug APKs share a signature and install over the previous
+  build. Bumped to **0.2.4** (`versionCode 9`).
+- **GitHub "Install git" fixed.** `GitRunner.installGit()` detects the active
+  sandbox package manager (`apt-get` on Debian, `pkg` on Alpine) instead of
+  always calling the Alpine `pkg` front-end, which failed on the Debian guest
+  with `pkg: command not found`.
+
+
