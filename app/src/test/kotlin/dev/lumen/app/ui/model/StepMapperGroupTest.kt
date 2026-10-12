@@ -89,7 +89,8 @@ class StepMapperGroupTest {
         )
         assertEquals(1, out.size)
         assertEquals(StepKind.ASSISTANT, out[0].kind)
-        assertEquals("a", out[0].id)
+        // The merged row keeps the THINKING row's id so the list key never churns.
+        assertEquals("t", out[0].id)
         assertEquals("reasoning", out[0].think)
         assertEquals("", out[0].body)
     }
@@ -104,7 +105,7 @@ class StepMapperGroupTest {
         )
         assertEquals(1, out.size)
         assertEquals(StepKind.TOOL, out[0].kind)
-        assertEquals("k", out[0].id)
+        assertEquals("t", out[0].id)
         assertEquals("let me check", out[0].think)
         assertEquals("tagt", out[0].thinkTag)
         assertEquals("", out[0].body)
@@ -120,7 +121,7 @@ class StepMapperGroupTest {
         )
         assertEquals(1, out.size)
         assertEquals(StepKind.TOOL, out[0].kind)
-        assertEquals("k", out[0].id)
+        assertEquals("t", out[0].id)
         assertEquals("let me check", out[0].think)
         assertEquals("tagt", out[0].thinkTag)
     }
