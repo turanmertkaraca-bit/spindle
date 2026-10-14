@@ -141,6 +141,16 @@ class StepMapperGroupTest {
     }
 
     @Test
+    fun `a blank assistant row is dropped`() {
+        // No body, no summary, no think, no images, not running: would render as
+        // an empty bubble, so groupSteps must drop it.
+        val out = StepMapper.groupSteps(
+            listOf(UiStep("a", StepKind.ASSISTANT, "ASSISTANT", "taga", "", "")),
+        )
+        assertTrue(out.isEmpty())
+    }
+
+    @Test
     fun `a blank thinking with no host stays as the placeholder`() {
         val out = StepMapper.groupSteps(listOf(step("t", StepKind.THINKING, "")))
         assertEquals(1, out.size)

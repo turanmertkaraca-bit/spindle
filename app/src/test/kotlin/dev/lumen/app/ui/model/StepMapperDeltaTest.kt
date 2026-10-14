@@ -57,6 +57,18 @@ class StepMapperDeltaTest {
     }
 
     @Test
+    fun `a whitespace-only first delta does not create a blank row`() {
+        val buffer = StepMapper.DeltaBuffer()
+        buffer.reset(emptyList())
+        buffer.append("p1", "\n\n", StepKind.ASSISTANT, "ASSISTANT")
+        assertTrue(buffer.snapshot().isEmpty(), "a blank chunk must not materialize a bubble")
+        buffer.append("p1", "hello", StepKind.ASSISTANT, "ASSISTANT")
+        val rows = buffer.snapshot()
+        assertEquals(1, rows.size)
+        assertEquals("hello", rows[0].body)
+    }
+
+    @Test
     fun `coalesced buffer matches applying every delta directly`() {
         val deltas = (0 until 500).map { if (it % 3 == 0) " chunk$it " else "x" }
         val direct = deltas.fold(emptyList<UiStep>()) { acc, d ->

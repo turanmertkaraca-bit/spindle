@@ -193,8 +193,17 @@ object StepMapper {
             }
         }
         if (pending != null) out += pending
-        return out
+        // Defence in depth: never ship an empty placeholder row (a blank
+        // assistant/thinking row with no body, summary, images or folded think),
+        // which would render as an empty bubble.
+        return out.filterNot { it.isEmptyPlaceholder() }
     }
+
+    /** A row that would render as a contentless bubble. */
+    private fun UiStep.isEmptyPlaceholder(): Boolean =
+        (kind == StepKind.ASSISTANT || kind == StepKind.THINKING) &&
+            !running && think == null && images.isEmpty() &&
+            body.isBlank() && summary.isBlank()
 
     private fun merge(a: UiStep, b: UiStep): UiStep {
         val merged = a.merged + b.merged
@@ -528,6 +537,18 @@ object StepMapper {
         fun append(partId: String, delta: String, kind: StepKind, label: String) {
             val i = index[partId]
             if (i == null) {
+                // A whitespace-only FIRST chunk must not materialize a row: it
+                // would render as a blank bubble (summary/body collapse to "").
+                // Buffer it so the first real text still starts the row cleanly;
+                // a leading whitespace run is dropped, which is what markdown
+                // trims anyway.
+                if (delta.isBlank()) {
+                    bodies.getOrPut(partId) { StringBuilder() }.append(delta)
+                    kinds.putIfAbsent(partId, kind)
+                    labels.putIfAbsent(partId, label)
+                    pending = true
+                    return
+                }
                 index[partId] = working.size
                 working.add(
                     UiStep(
