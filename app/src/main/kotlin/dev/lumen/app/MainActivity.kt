@@ -322,6 +322,7 @@ class MainActivity : ComponentActivity() {
                     fileRevision = state.fileRevision,
                     fileKind = viewModel::fileKind,
                     contextWindow = state.contextWindow,
+                    contextUsedTokens = state.contextUsedTokens,
                     nextCostUsd = state.nextCostUsd,
                     newTokens = state.newTokens,
                     title = state.sessions.firstOrNull { it.id == state.currentSessionId }?.title ?: "",

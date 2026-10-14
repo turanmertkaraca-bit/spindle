@@ -365,6 +365,8 @@ fun LumenChatScreen(
     budgetUsd: Double = 0.0,
     /** The model's context window in tokens; 0 keeps the classic usage line. */
     contextWindow: Int = 0,
+    /** Prompt tokens of the latest turn; drives the composer context bar. */
+    contextUsedTokens: Int = 0,
     /** Estimated cost of the next turn in USD; negative hides it. */
     nextCostUsd: Double = -1.0,
     /** Tokens added since the last usage roll-up, for the compact meter. */
@@ -764,6 +766,8 @@ fun LumenChatScreen(
                 model = model,
                 onModel = onModel,
                 catalogueLoading = catalogueLoading,
+                contextWindow = contextWindow,
+                contextUsedTokens = contextUsedTokens,
                 onQuickSettings = onQuickSettings,
                 onOpenModels = onOpenModels,
                 attachments = attachments,
@@ -2346,6 +2350,37 @@ private fun UsageMeter(
 }
 
 /**
+ * A hairline context gauge merged into the top of the composer card. It shows
+ * how much of the model's window is still free: the bar drains as the context
+ * fills and warms from water -> accent -> alert as it runs low.
+ */
+@Composable
+private fun ContextMeter(colors: LumenColors, usedFraction: Float) {
+    val remaining = (1f - usedFraction).coerceIn(0f, 1f)
+    val tint = when {
+        remaining <= 0.05f -> LumenAlert
+        remaining <= 0.20f -> colors.accent
+        else -> colors.water
+    }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(3.dp)
+            .clip(LumenShapes.pill)
+            .background(colors.outline.copy(alpha = 0.5f))
+            .testTag("context-meter"),
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth(remaining)
+                .height(3.dp)
+                .clip(LumenShapes.pill)
+                .background(tint),
+        )
+    }
+}
+
+/**
  * A prompt pinned above the composer. Permission asks render the tool and its
  * detail with allow-once / always-allow / deny; questions render tappable
  * option chips (single-select answers on tap, multi-select adds an Answer).
@@ -2492,6 +2527,8 @@ private fun Composer(
     model: String = "",
     onModel: (() -> Unit)? = null,
     catalogueLoading: Boolean = false,
+    contextWindow: Int = 0,
+    contextUsedTokens: Int = 0,
     onQuickSettings: (() -> Unit)? = null,
     onOpenModels: (() -> Unit)? = null,
     attachments: List<PendingImage> = emptyList(),
@@ -2556,6 +2593,12 @@ private fun Composer(
                 .border(1.dp, if (inputFocused) colors.water else colors.outline, cardShape)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
+            // A thin context gauge at the top of the card: it drains as the
+            // window fills, so "how much is left" reads at a glance.
+            if (contextWindow > 0 && contextUsedTokens > 0) {
+                ContextMeter(colors, contextUsedTokens.toFloat() / contextWindow.toFloat())
+                Spacer(Modifier.height(8.dp))
+            }
             Box(Modifier.fillMaxWidth()) {
                 // A real placeholder: shown only while empty and unfocused, at the
                 // exact content origin of the field, so it never overlaps the caret.

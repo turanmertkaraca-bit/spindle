@@ -121,7 +121,9 @@ internal fun ModelRow(
             }
         }
         Spacer(Modifier.width(10.dp))
-        Column(horizontalAlignment = Alignment.End) {
+        // Fixed-width metric column: every row's name truncates at the same x and
+        // context/cost stay aligned, instead of the column jittering per model.
+        Column(Modifier.width(60.dp), horizontalAlignment = Alignment.End) {
             if (data.contextWindow != null) {
                 Text(
                     "${data.contextWindow / 1000}k",

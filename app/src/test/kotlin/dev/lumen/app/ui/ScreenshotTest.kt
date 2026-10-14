@@ -279,6 +279,20 @@ class ScreenshotTest {
         )
     }
 
+    /** The thin context gauge merged into the top of the composer card. */
+    @Test fun dark_context_meter() = shoot("dark_context_meter.png") {
+        LumenChatScreen(
+            steps = listOf(UiStep("u1", StepKind.YOU, "YOU", "a1b2c3", "status", "status")),
+            input = "", busy = false, error = null,
+            colors = LumenColors.Dark,
+            ambient = false, onHome = {}, onToggleTheme = {}, onEditKey = {},
+            contextWindow = 200_000,
+            contextUsedTokens = 150_000,
+            usage = Usage(inputTokens = 150_000, outputTokens = 2_000),
+            newTokens = 4_000,
+        )
+    }
+
     @Test fun light_answered() = shoot("light_answered.png") {
         LumenChatScreen(
             steps = listOf(

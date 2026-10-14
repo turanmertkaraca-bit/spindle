@@ -27,6 +27,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.data.ProviderCatalogue
@@ -325,6 +327,8 @@ private fun NavRow(
             color = colors.fg,
             fontFamily = LumenFonts.label,
             fontSize = LumenType.bodyLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         if (loading) {
@@ -340,6 +344,11 @@ private fun NavRow(
                 fontFamily = LumenFonts.value,
                 fontSize = LumenType.body,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.End,
+                // fill = false so a short value keeps the label wide while a very
+                // long model id is capped at half the row instead of crushing it.
+                modifier = Modifier.weight(1f, fill = false),
             )
         }
         Spacer(Modifier.width(8.dp))

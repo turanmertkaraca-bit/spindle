@@ -261,6 +261,11 @@ data class ChatState(
     val palette: String = "abyss",
     /** Running session token/cost totals, rolled up from each message. */
     val usage: Usage = Usage(),
+    /**
+     * Prompt tokens of the latest provider response — i.e. how full the context
+     * window is right now (0 until the first turn of the session completes).
+     */
+    val contextUsedTokens: Int = 0,
 
     /** Per-session cost ceiling in USD; 0 means unlimited. */
     val maxCostUsd: Double = 0.0,
@@ -1330,6 +1335,9 @@ class ChatViewModel(
     /** Session token total already reflected in [ChatState.newTokens]. */
     private var lastUsageTokens = 0
 
+    /** Cumulative prompt tokens at the previous usage frame, for the context bar. */
+    private var lastPromptTokens = 0
+
     /**
      * Best-effort model-derived metrics: the selected model's context window
      * from [ProviderCatalogue] and a rough next-request cost estimate from
@@ -1356,14 +1364,21 @@ class ChatViewModel(
     private fun applyUsage(usage: Usage) {
         val delta = (usage.totalTokens - lastUsageTokens).coerceAtLeast(0)
         lastUsageTokens = usage.totalTokens
-        _state.value = _state.value.copy(usage = usage, newTokens = delta)
+        // Cumulative prompt tokens rose by exactly the newest response's prompt
+        // size (≈ the current context fill), which is what the composer bar shows.
+        val prompt = usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens
+        val contextUsed = (prompt - lastPromptTokens).coerceAtLeast(0)
+        lastPromptTokens = prompt
+        _state.value = _state.value.copy(usage = usage, newTokens = delta, contextUsedTokens = contextUsed)
         refreshModelMetrics()
     }
 
     /** Rebase the usage baseline after a session switch, so the meter starts fresh. */
     private fun resetUsage() {
         lastUsageTokens = _state.value.usage.totalTokens
-        _state.value = _state.value.copy(newTokens = 0)
+        lastPromptTokens = _state.value.usage.inputTokens +
+            _state.value.usage.cacheReadTokens + _state.value.usage.cacheWriteTokens
+        _state.value = _state.value.copy(newTokens = 0, contextUsedTokens = 0)
         refreshModelMetrics()
     }
 
