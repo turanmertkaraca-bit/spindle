@@ -248,4 +248,17 @@ minimal density, mono values, model favourites, and a real in-chat model popup.
   always calling the Alpine `pkg` front-end, which failed on the Debian guest
   with `pkg: command not found`.
 
+## Rework pass 8 — row layout + composer context gauge (0.2.5)
+
+- **Model rows no longer crush their text.** Settings' `default model` row keeps
+  its label on one line (ellipsised) and shares the row with the value
+  (`weight(1f, fill=false)`), so a long model id can't stack the label one
+  character per line. The model picker reserves a fixed-width metric column so
+  names truncate uniformly and context/cost stay aligned.
+- **Composer context gauge.** A thin bar merged into the top of the composer card
+  drains as the context window fills (water → accent → alert as it runs low),
+  backed by a new `ChatState.contextUsedTokens` (the newest turn's prompt size).
+- Pricing note: opencode-go's `/models` returns **ids only** (no cost/context),
+  so live-only models have no price to show — only the curated snapshot models do.
+
 

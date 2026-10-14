@@ -2,12 +2,12 @@
 
 Native Android agent app on the `spindle` engine. Repo
 `turanmertkaraca-bit/spindle`, branch `main`, package `dev.lumen.app`.
-Latest code HEAD = `623f4b7`, version **0.2.4** (`versionCode 9`); this docs
-refresh for the 0.2.4 wave lands on top of `623f4b7`. CI
+Latest code HEAD = `44c7c8d`, version **0.2.5** (`versionCode 10`); this docs
+refresh for the 0.2.5 layout/context-gauge fix lands on top of `44c7c8d`. CI
 (`.github/workflows/ci.yml`) runs both jobs (`jvm backend` + `android app
 (robolectric)`) — always re-verify CI by sha with the `ci.sh` poll in §4 before
-trusting a build. Releases **v0.2.0**–**v0.2.3** are published, each with a
-`lumen-<ver>-debug.apk` asset; **v0.2.4** is the current version. The debug APK
+trusting a build. Releases **v0.2.0**–**v0.2.4** are published, each with a
+`lumen-<ver>-debug.apk` asset; **v0.2.5** is the current version. The debug APK
 is signed with the committed `debug.keystore` so it installs over the previous
 build. A fresh debug APK is staged on device at
 `/storage/emulated/0/Download/lumen-debug.apk`.
@@ -145,6 +145,11 @@ The 0.2.x waves landed since the last handoff; all are CI-green.
   sandbox temp, and refreshes the environment, narrating each stage.
   **Update-in-place**: committed non-secret `debug.keystore` + a debug signing
   config so CI APKs share a signature and install over the previous build.
+- **0.2.5**: fixed the Settings `default model` row crushing its label on a long
+  model id (single-line label + shared-width value) and gave the model picker a
+  fixed-width metric column; added a **composer context gauge** — a thin bar at
+  the top of the composer card that drains as the context fills, backed by
+  `ChatState.contextUsedTokens` (newest turn's prompt size).
 
 ## 2. What's left (honest open gaps)
 
