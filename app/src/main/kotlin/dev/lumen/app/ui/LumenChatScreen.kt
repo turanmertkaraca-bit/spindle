@@ -580,11 +580,12 @@ fun LumenChatScreen(
             listState.scrollToItem(count - 1)
         } else {
             val delta = (info.viewportEndOffset - info.afterContentPadding) - (lastVisible.offset + lastVisible.size)
-            // Anchor the last row's BOTTOM to the viewport bottom in both
-            // directions: a positive delta fills empty space below a short tail,
-            // and a negative one re-anchors a last row taller than the viewport
-            // (otherwise it stays cut off mid-sentence at the fold).
-            if (delta != 0) listState.scrollBy(delta.toFloat())
+            // Anchor the last row's BOTTOM to the viewport bottom. A positive
+            // delta is empty space below a short tail (a no-op at the end of the
+            // list); a negative delta is a row taller than the viewport, which
+            // scrolls forward to reveal its tail instead of leaving it cut at the
+            // fold.
+            if (delta > 0) listState.scrollBy(delta.toFloat()) else if (delta < 0) listState.scrollBy((-delta).toFloat())
         }
     }
     // The viewport can also SHRINK without any content change: the usage meter,
@@ -601,10 +602,10 @@ fun LumenChatScreen(
                     .lastOrNull { it.index == info.totalItemsCount - 1 } ?: return@collect
                 val gap = (info.viewportEndOffset - info.afterContentPadding) -
                     (lastItem.offset + lastItem.size)
-                // Same both-directions anchor as the growth pin: reveal the bottom
-                // of an overhanging (taller-than-viewport) last row, not just fill
-                // a positive gap under a short one.
-                if (gap != 0) listState.scrollBy(gap.toFloat())
+                // Same anchor: reveal the bottom of an overhanging (taller-than-
+                // viewport) last row by scrolling forward, not just fill a
+                // positive gap under a short one.
+                if (gap > 0) listState.scrollBy(gap.toFloat()) else if (gap < 0) listState.scrollBy((-gap).toFloat())
             }
     }
     // The `↓ latest` affordance is driven purely by scroll position: it is shown
