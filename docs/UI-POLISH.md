@@ -261,4 +261,18 @@ minimal density, mono values, model favourites, and a real in-chat model popup.
 - Pricing note: opencode-go's `/models` returns **ids only** (no cost/context),
   so live-only models have no price to show — only the curated snapshot models do.
 
+## Rework pass 9 — timeline bug fixes (0.2.6)
+
+- **No more blank bubble.** A whitespace-only first streamed text chunk used to
+  make `DeltaBuffer.append` create an `ASSISTANT` row with `body=""`/`summary=""`,
+  which rendered as an empty `MarkdownBody` card and was re-added by `rebase`.
+  `append` now buffers a blank first chunk without materializing a row, and
+  `groupSteps` drops any contentless assistant/thinking row as a backstop.
+- **The last card stays in view.** The tail auto-pin only corrected *positive*
+  gaps, so a last row taller than the viewport (e.g. a long thinking block) was
+  never re-anchored and stayed cut at the fold under the usage line. Both pins
+  now scroll **forward** to reveal the bottom of an overhanging last row
+  (the first attempt used the wrong sign and was caught by the existing
+  tail-pin regression tests).
+
 
