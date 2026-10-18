@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,7 +43,9 @@ internal fun ModelPickerSheet(
     onRefresh: () -> Unit,
     onBrowseAll: () -> Unit,
 ) {
-    val known = models.associateBy { "$provider/${it.id}" }
+    // Built once per (models, provider) rather than on every recomposition of
+    // the hosting screen (which happens on every streaming delta).
+    val known = remember(models, provider) { models.associateBy { "$provider/${it.id}" } }
     LumenBottomSheet(
         visible = visible,
         onDismiss = onDismiss,

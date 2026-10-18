@@ -97,7 +97,12 @@ interface Tool {
 
 class ToolRegistry(tools: List<Tool>) {
     private val byName: Map<String, Tool> = tools.associateBy { it.spec.name }
-    val specs: List<dev.spindle.core.provider.ToolSpec> get() = byName.values.map { it.spec }
+
+    // Precomputed once: `specs` is read on every model step and was allocating a
+    // fresh list each time.
+    private val specList: List<dev.spindle.core.provider.ToolSpec> = byName.values.map { it.spec }
+
+    val specs: List<dev.spindle.core.provider.ToolSpec> get() = specList
     fun get(name: String): Tool? = byName[name]
     fun all(): List<Tool> = byName.values.toList()
     /** A registry with the given tool names removed (for restricted agents). */

@@ -110,7 +110,9 @@ class AgentLoop(
         onPermission: PermissionGate = permissions,
         budget: ContextBudget = ContextBudget(),
         rules: String? = null,
-    ): Message = prompt(sessionId, userText, modelRef, AgentConfig.byName(agentName), onPermission, budget, rules)
+        /** When false, skip the end-of-run store maintenance pass (used by subagents). */
+        maintenance: Boolean = true,
+    ): Message = prompt(sessionId, userText, modelRef, AgentConfig.byName(agentName), onPermission, budget, rules, maintenance)
 
     /**
      * Run a prompt for [sessionId], serialized against any other prompt already
@@ -127,10 +129,16 @@ class AgentLoop(
         budget: ContextBudget = ContextBudget(),
         /** Extra host-supplied rules appended after any AGENTS.md content. */
         rules: String? = null,
+        /**
+         * Run the bounded retention pass (store maintenance + snapshot prune) in
+         * the `finally`. Top-level runs keep it; subagents pass false so a run
+         * spawning N children does not pay N full-DB maintenance sweeps.
+         */
+        maintenance: Boolean = true,
     ): Message {
         val runLock = sharedRunLocks.computeIfAbsent(sessionId) { Mutex() }
         return runLock.withLock {
-            promptLocked(sessionId, userText, modelRef, agent, onPermission, budget, rules)
+            promptLocked(sessionId, userText, modelRef, agent, onPermission, budget, rules, maintenance)
         }
     }
 
@@ -142,6 +150,7 @@ class AgentLoop(
         onPermission: PermissionGate,
         budget: ContextBudget,
         rules: String?,
+        maintenance: Boolean,
     ): Message {
         val (provider, model) = providers.resolve(modelRef)
             ?: throw IllegalArgumentException("Unknown model: $modelRef")
@@ -518,9 +527,12 @@ class AgentLoop(
         } finally {
             // Bounded retention at a safe boundary: optimize FTS/checkpoint WAL
             // and cap snapshot history. NonCancellable so a stop still cleans up.
-            withContext(NonCancellable) {
-                runCatching { store.maintain() }
-                runCatching { snapshots?.pruneBounded() }
+            // Subagents skip it — the top-level run that spawned them covers it.
+            if (maintenance) {
+                withContext(NonCancellable) {
+                    runCatching { store.maintain() }
+                    runCatching { snapshots?.pruneBounded() }
+                }
             }
         }
     }

@@ -75,7 +75,7 @@ class SubagentSpawner(
         // spawner only re-reads and touches updatedAt so it never clobbers the
         // state the loop persisted.
         val finalMessage = try {
-            loop.prompt(childId, spec.prompt, modelRef, agent, budget = ContextBudget())
+            loop.prompt(childId, spec.prompt, modelRef, agent, budget = ContextBudget(), maintenance = false)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Throwable) {

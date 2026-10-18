@@ -22,10 +22,19 @@ class KeyStore(context: Context) {
      */
     private val transient = ConcurrentHashMap<String, String>()
 
+    /**
+     * Last-decrypted values, keyed by secret name. Android Keystore decrypt costs
+     * milliseconds and runs on the main thread during composition (see
+     * MainActivity.currentApiKey), so a successful decrypt is memoized for the
+     * process lifetime and invalidated whenever the secret is rewritten.
+     */
+    private val decrypted = ConcurrentHashMap<String, String>()
+
     /** Read [name], migrating a legacy cleartext [legacyKey] on first read. */
     private fun readSecret(name: String, encKey: String, legacyKey: String): String? {
+        decrypted[name]?.let { return it }
         prefs.getString(encKey, null)?.let { sealed ->
-            cipher.decrypt(sealed)?.let { return it }
+            cipher.decrypt(sealed)?.let { decrypted[name] = it; return it }
         }
         transient[name]?.let { return it }
         val legacy = prefs.getString(legacyKey, null) ?: return null
@@ -36,12 +45,14 @@ class KeyStore(context: Context) {
     /** Seal [value] at rest, or hold it in memory only. Never persists cleartext. */
     private fun writeSecret(name: String, encKey: String, legacyKey: String, value: String?) {
         if (value.isNullOrBlank()) {
+            decrypted.remove(name)
             transient.remove(name)
             prefs.edit().remove(encKey).remove(legacyKey).apply()
             return
         }
         val clean = value.trim()
         val sealed = cipher.encrypt(clean)
+        decrypted[name] = clean
         if (sealed != null) {
             transient.remove(name)
             prefs.edit().putString(encKey, sealed).remove(legacyKey).apply()

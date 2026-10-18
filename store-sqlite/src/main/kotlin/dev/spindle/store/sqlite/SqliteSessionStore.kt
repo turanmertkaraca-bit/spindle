@@ -921,4 +921,11 @@ private val MIGRATIONS = listOf(
         addColumnIfMissing(connection, "sessions", "archived", "INTEGER NOT NULL DEFAULT 0")
         addColumnIfMissing(connection, "sessions", "tags", "TEXT NOT NULL DEFAULT '[]'")
     },
+    Migration(3) { connection ->
+        // Index parts(session_id): deletes/prune/maintenance filter on it, and
+        // without an index that is a full scan of the (large) parts table.
+        connection.createStatement().use {
+            it.execute("CREATE INDEX IF NOT EXISTS idx_parts_session ON parts(session_id)")
+        }
+    },
 )
