@@ -61,6 +61,72 @@ class SettingsScreenTest {
     }
 
     @Test
+    fun `terse replies and reduce motion toggles report changes`() {
+        var terse: Boolean? = null
+        var motion: Boolean? = null
+        compose.setContent {
+            SettingsScreen(
+                colors = LumenColors.Dark,
+                provider = "opencode-go",
+                model = "opencode-go/deepseek-v4.1-flash",
+                theme = "system",
+                onProvider = {},
+                onModel = {},
+                onTheme = {},
+                onEditKey = {},
+                onBack = {},
+                modifier = viewport,
+                terseReplies = false,
+                onTerseReplies = { terse = it },
+                reduceMotion = false,
+                onReduceMotion = { motion = it },
+            )
+        }
+
+        compose.onNodeWithTag("terse-replies").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        assertEquals(true, terse)
+
+        compose.onNodeWithTag("reduce-motion").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        assertEquals(true, motion)
+    }
+
+    @Test
+    fun `a remembered permission can be revoked`() {
+        var forgotten: String? = null
+        var cleared = false
+        compose.setContent {
+            SettingsScreen(
+                colors = LumenColors.Dark,
+                provider = "opencode-go",
+                model = "opencode-go/deepseek-v4.1-flash",
+                theme = "system",
+                onProvider = {},
+                onModel = {},
+                onTheme = {},
+                onEditKey = {},
+                onBack = {},
+                modifier = viewport,
+                askBeforeTools = true,
+                allowedPatterns = listOf("git push", "bash"),
+                onForgetPattern = { forgotten = it },
+                onClearPatterns = { cleared = true },
+            )
+        }
+
+        compose.onNodeWithTag("permissions-row").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        compose.onNodeWithTag("permission-clear-0").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        assertEquals("git push", forgotten)
+
+        compose.onNodeWithTag("permissions-clear-all").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        assertTrue(cleared)
+    }
+
+    @Test
     fun `the github link reports when tapped`() {
         var tapped = false
         compose.setContent {

@@ -25,11 +25,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
@@ -331,35 +333,60 @@ private fun MarkdownList(
 
 @Composable
 private fun MarkdownCode(block: MdBlock.Code, colors: LumenColors) {
+    val clipboard = LocalClipboardManager.current
+    var copied by remember(block.text) { mutableStateOf(false) }
     Column(
         Modifier
             .fillMaxWidth()
             .clip(LumenShapes.inset)
             .background(colors.bg.copy(alpha = 0.55f))
-            .border(1.dp, colors.rule, LumenShapes.inset)
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            .border(1.dp, colors.rule, LumenShapes.inset),
     ) {
-        val lang = block.lang
-        if (lang != null) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 10.dp, end = 6.dp, top = 6.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
-                lang,
+                block.lang ?: "code",
                 color = colors.faint,
                 fontFamily = MdMono,
                 fontSize = 10.sp,
                 letterSpacing = 0.6.sp,
+                modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.height(4.dp))
+            Text(
+                if (copied) "copied" else "copy",
+                color = colors.accent,
+                fontFamily = MdMono,
+                fontSize = 10.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable {
+                        clipboard.setText(AnnotatedString(block.text))
+                        copied = true
+                    }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("md-code-copy"),
+            )
         }
-        Text(
-            block.text.ifEmpty { " " },
-            color = colors.fg,
-            fontFamily = MdMono,
-            fontSize = 12.5.sp,
-            lineHeight = 18.sp,
-            softWrap = false,
-            modifier = Modifier.testTag("md-code"),
-        )
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+        ) {
+            Text(
+                block.text.ifEmpty { " " },
+                color = colors.fg,
+                fontFamily = MdMono,
+                fontSize = 12.5.sp,
+                lineHeight = 18.sp,
+                softWrap = false,
+                modifier = Modifier.testTag("md-code"),
+            )
+        }
     }
 }
 

@@ -290,6 +290,10 @@ data class ChatState(
     val notifyOnComplete: Boolean = true,
     /** Whether the agent is asked to answer tersely (cuts output tokens). */
     val terseReplies: Boolean = false,
+    /** Scope patterns the user chose "always allow" for. */
+    val allowedPatterns: List<String> = emptyList(),
+    /** Whether non-essential motion is disabled. */
+    val reduceMotion: Boolean = false,
     /** The self-contained HTML page shown in the canvas, or null when closed. */
     val canvas: String? = null,
     /** Workspace-relative name of the page in the canvas, for the top bar. */
@@ -419,6 +423,8 @@ class ChatViewModel(
             askBeforeTools = keys.askBeforeTools,
             notifyOnComplete = keys.notifyOnComplete,
             terseReplies = keys.terseReplies,
+            allowedPatterns = keys.allowedPatterns.toList(),
+            reduceMotion = keys.reduceMotion,
             agentMode = if (keys.agentMode == "delegate") "build" else keys.agentMode,
             maxCostUsd = keys.maxCostUsd,
             autoCompactPercent = keys.autoCompactPercent,
@@ -671,9 +677,22 @@ class ChatViewModel(
         if (always && allow) {
             val scope = entry.ask.pattern?.takeIf { it.isNotBlank() } ?: entry.ask.tool
             keys.allowedPatterns = keys.allowedPatterns + scope
+            _state.value = _state.value.copy(allowedPatterns = keys.allowedPatterns.toList())
         }
         advanceAsk(entry)
         entry.deferred.complete(allow)
+    }
+
+    /** Revoke one remembered "always allow" scope. */
+    fun forgetAllowedPattern(pattern: String) {
+        keys.allowedPatterns = keys.allowedPatterns - pattern
+        _state.value = _state.value.copy(allowedPatterns = keys.allowedPatterns.toList())
+    }
+
+    /** Revoke every remembered "always allow" scope. */
+    fun clearAllowedPatterns() {
+        keys.allowedPatterns = emptySet()
+        _state.value = _state.value.copy(allowedPatterns = emptyList())
     }
 
     /** Resolve the visible question with [selected] (possibly multiple) options. */
@@ -707,6 +726,12 @@ class ChatViewModel(
     fun setTerseReplies(on: Boolean) {
         keys.terseReplies = on
         _state.value = _state.value.copy(terseReplies = on)
+    }
+
+    /** Toggle reduced motion and persist it. */
+    fun setReduceMotion(on: Boolean) {
+        keys.reduceMotion = on
+        _state.value = _state.value.copy(reduceMotion = on)
     }
 
     /** Set the per-session cost ceiling in USD (0 = unlimited) and persist it. */

@@ -21,6 +21,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -59,11 +63,18 @@ fun SettingsScreen(
     palette: String = "prism",
     /** Switch palette from the settings screen. */
     onPalette: (String) -> Unit = {},
+    /** Whether non-essential motion is disabled. */
+    reduceMotion: Boolean = false,
+    onReduceMotion: (Boolean) -> Unit = {},
     askBeforeTools: Boolean = false,
     onAskBeforeTools: (Boolean) -> Unit = {},
     /** Whether the agent is asked to answer tersely (cuts output tokens). */
     terseReplies: Boolean = false,
     onTerseReplies: (Boolean) -> Unit = {},
+    /** Tool/scope patterns the user chose "always allow" for. */
+    allowedPatterns: List<String> = emptyList(),
+    onForgetPattern: (String) -> Unit = {},
+    onClearPatterns: () -> Unit = {},
     /** Whether a finished/failed run posts a title-only notification. */
     notifyOnComplete: Boolean = true,
     onNotifyOnComplete: (Boolean) -> Unit = {},
@@ -187,6 +198,14 @@ fun SettingsScreen(
                     colors = colors,
                 )
             }
+            RowDivider(colors)
+            ToggleRow(
+                colors = colors,
+                label = "reduce motion",
+                checked = reduceMotion,
+                onCheckedChange = onReduceMotion,
+                tag = "reduce-motion",
+            )
         }
 
         // ---- agent ----
@@ -222,6 +241,15 @@ fun SettingsScreen(
                 onCheckedChange = onTerseReplies,
                 tag = "terse-replies",
             )
+            if (allowedPatterns.isNotEmpty() || askBeforeTools) {
+                RowDivider(colors)
+                RememberedPermissions(
+                    colors = colors,
+                    patterns = allowedPatterns,
+                    onForget = onForgetPattern,
+                    onClearAll = onClearPatterns,
+                )
+            }
         }
 
         // ---- limits ----
@@ -367,6 +395,104 @@ private fun NavRow(
         Spacer(Modifier.width(8.dp))
         Text("\u203a", color = colors.accent, fontFamily = LumenFonts.value, fontSize = 20.sp)
     }
+}
+
+/**
+ * Collapsible list of remembered "always allow" scopes. Each can be revoked
+ * individually; the header row shows the count and expands in place.
+ */
+@Composable
+private fun RememberedPermissions(
+    colors: LumenColors,
+    patterns: List<String>,
+    onForget: (String) -> Unit,
+    onClearAll: () -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable { open = !open }
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .testTag("permissions-row"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "remembered permissions",
+            color = colors.fg,
+            fontFamily = LumenFonts.label,
+            fontSize = LumenType.bodyLarge,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            "${patterns.size}",
+            color = colors.dim,
+            fontFamily = LumenFonts.value,
+            fontSize = LumenType.body,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            if (open) "\u2303" else "\u203a",
+            color = colors.accent,
+            fontFamily = LumenFonts.value,
+            fontSize = 18.sp,
+        )
+    }
+    if (!open) return
+
+    if (patterns.isEmpty()) {
+        Text(
+            "nothing remembered",
+            color = colors.faint,
+            fontFamily = LumenFonts.label,
+            fontSize = LumenType.caption,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        )
+        return
+    }
+
+    for (pattern in patterns) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 14.dp, end = 14.dp, top = 2.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                pattern,
+                color = colors.dim,
+                fontFamily = LumenFonts.value,
+                fontSize = LumenType.body,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "clear",
+                color = colors.accent,
+                fontFamily = LumenFonts.label,
+                fontSize = LumenType.caption,
+                modifier = Modifier
+                    .clip(LumenShapes.small)
+                    .clickable { onForget(pattern) }
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .testTag("permission-clear-${patterns.indexOf(pattern)}"),
+            )
+        }
+    }
+    Text(
+        "clear all",
+        color = colors.accent,
+        fontFamily = LumenFonts.label,
+        fontSize = LumenType.caption,
+        modifier = Modifier
+            .padding(start = 14.dp, top = 4.dp, bottom = 10.dp)
+            .clip(LumenShapes.small)
+            .clickable { onClearAll() }
+            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .testTag("permissions-clear-all"),
+    )
 }
 
 /** A toggle row: label left, themed switch right. */

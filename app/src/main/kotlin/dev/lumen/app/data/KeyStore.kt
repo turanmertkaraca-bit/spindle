@@ -189,6 +189,14 @@ class KeyStore(context: Context) {
         set(value) = prefs.edit().putBoolean("terse_replies", value).apply()
 
     /**
+     * When true, disable non-essential motion (the running pulse and the theme
+     * cross-fade). Default false keeps the current animation.
+     */
+    var reduceMotion: Boolean
+        get() = prefs.getBoolean("reduce_motion", false)
+        set(value) = prefs.edit().putBoolean("reduce_motion", value).apply()
+
+    /**
      * Per-session cost ceiling in USD. `0.0` means unlimited (the default), so
      * the loop runs year-round unless the user opts into a budget. When set, the
      * loop emits a `BudgetWarning` as spend approaches it and stops a run that

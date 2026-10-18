@@ -1,7 +1,9 @@
 package dev.lumen.app.ui
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.speech.RecognizerIntent
 import android.util.Base64
 import android.util.LruCache
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -2568,6 +2570,18 @@ private fun Composer(
     }
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    // Voice input via the system recognizer: append what was spoken to the
+    // composer. No RECORD_AUDIO permission is needed for the recognizer UI.
+    val context = LocalContext.current
+    val voice = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val spoken = result.data
+            ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            ?.firstOrNull()
+            ?.trim()
+        if (!spoken.isNullOrBlank()) {
+            onInput(if (input.isBlank()) spoken else "$input $spoken")
+        }
+    }
     val scale by animateFloatAsState(
         targetValue = if (pressed) 0.9f else 1f,
         animationSpec = LumenMotion.press,
@@ -2647,6 +2661,23 @@ private fun Composer(
                         ComposerControl("+", "attach-image", colors.dim, onAttach, contentDescription = "Attach image")
                         Spacer(Modifier.width(6.dp))
                     }
+                    ComposerControl(
+                        "mic",
+                        "voice-input",
+                        colors.dim,
+                        onClick = {
+                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                putExtra(
+                                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+                                )
+                                putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak your message")
+                            }
+                            runCatching { voice.launch(intent) }
+                        },
+                        contentDescription = "Voice input",
+                    )
+                    Spacer(Modifier.width(6.dp))
                     AgentModeChip("build", "agent-build", agentMode == "build", colors.water, colors, onAgentMode)
                     Spacer(Modifier.width(5.dp))
                     AgentModeChip("plan", "agent-plan", agentMode == "plan", colors.accent, colors, onAgentMode)

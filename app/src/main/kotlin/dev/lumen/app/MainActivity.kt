@@ -83,7 +83,7 @@ class MainActivity : ComponentActivity() {
                 "dark" -> true
                 else -> systemDark
             }
-            val colors = animatedColors(state.palette, dark)
+            val colors = animatedColors(state.palette, dark, state.reduceMotion)
             val versionName = remember {
                 runCatching {
                     packageManager.getPackageInfo(packageName, 0).versionName
@@ -303,6 +303,7 @@ class MainActivity : ComponentActivity() {
                     busy = state.busy,
                     error = state.error,
                     colors = colors,
+                    ambient = !state.reduceMotion,
                     modifier = modifier,
                     model = state.model,
                     onModel = { quickSettings = true },
@@ -530,6 +531,8 @@ class MainActivity : ComponentActivity() {
                     onSubagentModel = viewModel::setSubagentModel,
                     palette = state.palette,
                     onPalette = { viewModel.setPalette(it) },
+                    reduceMotion = state.reduceMotion,
+                    onReduceMotion = viewModel::setReduceMotion,
                     onEditKey = { route = "key" },
                     onBack = { route = "home" },
                     modifier = modifier,
@@ -537,6 +540,9 @@ class MainActivity : ComponentActivity() {
                     onAskBeforeTools = viewModel::setAskBeforeTools,
                     terseReplies = state.terseReplies,
                     onTerseReplies = viewModel::setTerseReplies,
+                    allowedPatterns = state.allowedPatterns,
+                    onForgetPattern = viewModel::forgetAllowedPattern,
+                    onClearPatterns = viewModel::clearAllowedPatterns,
                     notifyOnComplete = state.notifyOnComplete,
                     onNotifyOnComplete = viewModel::setNotifyOnComplete,
                     maxCostUsd = state.maxCostUsd,
@@ -725,8 +731,10 @@ private fun archiveFileName(title: String): String {
 
 /** The palette, eased between light and dark so the theme swap is not a hard cut. */
 @Composable
-private fun animatedColors(palette: String, dark: Boolean): LumenColors {
+private fun animatedColors(palette: String, dark: Boolean, reduceMotion: Boolean = false): LumenColors {
     val target = LumenColors.forId(palette, dark)
+    // Reduced motion: jump straight to the target instead of a 420 ms cross-fade.
+    if (reduceMotion) return target
     val spec = tween<Color>(durationMillis = 420)
     return LumenColors(
         bg = animateColorAsState(target.bg, spec, label = "bg").value,
