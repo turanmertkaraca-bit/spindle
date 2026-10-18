@@ -221,8 +221,9 @@ class ExternalDirectoryTool(
         val start = offset - 1
         val end = minOf(window.totalLines, start + limit)
         val builder = StringBuilder("${resolved.raw} (lines ${start + 1}-$end of ${window.totalLines})\n")
+        val gutter = end.toString().length
         for (i in window.lines.indices) {
-            builder.append((start + i + 1).toString().padStart(6)).append('\t')
+            builder.append((start + i + 1).toString().padStart(gutter)).append('\t')
                 .append(window.lines[i]).append('\n')
         }
         val truncated = end < window.totalLines

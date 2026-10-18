@@ -170,6 +170,14 @@ class KeyStore(context: Context) {
         set(value) = prefs.edit().putBoolean("notify_on_complete", value).apply()
 
     /**
+     * When true, the agent is asked to answer tersely (no preamble, no filler),
+     * which cuts output tokens. Default false keeps normal phrasing.
+     */
+    var terseReplies: Boolean
+        get() = prefs.getBoolean("terse_replies", false)
+        set(value) = prefs.edit().putBoolean("terse_replies", value).apply()
+
+    /**
      * Per-session cost ceiling in USD. `0.0` means unlimited (the default), so
      * the loop runs year-round unless the user opts into a budget. When set, the
      * loop emits a `BudgetWarning` as spend approaches it and stops a run that

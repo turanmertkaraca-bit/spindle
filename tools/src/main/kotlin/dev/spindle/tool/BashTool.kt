@@ -99,7 +99,7 @@ class BashTool(
 
         val output = buildString {
             append("[exit ").append(result.exitCode).append("]\n")
-            append(result.output)
+            append(stripAnsi(result.output))
             if (result.truncated) append("\n…[output truncated at ${Limits.BASH_MAX_OUTPUT_CHARS} chars]")
         }
         return ToolOutcome(
@@ -117,5 +117,15 @@ class BashTool(
         const val DEFAULT_TIMEOUT_MS = 120_000
         const val MAX_TIMEOUT_MS = 600_000L
         const val PROGRESS_INTERVAL_MS = 300L
+
+        /**
+         * ANSI CSI escape sequences (colours, cursor moves). Stripping them is
+         * lossless for meaning and saves real tokens on coloured builds/test
+         * output; the interactive terminal keeps its raw bytes (this only
+         * affects the agent-facing bash result).
+         */
+        val ANSI_CSI = Regex("\u001B\\[[0-9;?]*[ -/]*[@-~]")
+
+        fun stripAnsi(text: String): String = ANSI_CSI.replace(text, "")
     }
 }

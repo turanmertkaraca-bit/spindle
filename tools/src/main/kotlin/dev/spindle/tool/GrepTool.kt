@@ -19,8 +19,9 @@ class GrepTool : Tool {
     override val spec = ToolSpec(
         name = "grep",
         description = "Search file contents with a regular expression under the working " +
-            "directory. Returns matching lines as path:line: text. Skips .git and build " +
-            "directories and binary files.",
+            "directory. Results are grouped by file: the relative path on its own line, then " +
+            "each match indented as `line: text`. Skips .git and build directories and binary " +
+            "files.",
         parametersJson = """
             {
               "type": "object",
@@ -65,7 +66,11 @@ class GrepTool : Tool {
 
         ctx.checkAborted()
 
-        val results = ArrayList<String>()
+        // Matches are stored as (path, line, text) and rendered grouped by
+        // path, so a shared directory prefix is written once per file instead of
+        // once per match. The walk visits a file's matches contiguously, so no
+        // re-sorting is needed.
+        val matches = ArrayList<GrepMatch>()
         var truncated = false
         var visited = 0
         try {
@@ -103,8 +108,10 @@ class GrepTool : Tool {
                                 val line = reader.readLine() ?: break
                                 lineNumber++
                                 if (containsMatch(regex, line)) {
-                                    results.add("${normalized.displayPath(cwd)}:$lineNumber: ${capLine(line)}")
-                                    if (results.size >= Limits.GREP_MAX_RESULTS) {
+                                    matches.add(
+                                        GrepMatch(normalized.displayPath(cwd), lineNumber, capLine(line)),
+                                    )
+                                    if (matches.size >= Limits.GREP_MAX_RESULTS) {
                                         truncated = true
                                         break
                                     }
@@ -132,12 +139,29 @@ class GrepTool : Tool {
             return ToolOutcome("Grep failed: ${e.message}", isError = true)
         }
 
-        if (results.isEmpty()) return ToolOutcome("No matches for pattern '$patternText'")
+        if (matches.isEmpty()) return ToolOutcome("No matches for pattern '$patternText'")
         val note = if (truncated) "\n\n…[grep: capped at ${Limits.GREP_MAX_RESULTS} matches]" else ""
         return ToolOutcome(
-            output = results.joinToString("\n") + note,
-            metadata = mapOf("count" to results.size.toString(), "truncated" to truncated.toString()),
+            output = render(matches) + note,
+            metadata = mapOf("count" to matches.size.toString(), "truncated" to truncated.toString()),
         )
+    }
+
+    private data class GrepMatch(val path: String, val line: Int, val text: String)
+
+    /** Group matches by file: `<path>` then `  <line>: <text>` per match. */
+    private fun render(matches: List<GrepMatch>): String {
+        val builder = StringBuilder()
+        var current: String? = null
+        for (match in matches) {
+            if (match.path != current) {
+                if (current != null) builder.append('\n')
+                builder.append(match.path).append('\n')
+                current = match.path
+            }
+            builder.append("  ").append(match.line).append(": ").append(match.text).append('\n')
+        }
+        return builder.toString().trimEnd('\n')
     }
 
     private fun isSkipped(rel: Path): Boolean =

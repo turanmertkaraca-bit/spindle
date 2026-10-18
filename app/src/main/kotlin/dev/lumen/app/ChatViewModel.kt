@@ -288,6 +288,8 @@ data class ChatState(
     val askBeforeTools: Boolean = false,
     /** Whether a finished/failed run posts a system notification. */
     val notifyOnComplete: Boolean = true,
+    /** Whether the agent is asked to answer tersely (cuts output tokens). */
+    val terseReplies: Boolean = false,
     /** The self-contained HTML page shown in the canvas, or null when closed. */
     val canvas: String? = null,
     /** Workspace-relative name of the page in the canvas, for the top bar. */
@@ -416,6 +418,7 @@ class ChatViewModel(
             palette = keys.palette,
             askBeforeTools = keys.askBeforeTools,
             notifyOnComplete = keys.notifyOnComplete,
+            terseReplies = keys.terseReplies,
             agentMode = if (keys.agentMode == "delegate") "build" else keys.agentMode,
             maxCostUsd = keys.maxCostUsd,
             autoCompactPercent = keys.autoCompactPercent,
@@ -698,6 +701,12 @@ class ChatViewModel(
     fun setNotifyOnComplete(on: Boolean) {
         keys.notifyOnComplete = on
         _state.value = _state.value.copy(notifyOnComplete = on)
+    }
+
+    /** Toggle terse agent replies and persist it. */
+    fun setTerseReplies(on: Boolean) {
+        keys.terseReplies = on
+        _state.value = _state.value.copy(terseReplies = on)
     }
 
     /** Set the per-session cost ceiling in USD (0 = unlimited) and persist it. */
@@ -3059,6 +3068,7 @@ class ChatViewModel(
                     budget = ContextBudget(
                         maxCostUsd = _state.value.maxCostUsd.takeIf { it > 0 },
                     ).apply { compactAtFraction = _state.value.autoCompactPercent / 100.0 },
+                    rules = if (keys.terseReplies) TERSE_RULES else null,
                 )
                 diag("run finished")
             } catch (e: CancellationException) {
@@ -3207,6 +3217,12 @@ class ChatViewModel(
 
         /** Over-cap tool output spilled under `<workspace>/.spindle/truncated/`. */
         private const val SPILL_DIR = ".spindle/truncated"
+
+        /** Extra system rules appended when terse replies are enabled. */
+        private const val TERSE_RULES =
+            "Answer tersely. Lead with the result; skip preamble, filler and restating the " +
+                "request. Prefer short sentences or bullets over paragraphs. Do not narrate " +
+                "obvious steps. Never omit information that is needed to act on the answer."
 
         /** The shared app database's filename (see AndroidDatabase). */
         private const val DB_NAME = "lumen.db"

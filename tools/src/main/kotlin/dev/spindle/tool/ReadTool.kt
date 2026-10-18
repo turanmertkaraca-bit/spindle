@@ -81,9 +81,12 @@ class ReadTool : Tool {
 
         val start = offset - 1
         val end = minOf(window.totalLines, start + limit)
+        // Size the line-number gutter to the window instead of a fixed width, so
+        // short files do not pay five spaces of padding on every line.
+        val gutter = end.toString().length
         val builder = StringBuilder()
         for (i in window.lines.indices) {
-            builder.append((start + i + 1).toString().padStart(6)).append('\t')
+            builder.append((start + i + 1).toString().padStart(gutter)).append('\t')
                 .append(window.lines[i]).append('\n')
         }
 

@@ -240,8 +240,27 @@ class ToolsTest {
 
             val outcome = GrepTool().run(obj("""{"pattern":"needle","include":"*.kt"}"""), ctx)
             assertFalse(outcome.isError)
-            assertTrue(outcome.output.contains("a.kt:2:"), outcome.output)
+            assertTrue(outcome.output.contains("a.kt"), outcome.output)
+            assertTrue(outcome.output.contains("2: val needle = 2"), outcome.output)
             assertFalse(outcome.output.contains("b.txt"), outcome.output)
+        }
+    }
+
+    @Test
+    fun grepGroupsMatchesByFileAndListsPathOnce() = runTest {
+        withTempDir { dir ->
+            val ctx = FakeToolContext(dir)
+            Files.writeString(dir.resolve("a.kt"), "one needle\ntwo\nthree needle\n")
+            Files.writeString(dir.resolve("b.kt"), "needle here\n")
+
+            val outcome = GrepTool().run(obj("""{"pattern":"needle"}"""), ctx)
+
+            assertFalse(outcome.isError, outcome.output)
+            // The path is written once, then its matches are indented.
+            assertEquals(1, Regex(Regex.escape("a.kt")).findAll(outcome.output).count(), outcome.output)
+            assertTrue(outcome.output.contains("  1: one needle"), outcome.output)
+            assertTrue(outcome.output.contains("  3: three needle"), outcome.output)
+            assertTrue(outcome.output.contains("  1: needle here"), outcome.output)
         }
     }
 
@@ -398,6 +417,19 @@ class ToolsTest {
                 outcome.output,
             )
             assertEquals("true", outcome.metadata["truncated"])
+        }
+    }
+
+    @Test
+    fun bashStripsAnsiColourCodes() = runTest {
+        withTempDir { dir ->
+            val ctx = FakeToolContext(dir)
+            val coloured = "\u001B[31mFAILED\u001B[0m tests\n\u001B[32mPASSED\u001B[0m build\n"
+            val shell = FakeShell(ShellResult(exitCode = 0, output = coloured))
+            val outcome = BashTool(shell).run(obj("""{"command":"gradle"}"""), ctx)
+
+            assertEquals("[exit 0]\nFAILED tests\nPASSED build\n", outcome.output)
+            assertFalse(outcome.output.contains('\u001B'), "escape bytes must be gone")
         }
     }
 

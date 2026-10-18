@@ -535,6 +535,8 @@ class MainActivity : ComponentActivity() {
                     modifier = modifier,
                     askBeforeTools = state.askBeforeTools,
                     onAskBeforeTools = viewModel::setAskBeforeTools,
+                    terseReplies = state.terseReplies,
+                    onTerseReplies = viewModel::setTerseReplies,
                     notifyOnComplete = state.notifyOnComplete,
                     onNotifyOnComplete = viewModel::setNotifyOnComplete,
                     maxCostUsd = state.maxCostUsd,

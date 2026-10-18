@@ -61,6 +61,9 @@ fun SettingsScreen(
     onPalette: (String) -> Unit = {},
     askBeforeTools: Boolean = false,
     onAskBeforeTools: (Boolean) -> Unit = {},
+    /** Whether the agent is asked to answer tersely (cuts output tokens). */
+    terseReplies: Boolean = false,
+    onTerseReplies: (Boolean) -> Unit = {},
     /** Whether a finished/failed run posts a title-only notification. */
     notifyOnComplete: Boolean = true,
     onNotifyOnComplete: (Boolean) -> Unit = {},
@@ -210,6 +213,14 @@ fun SettingsScreen(
                 checked = askBeforeTools,
                 onCheckedChange = onAskBeforeTools,
                 tag = "ask-before-tools",
+            )
+            RowDivider(colors)
+            ToggleRow(
+                colors = colors,
+                label = "terse replies",
+                checked = terseReplies,
+                onCheckedChange = onTerseReplies,
+                tag = "terse-replies",
             )
         }
 
