@@ -2,12 +2,12 @@
 
 Native Android agent app on the `spindle` engine. Repo
 `turanmertkaraca-bit/spindle`, branch `main`, package `dev.lumen.app`.
-Latest code HEAD = `82e1c41`, version **0.2.6** (`versionCode 11`); this docs
-refresh for the 0.2.6 timeline fixes lands on top of `82e1c41`. CI
+Latest code HEAD = `65e8cee`, version **0.2.7** (`versionCode 12`); this docs
+refresh for the 0.2.7 wave lands on top of `65e8cee`. CI
 (`.github/workflows/ci.yml`) runs both jobs (`jvm backend` + `android app
 (robolectric)`) — always re-verify CI by sha with the `ci.sh` poll in §4 before
-trusting a build. Releases **v0.2.0**–**v0.2.5** are published, each with a
-`lumen-<ver>-debug.apk` asset; **v0.2.6** is the current version. The debug APK
+trusting a build. Releases **v0.2.0**–**v0.2.6** are published, each with a
+`lumen-<ver>-debug.apk` asset; **v0.2.7** is the current version. The debug APK
 is signed with the committed `debug.keystore` so it installs over the previous
 build. A fresh debug APK is staged on device at
 `/storage/emulated/0/Download/lumen-debug.apk`.
@@ -156,6 +156,46 @@ The 0.2.x waves landed since the last handoff; all are CI-green.
   rows) and fixed the **tail pin** so a last row taller than the viewport is
   scrolled into view instead of being cut at the fold (the pin only handled
   positive gaps before).
+- **0.2.7**: a big hardening/perf/QoL wave.
+  - **Agent git access (the headline fix)**: the agent had NO way to
+    authenticate git — the sandbox bash is deliberately stripped of
+    `GITHUB_TOKEN`, so push/private-clone always failed. New `tools/GitTool.kt`
+    (`git` tool) runs through the same `ShellExecutor` in the session cwd and
+    injects the stored token **only** through the process environment with a
+    one-shot `credential.helper` (never argv/URL, redacted from output, push
+    never forced). Ops: `status diff log show branch remote add commit clone
+    fetch pull push checkout`. Registered in `ChatViewModel` with the KeyStore
+    token; denied for the read-only `explore`/`plan` agents. 11 JVM tests.
+  - **Hardening**: API key / GitHub token no longer use `rememberSaveable`
+    (they were serializable into the saved-instance Bundle); `ModelCatalogue`
+    rethrows `CancellationException`; `ExternalDirectoryTool` bounds the dir
+    stream before sort (no OOM); `AgentLoop` rethrows cancellation out of the
+    pre-run finalize and `NonCancellable`-wraps the crash-path finalize; the
+    doom-loop guard now counts signatures in a sliding window (catches
+    A/B/A/B, not only consecutive); `parts(session_id)` index (Android
+    migration 5, store-sqlite migration 3).
+  - **Token savings (lossless)**: grep groups matches by file (path once, then
+    indented `line: text`); read / external-read size the line-number gutter to
+    the window; bash strips ANSI CSI colour codes from the agent-facing result.
+    Opt-in **terse replies** (Settings → agent) appends a brevity rule.
+  - **Perf**: `ToolRegistry.specs` precomputed (read every step); subagents
+    pass `maintenance=false` so N children no longer trigger N full-DB sweeps;
+    `KeyStore` memoizes the decrypted secret (Keystore decrypt ran on the main
+    thread); `ModelPickerSheet` builds its map once per (models, provider).
+  - **QoL**: Settings → agent gains a collapsible **remembered permissions**
+    list (per-item + clear-all revocation — the `always allow` scopes were
+    write-only); Settings → appearance gains **reduce motion** (disables the
+    running pulse and the 420 ms theme cross-fade); markdown code blocks get a
+    **copy** button; the composer gains a **mic** control (system speech
+    recognizer, no `RECORD_AUDIO` needed); **regenerate** the last answer and
+    **edit & resend** an earlier user message, backed by a new
+    `SessionStore.rewindFrom` primitive (drops the target + tail; in-memory,
+    sqlite and Android implementations).
+  - **Deferred still**: search-result jump-to-message, and the broad move of
+    the remaining synchronous `ChatViewModel` filesystem helpers off the main
+    thread (many `:app` tests call them synchronously). Full stretchtext
+    (cc-stretch) was assessed: it needs the model to author the levels and, per
+    its own README, does **not** save tokens — only long-body windowing exists.
 
 ## 2. What's left (honest open gaps)
 
@@ -232,7 +272,7 @@ The 0.2.x waves landed since the last handoff; all are CI-green.
   refcount), `SessionStore.updatePart`, content-addressed `snapshot_blobs`
   (`sha256` PK), `SessionArchive.kt` (redacted export/import).
 - Git: `platform/GitRunner.kt` (`activity`, `commitDiff`, guarded commit/push),
-  `ui/GitHubScreen.kt`.
+  `tools/GitTool.kt` (the agent's authenticated `git` tool), `ui/GitHubScreen.kt`.
 - Mentions + links: `:core` `refs/ReferenceResolver.kt` (file refs; rejects
   `://`); render/tap in `ui/MarkdownText.kt` (`FILE_TAG`, `URL_TAG`;
   `onOpenFile` vs `onOpenUrl`); dispatch in `MainActivity.kt`; system actions in
