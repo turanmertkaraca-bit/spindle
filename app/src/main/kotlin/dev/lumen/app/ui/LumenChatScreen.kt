@@ -346,6 +346,8 @@ fun LumenChatScreen(
     onFork: (() -> Unit)? = null,
     /** Rewind the active session to a store message id (from an assistant row). */
     onRewind: (String) -> Unit = {},
+    /** Re-run the last user turn from scratch (drop its answer and ask again). */
+    onRegenerate: () -> Unit = {},
     /** Active primary agent: "build" | "plan". */
     agentMode: String = "build",
     /** Switch the primary agent. */
@@ -710,6 +712,7 @@ fun LumenChatScreen(
                                         fileRevision = fileRevision,
                                         fileKind = fileKind,
                                         onRewind = onRewind,
+                                        onRegenerate = onRegenerate,
                                         onOpenCanvas = onOpenCanvas,
                                         modifier = Modifier
                                             .animateItem()
@@ -955,6 +958,7 @@ private fun MessageRow(
     fileRevision: Int = 0,
     fileKind: ((String) -> FileKind?)? = null,
     onRewind: (String) -> Unit = {},
+    onRegenerate: () -> Unit = {},
     onOpenCanvas: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -1100,6 +1104,22 @@ private fun MessageRow(
                             }
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                             .testTag("rewind-${step.id}"),
+                    )
+                }
+                if (rewindArmed && step.kind == StepKind.ASSISTANT) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "regenerate",
+                        color = colors.water, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clip(LumenShapes.small)
+                            .border(1.dp, colors.water.copy(alpha = 0.35f), LumenShapes.small)
+                            .clickable {
+                                onRegenerate()
+                                rewindArmed = false
+                            }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .testTag("regenerate-${step.id}"),
                     )
                 }
             }

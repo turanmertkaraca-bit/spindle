@@ -92,6 +92,15 @@ class InMemorySessionStore : SessionStore, SessionSearch {
         removed
     }
 
+    override suspend fun rewindFrom(sessionId: SessionId, fromMessageId: MessageId): Int = mutex.withLock {
+        val list = messages[sessionId] ?: return@withLock 0
+        val index = list.indexOfFirst { it.id == fromMessageId }
+        if (index < 0) return@withLock 0
+        val removed = list.size - index
+        while (list.size > index) list.removeAt(list.size - 1)
+        removed
+    }
+
     override suspend fun appendMessage(message: Message) {
         mutex.withLock { messages.getOrPut(message.sessionId) { mutableListOf() }.add(message) }
     }

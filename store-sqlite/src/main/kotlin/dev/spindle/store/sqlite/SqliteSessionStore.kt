@@ -319,6 +319,43 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
         dropped.size
     }
 
+    override suspend fun rewindFrom(sessionId: SessionId, fromMessageId: MessageId): Int = mutex.withLock {
+        val seq = connection.prepareStatement(
+            "SELECT seq FROM messages WHERE session_id = ? AND id = ?",
+        ).use { st ->
+            st.setString(1, sessionId.value)
+            st.setString(2, fromMessageId.value)
+            st.executeQuery().use { rs -> if (rs.next()) rs.getInt(1) else null }
+        } ?: return@withLock 0
+        val dropped = connection.prepareStatement(
+            "SELECT id FROM messages WHERE session_id = ? AND seq >= ?",
+        ).use { st ->
+            st.setString(1, sessionId.value)
+            st.setInt(2, seq)
+            st.executeQuery().use { rs -> buildList { while (rs.next()) add(rs.getString(1)) } }
+        }
+        if (dropped.isEmpty()) return@withLock 0
+        connection.autoCommit = false
+        try {
+            for (messageId in dropped) {
+                deleteParts(messageId)
+                deleteFtsMessage(messageId)
+            }
+            connection.prepareStatement("DELETE FROM messages WHERE session_id = ? AND seq >= ?").use {
+                it.setString(1, sessionId.value)
+                it.setInt(2, seq)
+                it.executeUpdate()
+            }
+            connection.commit()
+        } catch (t: Throwable) {
+            connection.rollback()
+            throw t
+        } finally {
+            connection.autoCommit = true
+        }
+        dropped.size
+    }
+
     /**
      * Append a message. Idempotent on the message id: re-appending an existing
      * id is a no-op (`INSERT OR IGNORE`) rather than a replace or a duplicate.

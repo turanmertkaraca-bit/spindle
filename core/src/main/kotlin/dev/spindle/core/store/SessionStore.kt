@@ -49,6 +49,14 @@ interface SessionStore {
      */
     suspend fun rewind(sessionId: SessionId, toMessageId: MessageId): Int
 
+    /**
+     * Drop [fromMessageId] itself and every message after it. Unlike [rewind]
+     * (which keeps its target), this removes the target too, so a caller can
+     * re-run a turn from scratch (edit-and-resend, regenerate). Returns the
+     * number of messages removed; zero when the point is unknown.
+     */
+    suspend fun rewindFrom(sessionId: SessionId, fromMessageId: MessageId): Int
+
     suspend fun appendMessage(message: Message)
     suspend fun updateMessage(message: Message)
 

@@ -89,6 +89,19 @@ class InMemorySessionStoreTest {
     }
 
     @Test
+    fun `rewindFrom drops the target and everything after it`() = runTest {
+        val store = InMemorySessionStore()
+        store.createSession(session("s1"))
+        store.appendMessage(message("m1", "s1"))
+        store.appendMessage(message("m2", "s1"))
+        store.appendMessage(message("m3", "s1"))
+
+        assertEquals(3, store.rewindFrom(SessionId("s1"), MessageId("m1")))
+        assertEquals(emptyList(), store.messages(SessionId("s1")).map { it.id.value })
+        assertEquals(0, store.rewindFrom(SessionId("s1"), MessageId("nope")))
+    }
+
+    @Test
     fun `updatePart replaces one part and leaves the others in order`() = runTest {
         val store = InMemorySessionStore()
         store.createSession(session("s1"))

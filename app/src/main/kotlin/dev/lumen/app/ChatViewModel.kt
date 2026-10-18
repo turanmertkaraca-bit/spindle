@@ -1719,6 +1719,36 @@ class ChatViewModel(
     }
 
     /**
+     * Re-run the last user turn: drop that message and everything after it, then
+     * send its text again so the model answers fresh. A no-op while busy.
+     */
+    fun regenerateLast() {
+        val current = _state.value.currentSessionId ?: return
+        if (_state.value.busy || runJob?.isActive == true) return
+        viewModelScope.launch {
+            val sid = SessionId(current)
+            val messages = store.messages(sid)
+            val lastUser = messages.lastOrNull { it.role == Role.USER } ?: return@launch
+            val text = lastUser.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
+            if (text.isBlank()) return@launch
+            store.rewindFrom(sid, lastUser.id)
+            val remaining = store.messages(sid)
+            val steps = enrich(StepMapper.fromMessages(remaining))
+            replaceTimeline(steps)
+            _state.value = _state.value.copy(
+                steps = steps,
+                input = text,
+                usage = remaining.fold(Usage()) { acc, m -> acc + m.usage },
+                changes = RunChanges.EMPTY,
+                lastRevert = null,
+                error = null,
+            )
+            resetUsage()
+            send()
+        }
+    }
+
+    /**
      * Full-text search over the store, when it advertises [SessionSearch]. A
      * blank query clears the results; a store without search is a no-op for the
      * results (the query text still tracks the field).

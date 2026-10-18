@@ -357,6 +357,21 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
         tail.size
     }
 
+    override suspend fun rewindFrom(sessionId: SessionId, fromMessageId: MessageId): Int = locked {
+        val list = messagesUnlocked(sessionId)
+        val index = list.indexOfFirst { it.id == fromMessageId }
+        if (index < 0) return@locked 0
+        val tail = list.subList(index, list.size)
+        transaction {
+            for (m in tail) {
+                db.delete("parts", "message_id=?", arrayOf(m.id.value))
+                db.delete("messages", "id=?", arrayOf(m.id.value))
+                ftsDeleteMessage(m.id.value)
+            }
+        }
+        tail.size
+    }
+
     // ---- messages ----
 
     /**

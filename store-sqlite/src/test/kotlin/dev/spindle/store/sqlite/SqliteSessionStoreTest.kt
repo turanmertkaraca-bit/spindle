@@ -275,6 +275,22 @@ class SqliteSessionStoreTest {
     }
 
     @Test
+    fun rewindFromDropsTargetAndTail(@TempDir tmpDir: Path) = runTest {
+        val db = tmpDir.resolve("rewind_from.db")
+        val s = SqliteSessionStore.open(db)
+        store = s
+        val sid = SessionId("ses_rewind_from")
+        s.createSession(Session(id = sid, cwd = "/w", createdAt = 1L, updatedAt = 1L))
+        s.appendMessage(Message(MessageId("m1"), sid, Role.USER, listOf(text("p1", "one")), 1L))
+        s.appendMessage(Message(MessageId("m2"), sid, Role.ASSISTANT, listOf(text("p2", "two")), 2L))
+        s.appendMessage(Message(MessageId("m3"), sid, Role.USER, listOf(text("p3", "three")), 3L))
+
+        assertEquals(2, s.rewindFrom(sid, MessageId("m2")))
+        assertEquals(listOf("m1"), s.messages(sid).map { it.id.value })
+        assertEquals(0, s.rewindFrom(sid, MessageId("gone")))
+    }
+
+    @Test
     fun searchTracksInsertsUpdatesAndDeletes(@TempDir tmpDir: Path) = runTest {
         val db = tmpDir.resolve("search.db")
         val s = SqliteSessionStore.open(db)

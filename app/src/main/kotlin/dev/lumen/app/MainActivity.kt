@@ -339,6 +339,7 @@ class MainActivity : ComponentActivity() {
                     onAgentMode = viewModel::setAgentMode,
                     onFork = { state.currentSessionId?.let(viewModel::forkSession) },
                     onRewind = viewModel::rewindTo,
+                    onRegenerate = viewModel::regenerateLast,
                     onToggleTheme = toggleTheme,
                     onEditKey = {
                         quickSettings = false
