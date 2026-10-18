@@ -1749,6 +1749,36 @@ class ChatViewModel(
     }
 
     /**
+     * Edit an earlier user message: drop it and everything after, and load its
+     * text into the composer so the user can change it and send again. The
+     * subsequent [send] appends the edited message normally.
+     */
+    fun beginEdit(messageId: String) {
+        val current = _state.value.currentSessionId ?: return
+        if (_state.value.busy || runJob?.isActive == true) return
+        viewModelScope.launch {
+            val sid = SessionId(current)
+            val message = store.message(sid, MessageId(messageId)) ?: return@launch
+            if (message.role != Role.USER) return@launch
+            val text = message.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
+            store.rewindFrom(sid, MessageId(messageId))
+            val remaining = store.messages(sid)
+            val steps = enrich(StepMapper.fromMessages(remaining))
+            replaceTimeline(steps)
+            _state.value = _state.value.copy(
+                steps = steps,
+                input = text,
+                usage = remaining.fold(Usage()) { acc, m -> acc + m.usage },
+                changes = RunChanges.EMPTY,
+                lastRevert = null,
+                error = null,
+                hint = "editing an earlier message",
+            )
+            resetUsage()
+        }
+    }
+
+    /**
      * Full-text search over the store, when it advertises [SessionSearch]. A
      * blank query clears the results; a store without search is a no-op for the
      * results (the query text still tracks the field).

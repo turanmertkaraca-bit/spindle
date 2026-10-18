@@ -71,4 +71,26 @@ class RegenerateTest {
         assertEquals(listOf("m1", "m2"), remaining.map { it.id.value })
         assertTrue(vm.state.value.needsKey, "a keyless regenerate stops at the key gate")
     }
+
+    @Test
+    fun `edit drops the message and loads its text into the composer`() {
+        val dir = Files.createTempDirectory("lumen-edit").toFile()
+        val store = InMemorySessionStore()
+        val vm = ChatViewModel(dir.toPath(), keys(), store)
+
+        val sid = SessionId("ses_edit")
+        runBlocking {
+            store.createSession(Session(sid, "t", dir.path, 0, 0))
+            store.appendMessage(Message(MessageId("m1"), sid, Role.USER, listOf(text("p1", "first")), 1L))
+            store.appendMessage(Message(MessageId("m2"), sid, Role.ASSISTANT, listOf(text("p2", "answer")), 2L))
+            store.appendMessage(Message(MessageId("m3"), sid, Role.USER, listOf(text("p3", "again?")), 3L))
+            store.appendMessage(Message(MessageId("m4"), sid, Role.ASSISTANT, listOf(text("p4", "second")), 4L))
+        }
+        vm.openSession(sid.value)
+
+        vm.beginEdit("m3")
+
+        assertEquals(listOf("m1", "m2"), runBlocking { store.messages(sid) }.map { it.id.value })
+        assertEquals("again?", vm.state.value.input)
+    }
 }

@@ -348,6 +348,8 @@ fun LumenChatScreen(
     onRewind: (String) -> Unit = {},
     /** Re-run the last user turn from scratch (drop its answer and ask again). */
     onRegenerate: () -> Unit = {},
+    /** Load an earlier user message into the composer for editing. */
+    onEdit: (String) -> Unit = {},
     /** Active primary agent: "build" | "plan". */
     agentMode: String = "build",
     /** Switch the primary agent. */
@@ -713,6 +715,7 @@ fun LumenChatScreen(
                                         fileKind = fileKind,
                                         onRewind = onRewind,
                                         onRegenerate = onRegenerate,
+                                        onEdit = onEdit,
                                         onOpenCanvas = onOpenCanvas,
                                         modifier = Modifier
                                             .animateItem()
@@ -960,6 +963,7 @@ private fun MessageRow(
     onRewind: (String) -> Unit = {},
     onRegenerate: () -> Unit = {},
     onOpenCanvas: (String) -> Unit = {},
+    onEdit: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
@@ -1120,6 +1124,22 @@ private fun MessageRow(
                             }
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                             .testTag("regenerate-${step.id}"),
+                    )
+                }
+                if (rewindArmed && mid != null && step.kind == StepKind.YOU) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "edit & resend",
+                        color = colors.water, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clip(LumenShapes.small)
+                            .border(1.dp, colors.water.copy(alpha = 0.35f), LumenShapes.small)
+                            .clickable {
+                                onEdit(mid)
+                                rewindArmed = false
+                            }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                            .testTag("edit-${step.id}"),
                     )
                 }
             }
