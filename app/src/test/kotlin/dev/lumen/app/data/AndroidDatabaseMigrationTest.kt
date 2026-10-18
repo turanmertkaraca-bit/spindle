@@ -62,9 +62,10 @@ class AndroidDatabaseMigrationTest {
         }
 
         openRaw().use { raw ->
-            assertEquals(4, raw.userVersion(), "the version gate records the current schema")
+            assertEquals(5, raw.userVersion(), "the version gate records the current schema")
             assertTrue(raw.hasColumn("snapshots", "sequence"), "migration 3 adds the snapshot sequence")
             assertTrue(raw.isUniqueIndex("messages", "idx_msg"), "migration 2 makes (session_id, seq) unique")
+            assertTrue(raw.hasIndex("parts", "idx_part_session"), "migration 5 indexes parts(session_id)")
         }
     }
 
@@ -99,7 +100,7 @@ class AndroidDatabaseMigrationTest {
         }
 
         openRaw().use { raw ->
-            assertEquals(4, raw.userVersion())
+            assertEquals(5, raw.userVersion())
             assertTrue(raw.hasColumn("snapshots", "sequence"), "the sequence column is preserved")
             assertTrue(!raw.hasColumn("snapshots", "content"), "the content column is moved to snapshot_blobs")
             assertEquals(2, raw.countBlobs(), "duplicate bodies collapse to one blob")
@@ -152,6 +153,14 @@ class AndroidDatabaseMigrationTest {
             val unique = c.getColumnIndexOrThrow("unique")
             var found = false
             while (c.moveToNext()) if (c.getString(name) == index) found = c.getInt(unique) != 0
+            found
+        }
+
+    private fun SQLiteDatabase.hasIndex(table: String, index: String): Boolean =
+        rawQuery("PRAGMA index_list($table)", null).use { c ->
+            val name = c.getColumnIndexOrThrow("name")
+            var found = false
+            while (c.moveToNext()) if (c.getString(name) == index) found = true
             found
         }
 

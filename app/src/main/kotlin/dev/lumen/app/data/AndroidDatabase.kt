@@ -293,7 +293,11 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
      * it for fresh DBs; this backfills existing ones.
      */
     private fun partsSessionIndex(db: SQLiteDatabase) {
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_part_session ON parts(session_id)")
+        // An old DB that predates `parts` (e.g. a snapshots-only fixture) never
+        // gets the table here — migrations before this one were already past.
+        if ("session_id" in columnNames(db, "parts")) {
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_part_session ON parts(session_id)")
+        }
     }
 
     private fun columnNames(db: SQLiteDatabase, table: String): Set<String> =
