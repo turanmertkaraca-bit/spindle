@@ -93,7 +93,7 @@ data class AgentConfig(
         fun explore() = AgentConfig(
             name = "explore",
             systemPrompt = EXPLORE_SYSTEM,
-            denyTools = setOf("write", "edit", "apply_patch", "bash", "task"),
+            denyTools = setOf("write", "edit", "apply_patch", "bash", "git", "task"),
             allowSubagents = false,
             temperature = 0.1,
         )
@@ -110,7 +110,7 @@ data class AgentConfig(
         val PLAN = AgentConfig(
             name = "plan",
             systemPrompt = PLAN_SYSTEM,
-            denyTools = setOf("write", "edit", "apply_patch", "bash"),
+            denyTools = setOf("write", "edit", "apply_patch", "bash", "git"),
             allowSubagents = false,
         )
 

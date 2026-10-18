@@ -60,6 +60,7 @@ import dev.spindle.core.store.SearchHit
 import dev.spindle.core.store.SessionSearch
 import dev.spindle.core.store.SessionStore
 import dev.spindle.tool.DefaultTools
+import dev.spindle.tool.GitTool
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -3017,7 +3018,7 @@ class ChatViewModel(
             } else {
                 null
             }
-            val tools = if (downloadsRoot != null) {
+            val baseTools = if (downloadsRoot != null) {
                 DefaultTools.registry(
                     shell = shell ?: HostShellExecutor(),
                     externalRoots = listOf(downloadsRoot.toPath()),
@@ -3026,6 +3027,17 @@ class ChatViewModel(
                 DefaultTools.registry(shell = shell ?: HostShellExecutor())
                     .without(setOf("external-directory"))
             }
+            // Give the agent first-class git with the stored GitHub token, so
+            // push/clone to private repos authenticate (the sandbox bash is
+            // deliberately stripped of secrets). The token is read at call time.
+            val tools = baseTools.with(
+                listOf(
+                    GitTool(
+                        shell = shell ?: HostShellExecutor(),
+                        token = { keys.githubToken },
+                    ),
+                ),
+            )
             val loop = AgentLoop(
                 providers = providersFor(keys.provider, key),
                 tools = tools,
