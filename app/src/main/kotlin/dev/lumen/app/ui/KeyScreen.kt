@@ -175,7 +175,10 @@ fun KeyScreen(
     error: String? = null,
 ) {
     var provider by rememberSaveable { mutableStateOf(initialProvider) }
-    var key by rememberSaveable { mutableStateOf(initialKey) }
+    // Never rememberSaveable: a secret in the saved-instance Bundle can be
+    // persisted to disk, defeating SecretCipher. `remember` re-reads
+    // [initialKey] from the KeyStore on recreation.
+    var key by remember(initialKey) { mutableStateOf(initialKey) }
     var visible by rememberSaveable { mutableStateOf(false) }
     var probe by remember { mutableStateOf<ProbeOutcome?>(null) }
     var testing by remember { mutableStateOf(false) }

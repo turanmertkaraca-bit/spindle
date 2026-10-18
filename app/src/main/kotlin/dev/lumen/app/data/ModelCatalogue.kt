@@ -62,6 +62,7 @@ class ModelCatalogue(
             _errors.value = _errors.value + (provider to cleared)
             ProviderCatalogue.mergeModels(embedded, live)
         } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
             val failure: String? = t.message ?: t.toString()
             _errors.value = _errors.value + (provider to failure)
             models(provider)
@@ -76,7 +77,13 @@ class ModelCatalogue(
      * with no key never opens a socket.
      */
     suspend fun refreshAll() {
-        runCatching { refresh(keys.provider) }
+        try {
+            refresh(keys.provider)
+        } catch (t: kotlinx.coroutines.CancellationException) {
+            throw t
+        } catch (_: Throwable) {
+            // keep the embedded/cached list
+        }
     }
 
     /** Epoch millis of the last successful persist for [provider], or 0. */

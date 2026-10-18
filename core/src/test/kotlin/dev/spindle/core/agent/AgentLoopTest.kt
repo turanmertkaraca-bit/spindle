@@ -1359,4 +1359,41 @@ class AgentLoopTest {
         )
         assertEquals(SessionState.IDLE, store.session(SessionId("ses_doom"))!!.state)
     }
+
+    @Test
+    fun `alternating tool calls also trip the doom-loop guard`() = runTest {
+        fun call(text: String) = listOf(
+            ProviderEvent.ToolCallStart(0, "call_$text", "echo"),
+            ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"$text\"}"),
+            ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+        )
+        // A/B/A/B/A reaches maxRepeatedCalls=3 occurrences of "A" inside the
+        // sliding window, so the guard must stop it (the old consecutive-only
+        // counter reset on every alternation and never tripped).
+        val provider = ScriptedProvider(
+            call("a"), call("b"), call("a"), call("b"), call("a"), call("b"), call("a"),
+        )
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        newSession(store, "ses_doom_alt")
+
+        loop.prompt(SessionId("ses_doom_alt"), "go", "fake/fake-1", agent = AgentConfig(maxRepeatedCalls = 3))
+
+        // Calls a,b,a,b run; the 5th (3rd "a") is stopped before it runs.
+        assertEquals(5, provider.requests.size)
+        val tools = store.messages(SessionId("ses_doom_alt"))
+            .flatMap { it.parts }.filterIsInstance<Part.Tool>()
+        assertEquals(5, tools.size)
+        assertEquals(ToolState.ERROR, tools[4].state)
+        assertTrue(
+            tools[4].result?.output?.contains("doom loop") == true,
+            "the stopping part must report a doom loop: ${tools[4].result?.output}",
+        )
+        assertEquals(SessionState.IDLE, store.session(SessionId("ses_doom_alt"))!!.state)
+    }
 }

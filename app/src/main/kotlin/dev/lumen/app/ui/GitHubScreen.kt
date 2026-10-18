@@ -102,7 +102,9 @@ fun GitHubScreen(
     val uriHandler = LocalUriHandler.current
     val scope = rememberCoroutineScope()
 
-    var token by rememberSaveable { mutableStateOf(keys.githubToken.orEmpty()) }
+    // The token is a secret: keep it out of rememberSaveable (whose Bundle can
+    // be persisted to disk). `remember` rehydrates from the KeyStore instead.
+    var token by remember { mutableStateOf(keys.githubToken.orEmpty()) }
     var visible by rememberSaveable { mutableStateOf(false) }
     var repo by rememberSaveable { mutableStateOf(keys.githubRepo) }
     var login by rememberSaveable { mutableStateOf(keys.githubLogin) }

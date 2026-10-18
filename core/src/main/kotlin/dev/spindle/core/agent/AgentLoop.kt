@@ -151,7 +151,14 @@ class AgentLoop(
         // Any tool part still open from a previous turn can never finish now, but
         // it would block overflow handling forever (an open call disables
         // trim/compact) and be re-sent every turn. Finalize it before starting.
-        runCatching { finalizeOpenTools(sessionId) }
+        // Never swallow cancellation: only real failures are tolerated here.
+        try {
+            finalizeOpenTools(sessionId)
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (_: Throwable) {
+            // Best effort; a later turn retries.
+        }
 
         bus.emit(AgentEvent.StateChanged(sessionId, SessionState.RUNNING))
         persistState(store, sessionId, SessionState.RUNNING)
@@ -178,9 +185,11 @@ class AgentLoop(
             var step = 0
             var compacted = false
             var overflowRetries = 0
-            // Doom-loop guard: the signature of the last executed tool call and
-            // how many times it has repeated consecutively across steps.
-            var lastToolSignature: String? = null
+            // Doom-loop guard: count how often each tool signature appears in a
+            // sliding window of the most recent calls, so an alternating
+            // A/B/A/B loop is caught as well as a consecutive A/A/A one.
+            val recentSignatures = ArrayDeque<String>()
+            val repeatWindow = ((agent.maxRepeatedCalls ?: 3) * 2).coerceAtLeast(2)
             var repeatedCalls = 0
             while (true) {
                 currentCoroutineContext().ensureActive()
@@ -424,8 +433,9 @@ class AgentLoop(
                 for ((index, part) in toolParts.withIndex()) {
                     currentCoroutineContext().ensureActive()
                     val signature = toolSignature(part.call)
-                    repeatedCalls = if (signature == lastToolSignature) repeatedCalls + 1 else 1
-                    lastToolSignature = signature
+                    recentSignatures.addLast(signature)
+                    if (recentSignatures.size > repeatWindow) recentSignatures.removeFirst()
+                    repeatedCalls = recentSignatures.count { it == signature }
                     if (agent.maxRepeatedCalls != null && repeatedCalls >= agent.maxRepeatedCalls) {
                         // Fail this call and every remaining call in the turn so no
                         // part is left PENDING; the model sees the loop and stops.
@@ -498,7 +508,8 @@ class AgentLoop(
             // A crash after the assistant advertised tool calls would otherwise
             // leave PENDING/RUNNING parts persisted forever, blocking overflow
             // handling (an open call disables trim/compact) on every future turn.
-            runCatching { finalizeOpenTools(sessionId) }
+            // NonCancellable so an in-flight cancellation still cleans up.
+            withContext(NonCancellable) { runCatching { finalizeOpenTools(sessionId) } }
             bus.emit(AgentEvent.Error(sessionId, e.message ?: e.toString()))
             terminalState = SessionState.ERROR
             bus.emit(AgentEvent.StateChanged(sessionId, SessionState.ERROR))

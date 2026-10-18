@@ -219,15 +219,17 @@ fun SettingsScreen(
         Spacer(Modifier.height(LumenSpacing.sm))
         SettingsCard(colors) {
             FieldRow(colors, "budget") {
+                val custom = isCustomBudget(maxCostUsd)
                 LumenSegmented(
-                    segments = listOf(
-                        LumenSegment("off", "unlimited", "budget-off"),
-                        LumenSegment("050", "\$0.50", "budget-050"),
-                        LumenSegment("2", "\$2", "budget-2"),
-                        LumenSegment("5", "\$5", "budget-5"),
-                    ),
+                    segments = buildList {
+                        add(LumenSegment("off", "unlimited", "budget-off"))
+                        add(LumenSegment("050", "\$0.50", "budget-050"))
+                        add(LumenSegment("2", "\$2", "budget-2"))
+                        add(LumenSegment("5", "\$5", "budget-5"))
+                        if (custom) add(LumenSegment("custom", formatBudget(maxCostUsd), "budget-custom"))
+                    },
                     selected = budgetValue(maxCostUsd),
-                    onSelect = { onMaxCost(budgetUsd(it)) },
+                    onSelect = { if (it != "custom") onMaxCost(budgetUsd(it)) },
                     colors = colors,
                 )
             }
@@ -415,12 +417,20 @@ private fun paletteLabel(id: String): String = when (id) {
     else -> "prism"
 }
 
+private fun isCustomBudget(maxCostUsd: Double): Boolean =
+    maxCostUsd > 0.0 && maxCostUsd != 0.5 && maxCostUsd != 2.0 && maxCostUsd != 5.0
+
+private fun formatBudget(maxCostUsd: Double): String {
+    val n = if (maxCostUsd == Math.floor(maxCostUsd)) maxCostUsd.toLong().toString() else maxCostUsd.toString()
+    return "\$$n"
+}
+
 private fun budgetValue(maxCostUsd: Double): String = when {
     maxCostUsd <= 0.0 -> "off"
     maxCostUsd == 0.5 -> "050"
     maxCostUsd == 2.0 -> "2"
     maxCostUsd == 5.0 -> "5"
-    else -> "off"
+    else -> "custom"
 }
 
 private fun budgetUsd(segment: String): Double = when (segment) {

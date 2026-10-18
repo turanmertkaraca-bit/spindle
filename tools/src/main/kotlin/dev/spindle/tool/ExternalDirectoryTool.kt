@@ -94,13 +94,17 @@ class ExternalDirectoryTool(
             return ToolOutcome("Not a directory: ${resolved.raw}", isError = true)
         }
 
-        val entries = try {
-            Files.list(dir).use { it.sorted().collect(Collectors.toList()) }
+        // Bound the stream before sorting so a directory with millions of
+        // entries cannot be materialized (and OOM the process). We sample
+        // cap+1 rows to learn whether the cap was hit.
+        val cap = Limits.EXTERNAL_MAX_ENTRIES
+        val listed = try {
+            Files.list(dir).use { it.limit((cap + 1).toLong()).sorted().collect(Collectors.toList()) }
         } catch (e: Exception) {
             return ToolOutcome("Failed to list ${resolved.raw}: ${e.message}", isError = true)
         }
-
-        val shown = entries.take(Limits.EXTERNAL_MAX_ENTRIES)
+        val truncated = listed.size > cap
+        val shown = if (truncated) listed.subList(0, cap) else listed
         val builder = StringBuilder("${dir}:\n")
         for (entry in shown) {
             val attrs = try {
@@ -120,8 +124,8 @@ class ExternalDirectoryTool(
                 .append(entry.fileName)
                 .append('\n')
         }
-        if (entries.size > shown.size) {
-            builder.append(capNote(shown.size, entries.size, "external-directory"))
+        if (truncated) {
+            builder.append(capNote(shown.size, shown.size + 1, "external-directory"))
         }
 
         val output = clip(builder.toString())
@@ -131,8 +135,8 @@ class ExternalDirectoryTool(
                 "path" to dir.toString(),
                 "root" to resolved.root.toString(),
                 "count" to shown.size.toString(),
-                "total" to entries.size.toString(),
-                "truncated" to (entries.size > shown.size).toString(),
+                "total" to shown.size.toString(),
+                "truncated" to truncated.toString(),
             ),
         )
     }

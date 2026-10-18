@@ -117,6 +117,7 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
             Migration(2) { migrateMessagesUniqueSeq(it) },
             Migration(3) { migrateSnapshotSequence(it) },
             Migration(4) { contentAddressedSnapshots(it) },
+            Migration(5) { partsSessionIndex(it) },
         )
         val current = userVersion(db)
         for (migration in migrations) {
@@ -162,6 +163,7 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
                  id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, ord INTEGER, data TEXT)""",
         )
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_part ON parts(message_id, ord)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_part_session ON parts(session_id)")
         db.execSQL(
             """CREATE TABLE IF NOT EXISTS todos(
                  id TEXT PRIMARY KEY, session_id TEXT, ord INTEGER, content TEXT, status TEXT)""",
@@ -283,6 +285,15 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
         db.execSQL("DROP TABLE snapshots")
         db.execSQL("ALTER TABLE snapshots_new RENAME TO snapshots")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_snap ON snapshots(session_id, path)")
+    }
+
+    /**
+     * Index `parts(session_id)` so deleting/pruning/maintaining a session no
+     * longer full-scans the (large) parts table. [createSchema] already builds
+     * it for fresh DBs; this backfills existing ones.
+     */
+    private fun partsSessionIndex(db: SQLiteDatabase) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_part_session ON parts(session_id)")
     }
 
     private fun columnNames(db: SQLiteDatabase, table: String): Set<String> =
