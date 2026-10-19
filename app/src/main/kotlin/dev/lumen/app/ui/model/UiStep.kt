@@ -71,4 +71,6 @@ data class UiStep(
      * the row above rather than as an isolated card. Set by [StepMapper.linkRuns].
      */
     val linkedAbove: Boolean = false,
+    val childIds: List<String> = emptyList(),
+    val agent: String? = null,
 )

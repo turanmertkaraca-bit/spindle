@@ -232,7 +232,23 @@ class GitRunnerTest {
         val result = GitRunner(shell, temp()).commitDiff("abcdef1", maxBytes = 2048)
         val ok = result as GitResult.Ok
         assertTrue(ok.output.endsWith("\u2026 (truncated)"))
-        assertTrue(shell.commands.any { it.contains("head -c 2048") })
+        assertTrue(shell.commands.any { it.contains("git show") })
+        assertTrue(shell.commands.none { it.contains("head -c") })
+    }
+
+    @Test
+    fun `commitDiff reports a git show failure`() = runBlocking {
+        val shell = FakeShell { cmd ->
+            if (cmd.contains("git show")) {
+                ShellResult(128, "fatal: bad object abcdef1")
+            } else {
+                ShellResult(0, "")
+            }
+        }
+        val result = GitRunner(shell, temp()).commitDiff("abcdef1")
+        val failed = result as GitResult.Failed
+        assertEquals(128, failed.exitCode)
+        assertTrue("bad object" in failed.message)
     }
 
     @Test
@@ -281,6 +297,8 @@ class GitRunnerTest {
         val shell = FakeShell { cmd ->
             when {
                 cmd.contains("--version") -> ShellResult(0, "git version 2.43.0")
+                cmd.contains("remote get-url") ->
+                    ShellResult(0, "https://github.com/octocat/Hello-World.git\n")
                 cmd.contains("--abbrev-ref") -> ShellResult(0, "main\n")
                 else -> ShellResult(0, "Everything up-to-date")
             }
@@ -306,6 +324,8 @@ class GitRunnerTest {
         val shell = FakeShell { cmd ->
             when {
                 cmd.contains("--version") -> ShellResult(0, "git version 2.43.0")
+                cmd.contains("remote get-url") ->
+                    ShellResult(0, "https://github.com/o/r.git\n")
                 cmd.contains("credential.helper") ->
                     ShellResult(1, "fatal: Authentication failed for 'https://s3cr3t@github.com/o/r.git'")
                 else -> ShellResult(0, "")
@@ -314,5 +334,45 @@ class GitRunnerTest {
         val result = GitRunner(shell, temp()).push("s3cr3t")
         val failed = result as GitResult.Failed
         assertTrue("s3cr3t" !in failed.message, "the token must be redacted: ${failed.message}")
+    }
+
+    @Test
+    fun `push refuses a non-github origin`() = runBlocking {
+        val shell = FakeShell { cmd ->
+            when {
+                cmd.contains("--version") -> ShellResult(0, "git version 2.43.0")
+                cmd.contains("remote get-url") ->
+                    ShellResult(0, "https://evil.example/o/r.git\n")
+                cmd.contains("--abbrev-ref") -> ShellResult(0, "main\n")
+                else -> ShellResult(0, "")
+            }
+        }
+        val result = GitRunner(shell, temp()).push("s3cr3t")
+        val failed = result as GitResult.Failed
+        assertTrue("refusing to push" in failed.message, failed.message)
+        assertTrue("s3cr3t" !in failed.message)
+        assertTrue(
+            shell.commands.none { it.contains("credential.helper") },
+            "no credentialed push should run for a non-GitHub origin",
+        )
+    }
+
+    @Test
+    fun `push refuses a github remote over plain http`() = runBlocking {
+        val shell = FakeShell { cmd ->
+            when {
+                cmd.contains("--version") -> ShellResult(0, "git version 2.43.0")
+                cmd.contains("remote get-url") ->
+                    ShellResult(0, "http://github.com/o/r.git\n")
+                cmd.contains("--abbrev-ref") -> ShellResult(0, "main\n")
+                else -> ShellResult(0, "")
+            }
+        }
+        val result = GitRunner(shell, temp()).push("s3cr3t")
+        assertTrue(result is GitResult.Failed)
+        assertTrue(
+            shell.commands.none { it.contains("credential.helper") },
+            "plain http must not receive credentials",
+        )
     }
 }

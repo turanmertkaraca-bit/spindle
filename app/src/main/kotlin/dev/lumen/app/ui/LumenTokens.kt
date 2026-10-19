@@ -7,6 +7,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -18,6 +19,10 @@ import androidx.compose.ui.unit.sp
  * chat screen's danger colour closely enough to read as one signal.
  */
 val LumenAlert: Color = Color(0xFFE5484D)
+
+/** The error red tuned for small text on the active palette's background. */
+fun alertOn(colors: LumenColors): Color =
+    if (colors.bg.luminance() < 0.5f) Color(0xFFF87171) else Color(0xFFBE123C)
 
 /**
  * The single source of truth for corner radii. Cards, chips, fields and bubbles

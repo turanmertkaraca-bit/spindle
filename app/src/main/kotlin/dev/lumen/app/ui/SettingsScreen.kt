@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -81,7 +82,7 @@ fun SettingsScreen(
     /** Per-session cost ceiling in USD; 0 means unlimited. */
     maxCostUsd: Double = 0.0,
     onMaxCost: (Double) -> Unit = {},
-    /** Active primary agent: "build" | "plan" | "delegate". */
+    /** Active primary agent: "build" | "plan". */
     agentMode: String = "build",
     onAgentMode: (String) -> Unit = {},
     /** Auto-compaction threshold percentage (50..95) of the model window. */
@@ -103,6 +104,8 @@ fun SettingsScreen(
     hasKey: Boolean = true,
     /** True while the live model catalogue is loading; the default-model row spins. */
     modelsLoading: Boolean = false,
+    /** Catalogue refresh failure, shown as a compact line under the model card. */
+    modelsError: String? = null,
 ) {
     Column(
         modifier
@@ -156,7 +159,6 @@ fun SettingsScreen(
                 value = model.substringAfterLast('/').ifBlank { "none" },
                 tag = "settings-model",
                 onClick = { onBrowseModels?.invoke() ?: onModel(model) },
-                enabled = onBrowseModels != null,
                 loading = modelsLoading,
             )
             RowDivider(colors)
@@ -165,8 +167,17 @@ fun SettingsScreen(
                 label = "subagent model",
                 value = if (subagentModel.isBlank()) "inherit" else subagentModel.substringAfterLast('/'),
                 tag = "settings-subagent-model",
-                onClick = { onBrowseSubagent?.invoke() },
-                enabled = onBrowseSubagent != null,
+                onClick = { onBrowseSubagent?.invoke() ?: onSubagentModel(subagentModel) },
+            )
+        }
+        if (modelsError != null) {
+            Spacer(Modifier.height(LumenSpacing.sm))
+            Text(
+                modelsError,
+                color = alertOn(colors),
+                fontFamily = LumenFonts.label,
+                fontSize = LumenType.caption,
+                modifier = Modifier.padding(horizontal = 14.dp),
             )
         }
 
@@ -218,7 +229,6 @@ fun SettingsScreen(
                     segments = listOf(
                         LumenSegment("build", "build", "agent-build"),
                         LumenSegment("plan", "plan", "agent-plan"),
-                        LumenSegment("delegate", "delegate", "agent-delegate"),
                     ),
                     selected = agentMode,
                     onSelect = onAgentMode,
@@ -260,17 +270,26 @@ fun SettingsScreen(
             FieldRow(colors, "budget") {
                 val custom = isCustomBudget(maxCostUsd)
                 LumenSegmented(
-                    segments = buildList {
-                        add(LumenSegment("off", "unlimited", "budget-off"))
-                        add(LumenSegment("050", "\$0.50", "budget-050"))
-                        add(LumenSegment("2", "\$2", "budget-2"))
-                        add(LumenSegment("5", "\$5", "budget-5"))
-                        if (custom) add(LumenSegment("custom", formatBudget(maxCostUsd), "budget-custom"))
-                    },
+                    segments = listOf(
+                        LumenSegment("off", "unlimited", "budget-off"),
+                        LumenSegment("050", "\$0.50", "budget-050"),
+                        LumenSegment("2", "\$2", "budget-2"),
+                        LumenSegment("5", "\$5", "budget-5"),
+                    ),
                     selected = budgetValue(maxCostUsd),
-                    onSelect = { if (it != "custom") onMaxCost(budgetUsd(it)) },
+                    onSelect = { onMaxCost(budgetUsd(it)) },
                     colors = colors,
                 )
+                if (custom) {
+                    Spacer(Modifier.height(LumenSpacing.sm))
+                    Text(
+                        "custom \u00b7 ${formatBudget(maxCostUsd)}",
+                        color = colors.dim.copy(alpha = 0.5f),
+                        fontFamily = LumenFonts.value,
+                        fontSize = LumenType.caption,
+                        modifier = Modifier.testTag("budget-custom"),
+                    )
+                }
             }
             RowDivider(colors)
             FieldRow(colors, "auto-compact \u00b7 $autoCompactPercent%") {
@@ -365,7 +384,7 @@ private fun NavRow(
     ) {
         Text(
             label,
-            color = colors.fg,
+            color = if (enabled) colors.fg else colors.faint,
             fontFamily = LumenFonts.label,
             fontSize = LumenType.bodyLarge,
             maxLines = 1,
@@ -381,7 +400,7 @@ private fun NavRow(
         } else {
             Text(
                 value,
-                color = colors.dim,
+                color = if (enabled) colors.dim else colors.faint,
                 fontFamily = LumenFonts.value,
                 fontSize = LumenType.body,
                 maxLines = 1,
@@ -393,7 +412,12 @@ private fun NavRow(
             )
         }
         Spacer(Modifier.width(8.dp))
-        Text("\u203a", color = colors.accent, fontFamily = LumenFonts.value, fontSize = 20.sp)
+        Text(
+            "\u203a",
+            color = if (enabled) colors.accent else colors.faint,
+            fontFamily = LumenFonts.value,
+            fontSize = 20.sp,
+        )
     }
 }
 
@@ -412,6 +436,7 @@ private fun RememberedPermissions(
     Row(
         Modifier
             .fillMaxWidth()
+            .heightIn(min = LumenSize.touchMin)
             .clickable { open = !open }
             .padding(horizontal = 14.dp, vertical = 10.dp)
             .testTag("permissions-row"),
@@ -443,7 +468,7 @@ private fun RememberedPermissions(
     if (patterns.isEmpty()) {
         Text(
             "nothing remembered",
-            color = colors.faint,
+            color = colors.dim,
             fontFamily = LumenFonts.label,
             fontSize = LumenType.caption,
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
@@ -468,31 +493,41 @@ private fun RememberedPermissions(
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(8.dp))
-            Text(
-                "clear",
-                color = colors.accent,
-                fontFamily = LumenFonts.label,
-                fontSize = LumenType.caption,
-                modifier = Modifier
+            Box(
+                Modifier
+                    .heightIn(min = LumenSize.touchMin)
                     .clip(LumenShapes.small)
                     .clickable { onForget(pattern) }
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .padding(horizontal = 8.dp)
                     .testTag("permission-clear-${patterns.indexOf(pattern)}"),
-            )
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "clear",
+                    color = colors.accent,
+                    fontFamily = LumenFonts.label,
+                    fontSize = LumenType.caption,
+                )
+            }
         }
     }
-    Text(
-        "clear all",
-        color = colors.accent,
-        fontFamily = LumenFonts.label,
-        fontSize = LumenType.caption,
-        modifier = Modifier
+    Box(
+        Modifier
             .padding(start = 14.dp, top = 4.dp, bottom = 10.dp)
+            .heightIn(min = LumenSize.touchMin)
             .clip(LumenShapes.small)
             .clickable { onClearAll() }
-            .padding(horizontal = 8.dp, vertical = 6.dp)
+            .padding(horizontal = 8.dp)
             .testTag("permissions-clear-all"),
-    )
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "clear all",
+            color = colors.accent,
+            fontFamily = LumenFonts.label,
+            fontSize = LumenType.caption,
+        )
+    }
 }
 
 /** A toggle row: label left, themed switch right. */
@@ -523,6 +558,7 @@ private fun ToggleRow(
             onCheckedChange = onCheckedChange,
             colors = colors,
             tag = tag,
+            contentDescription = label,
         )
     }
 }

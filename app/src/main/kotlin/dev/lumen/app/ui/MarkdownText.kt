@@ -14,12 +14,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -33,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -53,6 +56,7 @@ import dev.spindle.core.refs.tag
 import dev.spindle.core.text.Markdown
 import dev.spindle.core.text.MdBlock
 import dev.spindle.core.text.MdSpan
+import kotlinx.coroutines.delay
 
 private val MdMono = FontFamily.Monospace
 
@@ -71,7 +75,7 @@ private val UrlRegex = Regex("""https?://[^\s<>()\[\]{}"']+""")
  *
  *  - while a body is streaming only its tail ([STREAM_WINDOW] chars) is parsed
  *    and laid out, so growth stays bounded and the newest answer stays visible;
- *  - a finished body longer than [BODY_MAX] renders a bounded prefix until the
+ *  - a finished body longer than [BODY_MAX] keeps the same tail window until the
  *    reader asks for everything, which is then shown in a height-bounded scroll
  *    box laid out in [BODY_CHUNK]-char pieces.
  */
@@ -133,9 +137,9 @@ fun MarkdownBody(
     fileKind: ((String) -> FileKind?)? = null,
 ) {
     // The parse is memoised on whatever string is actually laid out, never on
-    // the unbounded source. While streaming we window to the tail so the newest
-    // text is what grows on screen; once finished an oversized body windows to a
-    // bounded prefix with an explicit opt-in to the whole thing.
+    // the unbounded source. Both streaming and finished oversized bodies window
+    // to the tail so the text does not jump at completion; show full is an
+    // explicit opt-in to the whole thing.
     val cap = if (streaming) STREAM_WINDOW else BODY_MAX
     var showFull by remember(markdown) { mutableStateOf(false) }
 
@@ -156,6 +160,9 @@ fun MarkdownBody(
         }
 
         showFull -> {
+            val chunks = remember(markdown) {
+                textChunks(markdown, BODY_CHUNK).map { Markdown.parse(it) }
+            }
             Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Box(
                     Modifier
@@ -163,15 +170,9 @@ fun MarkdownBody(
                         .heightIn(max = 320.dp)
                         .verticalScroll(rememberScrollState()),
                 ) {
-                    Column {
-                        for (chunk in textChunks(markdown, BODY_CHUNK)) {
-                            Text(
-                                chunk,
-                                color = colors.fg,
-                                fontFamily = MdMono,
-                                fontSize = 14.sp,
-                                lineHeight = 21.sp,
-                            )
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        for (blocks in chunks) {
+                            MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind)
                         }
                     }
                 }
@@ -180,7 +181,7 @@ fun MarkdownBody(
                     color = colors.accent, fontFamily = MdMono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
                         .clip(LumenShapes.small)
-                        .border(1.dp, colors.rule, LumenShapes.small)
+                        .border(1.dp, colors.outline, LumenShapes.small)
                         .clickable { showFull = false }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                         .testTag("md-show-less"),
@@ -189,7 +190,7 @@ fun MarkdownBody(
         }
 
         else -> {
-            val shown = markdown.take(cap)
+            val shown = "\u2026\n" + markdown.takeLast(cap)
             val blocks = remember(shown) { Markdown.parse(shown) }
             Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind)
@@ -198,7 +199,7 @@ fun MarkdownBody(
                     color = colors.accent, fontFamily = MdMono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier
                         .clip(LumenShapes.small)
-                        .border(1.dp, colors.rule, LumenShapes.small)
+                        .border(1.dp, colors.outline, LumenShapes.small)
                         .clickable { showFull = true }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                         .testTag("md-show-full"),
@@ -335,12 +336,18 @@ private fun MarkdownList(
 private fun MarkdownCode(block: MdBlock.Code, colors: LumenColors) {
     val clipboard = LocalClipboardManager.current
     var copied by remember(block.text) { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1_200)
+            copied = false
+        }
+    }
     Column(
         Modifier
             .fillMaxWidth()
             .clip(LumenShapes.inset)
             .background(colors.bg.copy(alpha = 0.55f))
-            .border(1.dp, colors.rule, LumenShapes.inset),
+            .border(1.dp, colors.outline, LumenShapes.inset),
     ) {
         Row(
             Modifier
@@ -362,12 +369,14 @@ private fun MarkdownCode(block: MdBlock.Code, colors: LumenColors) {
                 fontFamily = MdMono,
                 fontSize = 10.sp,
                 modifier = Modifier
+                    .sizeIn(minWidth = 40.dp, minHeight = 40.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .clickable {
                         clipboard.setText(AnnotatedString(block.text))
                         copied = true
                     }
                     .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .semantics { contentDescription = "Copy code" }
                     .testTag("md-code-copy"),
             )
         }

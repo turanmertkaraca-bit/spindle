@@ -47,6 +47,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -62,8 +63,9 @@ import dev.spindle.core.store.SearchHit
 
 private val Mono = FontFamily.Monospace
 
-/** The live-run signal: a calm green that reads on both light and dark cards. */
-private val LiveGreen = Color(0xFF3FB950)
+/** The live-run signal: a calm green tuned for the active palette's background. */
+private fun liveGreen(colors: LumenColors): Color =
+    if (colors.bg.luminance() < 0.5f) Color(0xFF3FB950) else Color(0xFF1A7F37)
 
 // --- Shared screen chrome ----------------------------------------------------
 //
@@ -309,6 +311,8 @@ fun HomeScreen(
     onStorage: (() -> Unit)? = null,
     /** Open GitHub settings, when the host wires it. */
     onGitHub: (() -> Unit)? = null,
+    sessionsLoading: Boolean = false,
+    sessionsError: String? = null,
 ) {
     // Destructive delete needs a confirmation; holds the id pending deletion.
     var deleteTarget by remember { mutableStateOf<String?>(null) }
@@ -332,226 +336,274 @@ fun HomeScreen(
         modifier
             .fillMaxSize()
             .background(colors.bg)
-            .imePadding()
-            .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 8.dp, bottom = LumenSpacing.xl),
+            .imePadding(),
     ) {
-        LumenTopBar(
-            colors = colors,
-            title = "lumen",
-            titleSize = LumenType.hero,
-            actions = {
-                if (onToggleTheme != null) {
-                    LumenBarAction(
-                        colors = colors,
-                        label = "\u25d0",
-                        tag = "theme",
-                        onClick = onToggleTheme,
-                        contentDescription = "toggle theme",
-                    )
-                }
-                LumenMenuButton(
-                    colors = colors,
-                    label = "\u22ef",
-                    tag = "home-menu",
-                    items = menuItems,
-                    contentDescription = "more destinations",
-                )
-            },
-        )
-
-        Spacer(Modifier.height(LumenSpacing.md))
-        StatusStrip(
-            colors = colors,
-            provider = provider,
-            model = model,
-            maxCostUsd = maxCostUsd,
-            sandboxLabel = sandboxLabel,
-            githubLogin = githubLogin,
-            onSettings = onSettings,
-            onDiagnostics = onDiagnostics,
-            onGitHub = onGitHub,
-        )
-        Spacer(Modifier.height(LumenSpacing.lg))
-
-        // The one obvious thing to do on this screen.
-        val waterGradient = remember(colors.spectrum) {
-            Brush.horizontalGradient(
-                colors.spectrum.takeIf { it.size >= 2 } ?: listOf(colors.water, colors.accent),
-            )
-        }
-        Box(
+        LazyColumn(
             Modifier
-                .fillMaxWidth()
-                .graphicsLayer { scaleX = newChatScale; scaleY = newChatScale }
-                .clip(LumenShapes.pill)
-                .background(waterGradient)
-                .clickable(
-                    interactionSource = newChatInteraction,
-                    indication = null,
-                    onClick = onNewChat,
-                )
-                .padding(vertical = 15.dp)
-                .testTag("new-chat"),
-            contentAlignment = Alignment.Center,
+                .fillMaxSize()
+                .testTag(if (search != null) "search-results" else "sessions"),
+            contentPadding = PaddingValues(
+                start = LumenSpacing.page,
+                end = LumenSpacing.page,
+                top = 8.dp,
+                bottom = LumenSpacing.xl,
+            ),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier
-                        .size(8.dp)
-                        .background(colors.bg.copy(alpha = 0.9f), WaterShapes.droplet(tail = 0.55f)),
-                )
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    "New chat",
-                    color = colors.bg,
-                    fontFamily = Mono,
-                    fontSize = LumenType.bodyLarge,
-                    fontWeight = FontWeight.Medium,
-                )
-            }
-        }
-        Spacer(Modifier.height(LumenSpacing.lg))
-
-        SearchField(
-            colors = colors,
-            query = searchQuery,
-            onQuery = onSearch,
-        )
-
-        // Quick controls: the one toggle worth surfacing plus the two cockpits,
-        // kept to a single quiet line right under the search.
-        Spacer(Modifier.height(LumenSpacing.lg))
-        LumenSectionHeader(colors, "quick controls")
-        Spacer(Modifier.height(LumenSpacing.md))
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "ask before tools",
-                color = colors.dim,
-                fontFamily = Mono,
-                fontSize = LumenType.caption,
-            )
-            Spacer(Modifier.width(8.dp))
-            Switch(
-                checked = askBeforeTools,
-                onCheckedChange = onAskBeforeTools,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = colors.bg,
-                    checkedTrackColor = colors.water,
-                    uncheckedThumbColor = colors.dim,
-                    uncheckedTrackColor = colors.surface,
-                    uncheckedBorderColor = colors.outline,
-                ),
-                modifier = Modifier.testTag("home-ask-before-tools"),
-            )
-            Spacer(Modifier.weight(1f))
-            onFiles?.let { open ->
-                CockpitPill(colors, "files", "files", onClick = open)
-            }
-            if (onFiles != null && onTerminal != null) Spacer(Modifier.width(8.dp))
-            onTerminal?.let { open ->
-                CockpitPill(colors, "terminal", "terminal", onClick = open)
-            }
-        }
-
-        // Tag filter bar: every known tag is a toggle chip; a selected chip shows
-        // an "×" so the active filter is removable. Hidden when there are none.
-        val filterTags = (availableTags + tagFilter).distinct().sorted()
-        if (filterTags.isNotEmpty()) {
-            Spacer(Modifier.height(LumenSpacing.md))
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "tags",
-                    color = colors.faint,
-                    fontFamily = Mono,
-                    fontSize = LumenType.micro,
-                    letterSpacing = 1.2.sp,
-                )
-                filterTags.forEach { tag ->
-                    val selected = tag in tagFilter
-                    TagChip(
+            item(key = "home-header") {
+                Column {
+                    LumenTopBar(
                         colors = colors,
-                        text = if (selected) "$tag \u00d7" else tag,
-                        selected = selected,
-                        tag = "tag-filter-$tag",
-                        onClick = { onToggleTagFilter(tag) },
+                        title = "lumen",
+                        titleSize = LumenType.hero,
+                        actions = {
+                            if (onToggleTheme != null) {
+                                LumenBarAction(
+                                    colors = colors,
+                                    label = "\u25d0",
+                                    tag = "theme",
+                                    onClick = onToggleTheme,
+                                    contentDescription = "toggle theme",
+                                )
+                            }
+                            LumenMenuButton(
+                                colors = colors,
+                                label = "\u22ef",
+                                tag = "home-menu",
+                                items = menuItems,
+                                contentDescription = "more destinations",
+                            )
+                        },
                     )
-                }
-                if (tagFilter.isNotEmpty()) {
-                    Text(
-                        "clear",
-                        color = colors.accent,
-                        fontFamily = Mono,
-                        fontSize = LumenType.micro,
-                        modifier = Modifier
-                            .clip(LumenShapes.small)
-                            .clickable { onClearTagFilters() }
-                            .padding(horizontal = 6.dp, vertical = 4.dp)
-                            .testTag("clear-tags"),
+
+                    Spacer(Modifier.height(LumenSpacing.md))
+                    StatusStrip(
+                        colors = colors,
+                        provider = provider,
+                        model = model,
+                        maxCostUsd = maxCostUsd,
+                        sandboxLabel = sandboxLabel,
+                        githubLogin = githubLogin,
+                        onSettings = onSettings,
+                        onDiagnostics = onDiagnostics,
+                        onGitHub = onGitHub,
                     )
+                    Spacer(Modifier.height(LumenSpacing.lg))
+
+                    val waterGradient = remember(colors.spectrum) {
+                        Brush.horizontalGradient(
+                            colors.spectrum.takeIf { it.size >= 2 } ?: listOf(colors.water, colors.accent),
+                        )
+                    }
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .graphicsLayer { scaleX = newChatScale; scaleY = newChatScale }
+                            .clip(LumenShapes.pill)
+                            .background(waterGradient)
+                            .clickable(
+                                interactionSource = newChatInteraction,
+                                indication = null,
+                                onClick = onNewChat,
+                            )
+                            .padding(vertical = 15.dp)
+                            .testTag("new-chat"),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier
+                                    .size(8.dp)
+                                    .background(colors.bg.copy(alpha = 0.9f), WaterShapes.droplet(tail = 0.55f)),
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                "New chat",
+                                color = colors.bg,
+                                fontFamily = Mono,
+                                fontSize = LumenType.bodyLarge,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(LumenSpacing.lg))
+
+                    SearchField(
+                        colors = colors,
+                        query = searchQuery,
+                        onQuery = onSearch,
+                    )
+
+                    Spacer(Modifier.height(LumenSpacing.lg))
+                    LumenSectionHeader(colors, "quick controls")
+                    Spacer(Modifier.height(LumenSpacing.md))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "ask before tools",
+                            color = colors.dim,
+                            fontFamily = Mono,
+                            fontSize = LumenType.caption,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Switch(
+                            checked = askBeforeTools,
+                            onCheckedChange = onAskBeforeTools,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = colors.bg,
+                                checkedTrackColor = colors.water,
+                                uncheckedThumbColor = colors.dim,
+                                uncheckedTrackColor = colors.surface,
+                                uncheckedBorderColor = colors.outline,
+                            ),
+                            modifier = Modifier.testTag("home-ask-before-tools"),
+                        )
+                        if (onFiles != null || onTerminal != null) {
+                            Spacer(Modifier.width(8.dp))
+                            Row(
+                                Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                onFiles?.let { open ->
+                                    CockpitPill(colors, "files", "files", onClick = open)
+                                }
+                                onTerminal?.let { open ->
+                                    CockpitPill(colors, "terminal", "terminal", onClick = open)
+                                }
+                            }
+                        }
+                    }
+
+                    val filterTags = (availableTags + tagFilter).distinct().sorted()
+                    if (filterTags.isNotEmpty()) {
+                        Spacer(Modifier.height(LumenSpacing.md))
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "tags",
+                                color = colors.dim,
+                                fontFamily = Mono,
+                                fontSize = LumenType.micro,
+                                letterSpacing = 1.2.sp,
+                            )
+                            filterTags.forEach { tag ->
+                                val selected = tag in tagFilter
+                                TagChip(
+                                    colors = colors,
+                                    text = if (selected) "$tag \u00d7" else tag,
+                                    selected = selected,
+                                    tag = "tag-filter-$tag",
+                                    onClick = { onToggleTagFilter(tag) },
+                                )
+                            }
+                            if (tagFilter.isNotEmpty()) {
+                                Text(
+                                    "clear",
+                                    color = colors.accent,
+                                    fontFamily = Mono,
+                                    fontSize = LumenType.micro,
+                                    modifier = Modifier
+                                        .clip(LumenShapes.small)
+                                        .clickable { onClearTagFilters() }
+                                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                                        .testTag("clear-tags"),
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(LumenSpacing.lg))
+                    LumenSectionHeader(colors, "chats")
+                    Spacer(Modifier.height(LumenSpacing.sm))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "${sessions.size} ${if (sessions.size == 1) "chat" else "chats"}",
+                            color = colors.dim,
+                            fontFamily = Mono,
+                            fontSize = LumenType.micro,
+                            letterSpacing = 0.6.sp,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            if (showArchived) "Hide archived" else "Show archived",
+                            color = if (showArchived) colors.dim else colors.dim.copy(alpha = 0.85f),
+                            fontFamily = Mono,
+                            fontSize = LumenType.micro,
+                            modifier = Modifier
+                                .clip(LumenShapes.small)
+                                .clickable { onShowArchived(!showArchived) }
+                                .padding(horizontal = 6.dp, vertical = 3.dp)
+                                .testTag("show-archived"),
+                        )
+                    }
+                    Spacer(Modifier.height(LumenSpacing.sm))
                 }
             }
-        }
-        Spacer(Modifier.height(LumenSpacing.lg))
-        LumenSectionHeader(colors, "chats")
-        Spacer(Modifier.height(LumenSpacing.sm))
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "${sessions.size} ${if (sessions.size == 1) "chat" else "chats"}",
-                color = colors.faint,
-                fontFamily = Mono,
-                fontSize = LumenType.micro,
-                letterSpacing = 0.6.sp,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                if (showArchived) "Hide archived" else "Show archived",
-                color = if (showArchived) colors.dim else colors.faint.copy(alpha = 0.85f),
-                fontFamily = Mono,
-                fontSize = LumenType.micro,
-                modifier = Modifier
-                    .clip(LumenShapes.small)
-                    .clickable { onShowArchived(!showArchived) }
-                    .padding(horizontal = 6.dp, vertical = 3.dp)
-                    .testTag("show-archived"),
-            )
-        }
-        Spacer(Modifier.height(LumenSpacing.sm))
 
-        if (search != null) {
-            if (search.isEmpty()) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    StateHint(
-                        colors = colors,
-                        text = "No matches",
-                        detail = "Try a different word",
-                        tag = "search-empty",
-                    )
+            val error = sessionsError
+            if (error != null && error.isNotBlank()) {
+                item(key = "home-error") {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 40.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        StateHint(
+                            colors = colors,
+                            text = "Couldn't load chats",
+                            detail = error,
+                            tint = alertOn(colors),
+                            tag = "home-error",
+                        )
+                    }
                 }
-            } else {
-                LazyColumn(
-                    Modifier
-                        .fillMaxWidth()
-                        .weight(1f)
-                        .testTag("search-results"),
-                    contentPadding = PaddingValues(vertical = 2.dp),
-                ) {
+            } else if (sessionsLoading) {
+                item(key = "home-loading") {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 40.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        StateHint(
+                            colors = colors,
+                            text = "Loading chats",
+                            tint = colors.water,
+                            tag = "home-loading",
+                            loading = true,
+                        )
+                    }
+                }
+            } else if (search != null) {
+                if (search.isEmpty()) {
+                    item(key = "search-empty") {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 40.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            StateHint(
+                                colors = colors,
+                                text = "No matches",
+                                detail = "Try a different word",
+                                tag = "search-empty",
+                            )
+                        }
+                    }
+                } else {
                     items(
                         search.distinctBy { it.sessionId.value + ":" + it.messageId },
                         key = { it.sessionId.value + ":" + it.messageId },
@@ -559,29 +611,23 @@ fun HomeScreen(
                         SearchHitRow(colors, hit, onOpen)
                     }
                 }
-            }
-        } else if (sessions.isEmpty()) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center,
-            ) {
-                StateHint(
-                    colors = colors,
-                    text = if (tagFilter.isNotEmpty()) "No chats with these tags" else "No chats yet",
-                    detail = if (tagFilter.isNotEmpty()) "Clear the filters to see everything" else "Start a new chat to begin",
-                    tag = "home-empty",
-                )
-            }
-        } else {
-            LazyColumn(
-                Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .testTag("sessions"),
-                contentPadding = PaddingValues(vertical = 4.dp),
-            ) {
+            } else if (sessions.isEmpty()) {
+                item(key = "home-empty") {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 40.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        StateHint(
+                            colors = colors,
+                            text = if (tagFilter.isNotEmpty()) "No chats with these tags" else "No chats yet",
+                            detail = if (tagFilter.isNotEmpty()) "Clear the filters to see everything" else "Start a new chat to begin",
+                            tag = "home-empty",
+                        )
+                    }
+                }
+            } else {
                 items(sessions.distinctBy { it.id }, key = { it.id }) { s ->
                     SessionCard(
                         colors = colors,
@@ -623,7 +669,7 @@ fun HomeScreen(
             confirmButton = {
                 Text(
                     "Delete",
-                    color = LumenAlert,
+                    color = alertOn(colors),
                     fontFamily = Mono,
                     fontSize = LumenType.body,
                     fontWeight = FontWeight.Medium,
@@ -671,7 +717,7 @@ private fun SearchField(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "\u2315",
-                color = colors.faint,
+                color = colors.dim,
                 fontFamily = Mono,
                 fontSize = 14.sp,
                 modifier = Modifier.padding(end = 8.dp),
@@ -680,7 +726,7 @@ private fun SearchField(
                 if (query.isEmpty()) {
                     Text(
                         "Search chats",
-                        color = colors.faint,
+                        color = colors.dim,
                         fontFamily = Mono,
                         fontSize = LumenType.body,
                     )
@@ -696,7 +742,10 @@ private fun SearchField(
                     ),
                     cursorBrush = SolidColor(colors.water),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    modifier = Modifier.fillMaxWidth().testTag("search"),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = "Search chats" }
+                        .testTag("search"),
                 )
             }
         }
@@ -722,7 +771,7 @@ private fun SearchHitRow(
     ) {
         Text(
             hit.role.lowercase(),
-            color = colors.faint,
+            color = colors.dim,
             fontFamily = Mono,
             fontSize = LumenType.micro,
             letterSpacing = 1.2.sp,
@@ -740,18 +789,19 @@ private fun SearchHitRow(
 }
 
 @Composable
-private fun LiveBadge(sessionId: String) {
+private fun LiveBadge(colors: LumenColors, sessionId: String) {
+    val live = liveGreen(colors)
     Box(
         Modifier
             .clip(LumenShapes.pill)
-            .background(LiveGreen.copy(alpha = 0.14f))
-            .border(1.dp, LiveGreen.copy(alpha = 0.5f), LumenShapes.pill)
+            .background(live.copy(alpha = 0.14f))
+            .border(1.dp, live.copy(alpha = 0.5f), LumenShapes.pill)
             .padding(horizontal = 6.dp, vertical = 1.dp)
             .testTag("session-live-$sessionId"),
     ) {
         Text(
             "LIVE",
-            color = LiveGreen,
+            color = live,
             fontFamily = Mono,
             fontSize = LumenType.micro,
             fontWeight = FontWeight.Medium,
@@ -781,6 +831,7 @@ private fun SessionCard(
     var tagging by remember { mutableStateOf(false) }
     var draft by remember(session.title) { mutableStateOf(session.title) }
     var tagDraft by remember { mutableStateOf("") }
+    val liveColor = liveGreen(colors)
 
     Column(Modifier.fillMaxWidth()) {
         Row(
@@ -789,7 +840,7 @@ private fun SessionCard(
                 .padding(vertical = 4.dp)
                 .clip(LumenShapes.card)
                 .background(colors.surface)
-                .border(1.dp, if (live) LiveGreen.copy(alpha = 0.45f) else colors.outline, LumenShapes.card)
+                .border(1.dp, if (live) liveColor.copy(alpha = 0.45f) else colors.outline, LumenShapes.card)
                 .clickable { onOpen(session.id) }
                 .padding(horizontal = 14.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -797,7 +848,7 @@ private fun SessionCard(
             Box(
                 Modifier
                     .size(9.dp)
-                    .background(if (live) LiveGreen else colors.water, WaterShapes.droplet(tail = 0.55f)),
+                    .background(if (live) liveColor else colors.water, WaterShapes.droplet(tail = 0.55f)),
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -813,7 +864,7 @@ private fun SessionCard(
                     )
                     if (live) {
                         Spacer(Modifier.width(6.dp))
-                        LiveBadge(session.id)
+                        LiveBadge(colors, session.id)
                     }
                 }
                 if (session.preview.isNotEmpty()) {
@@ -850,14 +901,14 @@ private fun SessionCard(
             Spacer(Modifier.width(10.dp))
             Text(
                 ago(session.updatedAt),
-                color = colors.faint,
+                color = colors.dim,
                 fontFamily = Mono,
                 fontSize = LumenType.micro,
             )
             Spacer(Modifier.width(6.dp))
             Box(
                 modifier = Modifier
-                    .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
+                    .sizeIn(minWidth = LumenSize.touchMin, minHeight = LumenSize.touchMin)
                     .clip(LumenShapes.small)
                     .clickable { expanded = !expanded }
                     .semantics { contentDescription = "Chat actions" }
@@ -1028,7 +1079,7 @@ private fun TagEditor(
                 if (tagDraft.isEmpty()) {
                     Text(
                         "Add a tag",
-                        color = colors.faint,
+                        color = colors.dim,
                         fontFamily = Mono,
                         fontSize = LumenType.body,
                     )
@@ -1068,11 +1119,12 @@ private fun RowAction(
 ) {
     Text(
         label,
-        color = if (destructive) LumenAlert else colors.dim,
+        color = if (destructive) alertOn(colors) else colors.dim,
         fontFamily = Mono,
         fontSize = LumenType.caption,
         fontWeight = FontWeight.Medium,
         modifier = Modifier
+            .heightIn(min = LumenSize.touchMin)
             .clip(LumenShapes.small)
             .background(colors.surface)
             .clickable { onClick() }
@@ -1097,6 +1149,7 @@ private fun TagChip(
         fontSize = LumenType.micro,
         maxLines = 1,
         modifier = Modifier
+            .heightIn(min = LumenSize.touchMin)
             .clip(LumenShapes.small)
             .background(if (selected) colors.water.copy(alpha = 0.12f) else Color.Transparent)
             .border(
@@ -1127,7 +1180,7 @@ private fun StatusStrip(
     onDiagnostics: (() -> Unit)?,
     onGitHub: (() -> Unit)?,
 ) {
-    val modelPart = model.removePrefix("$provider/").ifBlank { model }
+    val modelPart = stripProviderPrefix(provider, model)
     val modelLabel = listOf(provider, modelPart).filter { it.isNotBlank() }
         .joinToString(" \u00b7 ")
         .ifBlank { "no model" }
@@ -1161,6 +1214,7 @@ private fun StatusPill(
     onClick: (() -> Unit)?,
 ) {
     val shell = Modifier
+        .heightIn(min = LumenSize.touchMin)
         .clip(LumenShapes.pill)
         .background(colors.surface)
         .border(1.dp, colors.outline, LumenShapes.pill)
@@ -1197,6 +1251,7 @@ private fun CockpitPill(
 ) {
     Row(
         modifier = Modifier
+            .heightIn(min = LumenSize.touchMin)
             .clip(LumenShapes.pill)
             .background(colors.surface)
             .border(1.dp, colors.outline, LumenShapes.pill)
@@ -1219,6 +1274,14 @@ private fun CockpitPill(
             fontWeight = FontWeight.Medium,
         )
     }
+}
+
+private fun stripProviderPrefix(provider: String, model: String): String {
+    if (provider.isBlank()) return model
+    val prefix = "$provider/"
+    var part = model
+    while (part.startsWith(prefix)) part = part.removePrefix(prefix)
+    return part.ifBlank { model }
 }
 
 /** "budget off" when the cap is disabled, otherwise a compact "$N cap". */

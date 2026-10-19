@@ -1,7 +1,10 @@
 package dev.lumen.app.ui
 
 import android.annotation.SuppressLint
+import android.graphics.Bitmap
 import android.view.ViewGroup
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -38,6 +41,8 @@ import kotlinx.coroutines.delay
 
 private val Mono = FontFamily.Monospace
 
+private enum class CanvasStatus { Loading, Loaded, Failed }
+
 /**
  * The interactive canvas: a full-screen sandboxed viewer for a self-contained
  * HTML page the agent wrote.
@@ -61,11 +66,14 @@ fun CanvasScreen(
     sourceName: String = "page",
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onReload: (() -> Unit)? = null,
 ) {
     // Bump to rebuild the WebView with the same HTML (a hard reload), but only
     // after a short debounce so mashing "reload" cannot leak a WebView per tap.
     var reload by remember { mutableStateOf(0) }
     var requested by remember { mutableStateOf(0) }
+    var status by remember(html) { mutableStateOf(CanvasStatus.Loading) }
+    var failure by remember(html) { mutableStateOf<String?>(null) }
     LaunchedEffect(requested) {
         if (requested == 0) return@LaunchedEffect
         delay(250)
@@ -111,10 +119,30 @@ fun CanvasScreen(
                     colors = colors,
                     label = "Reload",
                     tag = "canvas-reload",
-                    onClick = { requested += 1 },
+                    onClick = {
+                        val handler = onReload
+                        if (handler != null) handler() else requested += 1
+                    },
                 )
             },
         )
+        if (html.isNotBlank()) {
+            Text(
+                when (status) {
+                    CanvasStatus.Loading -> "loading\u2026"
+                    CanvasStatus.Loaded -> "rendered"
+                    CanvasStatus.Failed -> failure ?: "failed to render"
+                },
+                color = if (status == CanvasStatus.Failed) LumenAlert else colors.dim,
+                fontFamily = Mono,
+                fontSize = LumenType.caption,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .padding(horizontal = LumenSpacing.page, vertical = 4.dp)
+                    .testTag("canvas-status"),
+            )
+        }
         if (html.isBlank()) {
             Box(
                 Modifier
@@ -130,7 +158,7 @@ fun CanvasScreen(
                 )
             }
         } else {
-            key(reload) {
+            key(reload, html) {
                 AndroidView(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -148,7 +176,27 @@ fun CanvasScreen(
                             settings.blockNetworkLoads = true
                             settings.mediaPlaybackRequiresUserGesture = true
                             settings.cacheMode = WebSettings.LOAD_NO_CACHE
-                            webViewClient = WebViewClient()
+                            webViewClient = object : WebViewClient() {
+                                override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                    status = CanvasStatus.Loading
+                                    failure = null
+                                }
+
+                                override fun onPageFinished(view: WebView?, url: String?) {
+                                    if (status != CanvasStatus.Failed) status = CanvasStatus.Loaded
+                                }
+
+                                override fun onReceivedError(
+                                    view: WebView?,
+                                    request: WebResourceRequest?,
+                                    error: WebResourceError?,
+                                ) {
+                                    if (request == null || request.isForMainFrame) {
+                                        status = CanvasStatus.Failed
+                                        failure = error?.description?.toString()
+                                    }
+                                }
+                            }
                             loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
                             webView = this
                         }

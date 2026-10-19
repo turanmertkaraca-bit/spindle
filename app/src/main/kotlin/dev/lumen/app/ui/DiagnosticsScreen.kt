@@ -16,6 +16,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -28,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.DiagLine
 import dev.lumen.app.LinuxEnvironmentState
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -51,6 +57,14 @@ fun DiagnosticsScreen(
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
+    var refreshing by remember { mutableStateOf(false) }
+
+    LaunchedEffect(refreshing) {
+        if (refreshing) {
+            delay(800)
+            refreshing = false
+        }
+    }
 
     Column(
         modifier
@@ -107,13 +121,24 @@ fun DiagnosticsScreen(
                 else -> "not installed"
             }
             EnvRow(colors, "debian", debianLabel, linux.debianActive)
-            linux.progress?.let {
+            linux.progress?.takeIf { it != linux.failure }?.let {
                 Spacer(Modifier.height(8.dp))
                 Text(
                     it,
                     color = colors.water,
                     fontFamily = Mono,
                     fontSize = LumenType.caption,
+                )
+            }
+            linux.failure?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    it,
+                    color = alertOn(colors),
+                    fontFamily = Mono,
+                    fontSize = LumenType.caption,
+                    lineHeight = LumenType.lineTight,
+                    modifier = Modifier.testTag("linux-failure"),
                 )
             }
             Spacer(Modifier.height(14.dp))
@@ -127,7 +152,15 @@ fun DiagnosticsScreen(
                     primary = true,
                     enabled = enabled,
                 )
-                LumenBarAction(colors, "Refresh", "linux-refresh", onRefreshLinux)
+                LumenBarAction(
+                    colors = colors,
+                    label = if (refreshing) "Refreshing\u2026" else "Refresh",
+                    tag = "linux-refresh",
+                    onClick = {
+                        refreshing = true
+                        onRefreshLinux()
+                    },
+                )
             }
         }
         Spacer(Modifier.height(LumenSpacing.xxl))
@@ -166,7 +199,7 @@ fun DiagnosticsScreen(
                     ) {
                         Text(
                             stamp(line.at),
-                            color = colors.faint,
+                            color = colors.dim,
                             fontFamily = Mono,
                             fontSize = LumenType.micro,
                         )

@@ -41,6 +41,10 @@ class RunService : Service() {
     @Volatile
     private var currentTitle: String = "Lumen"
 
+    /** The active run's session id, so a progress tap deep-links back to it. */
+    @Volatile
+    private var currentSessionId: String? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -50,8 +54,12 @@ class RunService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_STOP -> stopRun()
+            ACTION_STOP -> {
+                runCatching { RunControl.stopHandler?.invoke() }
+                stopRun()
+            }
             ACTION_START -> {
+                currentSessionId = intent.getStringExtra(EXTRA_SESSION_ID)?.takeIf { it.isNotBlank() }
                 currentTitle = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "Lumen" }
                 show(notification("starting\u2026"))
             }
@@ -134,6 +142,7 @@ class RunService : Service() {
     private fun openAppIntent(): PendingIntent {
         val intent = Intent(this, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            currentSessionId?.let { putExtra(EXTRA_SESSION_ID, it) }
         }
         return PendingIntent.getActivity(
             this, 0, intent,

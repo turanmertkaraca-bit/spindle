@@ -56,6 +56,21 @@ class StepMapperMetadataTest {
     }
 
     @Test
+    fun `assistant rows project the stored agent without changing the label`() {
+        val rows = StepMapper.fromMessages(
+            listOf(
+                Message(
+                    MessageId("a"), SessionId("s"), Role.ASSISTANT,
+                    listOf(Part.Text(PartId("t1"), "hello")), 0, agent = "plan",
+                ),
+            ),
+        )
+        val step = rows.single()
+        assertEquals("plan", step.agent)
+        assertEquals("ASSISTANT", step.label)
+    }
+
+    @Test
     fun `adjacent tool calls merge their metadata`() {
         val merged = StepMapper.mergeAdjacent(
             StepMapper.fromMessages(

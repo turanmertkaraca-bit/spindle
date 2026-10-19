@@ -20,6 +20,11 @@ class StepMapperAttachmentTest {
         parts = parts.toList(), createdAt = 0,
     )
 
+    private fun userMessage(id: String, vararg parts: Part) = Message(
+        id = MessageId(id), sessionId = SessionId("s1"), role = Role.USER,
+        parts = parts.toList(), createdAt = 0,
+    )
+
     @Test
     fun `an image part is carried on the user row`() {
         val rows = StepMapper.fromMessages(
@@ -44,5 +49,38 @@ class StepMapperAttachmentTest {
         assertEquals(1, rows.size)
         assertEquals(1, rows[0].images.size)
         assertEquals("pic.jpg", rows[0].images[0].name)
+    }
+
+    @Test
+    fun `a file-only send followed by its text coalesces into one you row`() {
+        val rows = StepMapper.fromMessages(
+            listOf(
+                userMessage("file", Part.File(PartId("p1"), path = "photo.png", mime = "image/png", dataBase64 = "QUJD")),
+                userMessage("text", Part.Text(PartId("p2"), "look at this")),
+            ),
+        )
+        assertEquals(1, rows.size)
+        assertEquals(StepKind.YOU, rows[0].kind)
+        assertEquals("text", rows[0].id)
+        assertEquals("text", rows[0].messageId)
+        assertEquals("look at this", rows[0].summary)
+        assertEquals("look at this", rows[0].body)
+        assertEquals(listOf(UiImage("photo.png", "image/png", "QUJD")), rows[0].images)
+    }
+
+    @Test
+    fun `coalescing keeps images from both messages in order`() {
+        val rows = StepMapper.fromMessages(
+            listOf(
+                userMessage("file", Part.File(PartId("p1"), path = "a.png", mime = "image/png", dataBase64 = "QQ")),
+                userMessage(
+                    "text",
+                    Part.Text(PartId("p2"), "two pics"),
+                    Part.File(PartId("p3"), path = "b.png", mime = "image/png", dataBase64 = "Qg"),
+                ),
+            ),
+        )
+        assertEquals(1, rows.size)
+        assertEquals(listOf("a.png", "b.png"), rows[0].images.map { it.name })
     }
 }

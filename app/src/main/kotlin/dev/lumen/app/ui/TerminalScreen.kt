@@ -61,7 +61,8 @@ fun TerminalScreen(
     /** Restart a shell that has exited; when null the field still stays usable. */
     onRestart: (() -> Unit)? = null,
 ) {
-    val output = remember(lines) { lines.joinToString("") }
+    val renderer = remember { TerminalRenderState() }
+    val output = remember(lines) { renderer.render(lines) }
     val scroll = rememberScrollState()
 
     // The "reader at bottom" idea, shared with the chat timeline: only follow
@@ -127,7 +128,7 @@ fun TerminalScreen(
             if (error != null) {
                 Text(
                     error,
-                    color = LumenAlert,
+                    color = alertOn(colors),
                     fontFamily = Mono,
                     fontSize = LumenType.caption,
                     modifier = Modifier
@@ -148,12 +149,12 @@ private fun StatusDot(colors: LumenColors, running: Boolean) {
             Modifier
                 .size(7.dp)
                 .clip(CircleShape)
-                .background(if (running) colors.water else colors.faint),
+                .background(if (running) colors.water else colors.dim),
         )
         Spacer(Modifier.width(6.dp))
         Text(
             if (running) "running" else "stopped",
-            color = if (running) colors.water else colors.faint,
+            color = if (running) colors.water else colors.dim,
             fontFamily = Mono,
             fontSize = LumenType.caption,
             letterSpacing = 0.8.sp,
@@ -205,7 +206,7 @@ private fun InputRow(
             if (draft.isEmpty()) {
                 Text(
                     if (running) "Type a command" else "Shell exited \u2014 restart",
-                    color = colors.faint,
+                    color = colors.dim,
                     fontFamily = Mono,
                     fontSize = LumenType.body,
                 )
@@ -244,5 +245,142 @@ private fun InputRow(
             primary = true,
             enabled = canRestart || canSend,
         )
+    }
+}
+
+private enum class EscapeState { None, Esc, Csi, Osc, OscEsc, Intermediate }
+
+private const val TERMINAL_MAX_CHARS = 200_000
+private const val EARLIER_OUTPUT_DROPPED = "\u2026[earlier output dropped]\u2026\n"
+
+private class TerminalRenderState {
+    private val text = StringBuilder()
+    private val chunks = ArrayList<String>()
+    private var cursor = 0
+    private var lineStart = 0
+    private var dropped = 0L
+    private var escape = EscapeState.None
+
+    fun render(source: List<String>): String {
+        val offset = overlap(source)
+        if (offset == null) {
+            reset()
+            for (chunk in source) feed(chunk)
+            return display()
+        }
+        var i = chunks.size - offset
+        while (i < source.size) {
+            feed(source[i])
+            i++
+        }
+        if (offset > 0) {
+            chunks.clear()
+            chunks.addAll(source)
+        }
+        return display()
+    }
+
+    private fun overlap(source: List<String>): Int? {
+        val size = chunks.size
+        if (size == 0) return 0
+        val first = source.firstOrNull()
+        var offset = 0
+        while (offset < size) {
+            val length = size - offset
+            if (length <= source.size && chunks[offset] == first) {
+                var i = offset
+                while (i < size && chunks[i] == source[i - offset]) i++
+                if (i == size) return offset
+            }
+            offset++
+        }
+        return null
+    }
+
+    private fun reset() {
+        text.clear()
+        chunks.clear()
+        cursor = 0
+        lineStart = 0
+        dropped = 0L
+        escape = EscapeState.None
+    }
+
+    private fun feed(chunk: String) {
+        var i = 0
+        while (i < chunk.length) {
+            consume(chunk[i])
+            i++
+        }
+        chunks.add(chunk)
+        trim()
+    }
+
+    private fun consume(c: Char) {
+        when (escape) {
+            EscapeState.Csi -> if (c in '\u0040'..'\u007e') escape = EscapeState.None
+            EscapeState.Osc -> when (c) {
+                '\u0007' -> escape = EscapeState.None
+                '\u001b' -> escape = EscapeState.OscEsc
+            }
+            EscapeState.OscEsc -> escape = when {
+                c == '\\' || c == '\u0007' -> EscapeState.None
+                c == '\u001b' -> EscapeState.OscEsc
+                else -> EscapeState.Osc
+            }
+            EscapeState.Intermediate -> if (c !in '\u0020'..'\u002f') escape = EscapeState.None
+            EscapeState.Esc -> escape = when {
+                c == '[' -> EscapeState.Csi
+                c == ']' -> EscapeState.Osc
+                c in '\u0020'..'\u002f' -> EscapeState.Intermediate
+                else -> EscapeState.None
+            }
+            EscapeState.None -> when {
+                c == '\u001b' -> escape = EscapeState.Esc
+                c == '\r' -> cursor = lineStart
+                c == '\n' -> {
+                    text.append('\n')
+                    cursor = text.length
+                    lineStart = cursor
+                }
+                c == '\b' -> backspace()
+                c == '\t' -> write(c)
+                c < ' ' || c == '\u007f' || c in '\u0080'..'\u009f' -> Unit
+                else -> write(c)
+            }
+        }
+    }
+
+    private fun write(c: Char) {
+        if (cursor < text.length) {
+            text.setCharAt(cursor, c)
+        } else {
+            text.append(c)
+        }
+        cursor++
+    }
+
+    private fun backspace() {
+        if (cursor <= lineStart) return
+        cursor--
+        if (cursor == text.length - 1) text.deleteCharAt(cursor)
+    }
+
+    private fun trim() {
+        if (text.length <= TERMINAL_MAX_CHARS) return
+        var cut = text.length - TERMINAL_MAX_CHARS
+        val nextLine = text.indexOf("\n", cut)
+        if (nextLine in cut until text.length) cut = nextLine + 1
+        text.delete(0, cut)
+        dropped += cut.toLong()
+        cursor = (cursor - cut).coerceAtLeast(0)
+        lineStart = (lineStart - cut).coerceAtLeast(0)
+        if (cursor < lineStart) cursor = lineStart
+    }
+
+    private fun display(): String = when {
+        text.isEmpty() -> ""
+        dropped > 0L -> EARLIER_OUTPUT_DROPPED + text
+        else -> text.toString()
     }
 }

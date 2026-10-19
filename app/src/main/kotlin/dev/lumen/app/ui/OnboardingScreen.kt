@@ -1,5 +1,6 @@
 package dev.lumen.app.ui
 
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,8 +15,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
@@ -29,6 +32,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -128,17 +134,22 @@ fun OnboardingScreen(
             )
             Spacer(Modifier.weight(1f))
             if (step > 0) {
-                Text(
-                    "Back",
-                    color = colors.dim,
-                    fontFamily = LumenFonts.label,
-                    fontSize = LumenType.body,
-                    modifier = Modifier
+                Box(
+                    Modifier
+                        .sizeIn(minWidth = LumenSize.touchMin, minHeight = LumenSize.touchMin)
                         .clip(LumenShapes.small)
                         .clickable { step-- }
-                        .padding(horizontal = LumenSpacing.sm, vertical = LumenSpacing.xs)
+                        .padding(horizontal = LumenSpacing.sm)
                         .testTag("onboarding-back"),
-                )
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Back",
+                        color = colors.dim,
+                        fontFamily = LumenFonts.label,
+                        fontSize = LumenType.body,
+                    )
+                }
             }
         }
 
@@ -205,7 +216,18 @@ fun OnboardingScreen(
             2 -> {
                 PrimaryButton(colors, "Exempt from battery optimisation", "onboarding-battery", onRequestBattery)
                 Spacer(Modifier.height(LumenSpacing.lg))
-                SecondaryButton(colors, "Allow shared Downloads", "onboarding-downloads", onRequestDownloads)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    Text(
+                        "Shared Downloads is only available on Android 9 or older. " +
+                            "Use the Files browser to bring documents into the sandbox.",
+                        color = colors.dim,
+                        fontFamily = LumenFonts.label,
+                        fontSize = LumenType.caption,
+                        lineHeight = LumenType.lineTight,
+                    )
+                } else {
+                    SecondaryButton(colors, "Allow shared Downloads", "onboarding-downloads", onRequestDownloads)
+                }
             }
             3 -> {
                 PrimaryButton(colors, "Add API key", "onboarding-add-key", onAddKey)
@@ -226,7 +248,7 @@ fun OnboardingScreen(
 
         Spacer(Modifier.height(LumenSpacing.xxl))
         Text(
-            "v${versionName.ifBlank { "0.2.4" }}",
+            if (versionName.isBlank()) "" else "v$versionName",
             color = colors.faint,
             fontFamily = LumenFonts.value,
             fontSize = LumenType.micro,
@@ -240,6 +262,7 @@ private fun StepDots(colors: LumenColors, step: Int, steps: Int) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(LumenSpacing.xs),
+        modifier = Modifier.semantics { contentDescription = "step ${step + 1} of $steps" },
     ) {
         repeat(steps) { index ->
             Box(
@@ -338,7 +361,11 @@ private fun PaletteSwatch(
             .clip(LumenShapes.inset)
             .background(if (active) colors.surface else Color.Transparent)
             .border(1.dp, if (active) swatch.water else colors.outline, LumenShapes.inset)
-            .clickable { onClick() }
+            .selectable(
+                selected = active,
+                role = Role.RadioButton,
+                onClick = onClick,
+            )
             .padding(vertical = LumenSpacing.sm, horizontal = LumenSpacing.xs)
             .testTag("onboarding-palette-$id"),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -375,24 +402,36 @@ private fun SandboxStatus(colors: LumenColors, linux: LinuxEnvironmentState) {
         linux.alpineReady -> "lightweight sandbox ready"
         else -> "no sandbox installed yet"
     }
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.testTag("onboarding-sandbox-status"),
-    ) {
-        if (linux.installing) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(14.dp),
-                color = colors.water,
-                strokeWidth = 2.dp,
+    Column {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.testTag("onboarding-sandbox-status"),
+        ) {
+            if (linux.installing) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    color = colors.water,
+                    strokeWidth = 2.dp,
+                )
+                Spacer(Modifier.width(LumenSpacing.sm))
+            }
+            Text(
+                label,
+                color = if (linux.debianActive || linux.alpineReady) colors.water else colors.dim,
+                fontFamily = LumenFonts.label,
+                fontSize = LumenType.caption,
             )
-            Spacer(Modifier.width(LumenSpacing.sm))
         }
-        Text(
-            label,
-            color = if (linux.debianActive || linux.alpineReady) colors.water else colors.dim,
-            fontFamily = LumenFonts.label,
-            fontSize = LumenType.caption,
-        )
+        linux.failure?.let { failure ->
+            Spacer(Modifier.height(LumenSpacing.sm))
+            Text(
+                failure,
+                color = LumenAlert,
+                fontFamily = LumenFonts.label,
+                fontSize = LumenType.caption,
+                lineHeight = LumenType.lineTight,
+            )
+        }
     }
 }
 

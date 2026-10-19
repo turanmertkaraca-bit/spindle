@@ -12,6 +12,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
@@ -58,7 +62,7 @@ fun AdaptiveTwoPane(
             }
         } else if (openDetail != null && focusDetailOnNarrow) {
             Box(Modifier.fillMaxSize()) {
-                list()
+                Box(Modifier.fillMaxSize().clearAndSetSemantics {}) { list() }
                 // A transparent scrim swallows touches so the still-composed list
                 // underneath never receives them while the stacked detail is on top.
                 Box(
@@ -68,7 +72,10 @@ fun AdaptiveTwoPane(
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
-                        ) {},
+                            role = Role.Button,
+                            onClickLabel = "Dismiss",
+                        ) {}
+                        .semantics { contentDescription = "Dismiss" },
                 )
                 Box(
                     Modifier

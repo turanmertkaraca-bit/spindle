@@ -249,7 +249,8 @@ class SqliteSessionStoreTest {
 
         val fork = s.forkSession(source, MessageId("m2"), SessionId("ses_fork"))
         assertNotNull(fork)
-        assertEquals(source, fork?.parentId)
+        assertNull(fork?.parentId)
+        assertTrue(s.sessions(limit = 100).any { it.id == SessionId("ses_fork") })
 
         val copied = s.messages(SessionId("ses_fork"))
         assertEquals(listOf("one", "two"), copied.map { (it.parts.single() as Part.Text).text })

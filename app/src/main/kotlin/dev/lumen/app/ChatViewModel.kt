@@ -18,6 +18,7 @@ import dev.lumen.app.platform.GitResult
 import dev.lumen.app.platform.GitRunner
 import dev.lumen.app.platform.PerfSampler
 import dev.lumen.app.platform.PerfSummary
+import dev.lumen.app.platform.RunControl
 import dev.lumen.app.platform.RunService
 import dev.lumen.app.platform.WorkspaceActions
 import dev.lumen.app.platform.WorkspaceWatcher
@@ -75,9 +76,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.attribute.BasicFileAttributes
@@ -157,6 +161,9 @@ data class EditorState(
     val error: String? = null,
     /** 1-based inclusive line range to highlight when the editor opens, if any. */
     val highlight: IntRange? = null,
+    val readOnly: Boolean = false,
+    val draft: String? = null,
+    val dirty: Boolean = false,
 )
 
 /**
@@ -197,6 +204,7 @@ data class LinuxEnvironmentState(
     val debianActive: Boolean = false,
     val installing: Boolean = false,
     val progress: String? = null,
+    val failure: String? = null,
 )
 
 /**
@@ -206,12 +214,14 @@ data class LinuxEnvironmentState(
  */
 sealed interface PendingAsk {
     val id: String
+    val sessionId: String
 
     data class Permission(
         override val id: String,
         val tool: String,
         val detail: String,
         val pattern: String?,
+        override val sessionId: String = "",
     ) : PendingAsk
 
     data class Question(
@@ -219,6 +229,7 @@ sealed interface PendingAsk {
         val question: String,
         val options: List<String>,
         val multiple: Boolean,
+        override val sessionId: String = "",
     ) : PendingAsk
 }
 
@@ -341,6 +352,9 @@ data class ChatState(
     val autoCompactPercent: Int = 80,
     /** True once first-run setup is done; false shows the onboarding wizard. */
     val onboarded: Boolean = false,
+    val compacting: Boolean = false,
+    val sessionsLoading: Boolean = false,
+    val sessionsError: String? = null,
 )
 
 /**
@@ -634,18 +648,19 @@ class ChatViewModel(
     private val queuedAsks = ArrayDeque<PendingEntry>()
     private var activeAsk: PendingEntry? = null
 
-    private val permissionGate = PermissionGate { tool, detail, pattern ->
-        val entry = PermissionEntry(
-            PendingAsk.Permission(Ids.new("ask"), tool, detail, pattern),
-            CompletableDeferred(),
-        )
-        enqueueAsk(entry)
-        entry.deferred.await()
-    }
+    private fun permissionGateFor(sessionId: String): PermissionGate =
+        PermissionGate { tool, detail, pattern ->
+            val entry = PermissionEntry(
+                PendingAsk.Permission(Ids.new("ask"), tool, detail, pattern, sessionId),
+                CompletableDeferred(),
+            )
+            enqueueAsk(entry)
+            entry.deferred.await()
+        }
 
-    private val questionGate = QuestionGate { _, question, options, multiple ->
+    private val questionGate = QuestionGate { sessionId, question, options, multiple ->
         val entry = QuestionEntry(
-            PendingAsk.Question(Ids.new("ask"), question, options, multiple),
+            PendingAsk.Question(Ids.new("ask"), question, options, multiple, sessionId),
             CompletableDeferred(),
         )
         enqueueAsk(entry)
@@ -661,7 +676,12 @@ class ChatViewModel(
     @Synchronized
     private fun promoteAskLocked() {
         activeAsk = queuedAsks.removeFirstOrNull()
-        _state.value = _state.value.copy(ask = activeAsk?.ask)
+        _state.value = _state.value.copy(ask = visibleAsk())
+    }
+
+    private fun visibleAsk(sessionId: String? = _state.value.currentSessionId): PendingAsk? {
+        val ask = activeAsk?.ask ?: return null
+        return ask.takeIf { it.sessionId.isEmpty() || it.sessionId == sessionId }
     }
 
     /** Retire [entry] if it is the active one and show the next queued ask. */
@@ -848,11 +868,15 @@ class ChatViewModel(
                 ctx.getDatabasePath(DB_NAME).parentFile?.let { add(it) }
                 add(ctx.filesDir)
             }
+            val cutoff = System.currentTimeMillis() - QUARANTINE_RETAIN_MS
             for (dir in dirs) {
                 dir.listFiles()?.forEach { file ->
                     if (file.isFile && DB_QUARANTINE.matches(file.name)) {
-                        val size = file.length()
-                        if (file.delete()) freed += size
+                        diag("db quarantine found: ${file.name}")
+                        if (file.lastModified() <= cutoff) {
+                            val size = file.length()
+                            if (file.delete()) freed += size
+                        }
                     }
                 }
             }
@@ -865,19 +889,27 @@ class ChatViewModel(
      * is live (the loop holds the session mutex) or with no session/key.
      */
     fun compactNow() {
-        if (_state.value.busy) return
+        if (_state.value.busy || _state.value.compacting) return
         val current = _state.value.currentSessionId ?: return
         val key = currentApiKey() ?: return
+        _state.value = _state.value.copy(compacting = true)
         viewModelScope.launch {
             val sid = SessionId(current)
             try {
-                Compaction.compact(store, sid, keys.model, providersFor(keys.provider, key), bus)
+                val changed = Compaction.compact(store, sid, keys.model, providersFor(keys.provider, key), bus)
+                if (changed) {
+                    _state.value = _state.value.copy(contextUsedTokens = 0)
+                    refreshModelMetrics()
+                    requestRebuild(sid)
+                    refreshSessions()
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
                 diag("compact failed: ${t.message}")
+            } finally {
+                _state.value = _state.value.copy(compacting = false)
             }
-            requestRebuild(sid)
         }
     }
 
@@ -903,6 +935,7 @@ class ChatViewModel(
     private val diagLock = Any()
 
     init {
+        RunControl.stopHandler = { stop() }
         viewModelScope.launch { refreshSessions() }
         viewModelScope.launch { collectEvents() }
         viewModelScope.launch { reconcileOrphanRuns() }
@@ -950,12 +983,15 @@ class ChatViewModel(
 
     // ---- storage manager ----
 
+    private var storageGeneration = 0
+
     /** Recompute the storage breakdown; always runs on [io], never the main thread. */
     fun scanStorage() {
+        val generation = ++storageGeneration
         _state.value = _state.value.copy(
             storage = (_state.value.storage ?: StorageReport(0, emptyList(), true)).copy(scanning = true),
         )
-        viewModelScope.launch(io) { publishStorage(measureStorage(scanDeadline())) }
+        viewModelScope.launch(io) { publishStorage(measureStorage(scanDeadline()), generation) }
     }
 
     /**
@@ -964,28 +1000,31 @@ class ChatViewModel(
      * stores, snapshots and keys are never touched. Re-scans afterwards.
      */
     fun clearCache() {
+        val generation = ++storageGeneration
         _state.value = _state.value.copy(
             storage = (_state.value.storage ?: StorageReport(0, emptyList(), true)).copy(scanning = true),
         )
         viewModelScope.launch(io) {
             runCatching { safeCacheTargets().forEach { deleteTree(it) } }
-            publishStorage(measureStorage(scanDeadline()))
+            publishStorage(measureStorage(scanDeadline()), generation)
         }
     }
 
     /** Clear only the safe part of [name]; unknown or kept categories are a no-op. */
     fun clearStorageCategory(name: String) {
         val targets = safeTargetsFor(name) ?: return
+        val generation = ++storageGeneration
         _state.value = _state.value.copy(
             storage = (_state.value.storage ?: StorageReport(0, emptyList(), true)).copy(scanning = true),
         )
         viewModelScope.launch(io) {
             runCatching { targets.forEach { deleteTree(it) } }
-            publishStorage(measureStorage(scanDeadline()))
+            publishStorage(measureStorage(scanDeadline()), generation)
         }
     }
 
-    private fun publishStorage(report: StorageReport) {
+    private fun publishStorage(report: StorageReport, generation: Int) {
+        if (generation != storageGeneration) return
         _state.value = _state.value.copy(storage = report.copy(scanning = false))
     }
 
@@ -1053,11 +1092,13 @@ class ChatViewModel(
         else -> null
     }
 
-    /** Sum the `lumen.db*` store files (main DB plus its WAL/SHM siblings). */
-    private fun storeBytes(ctx: Context): Long =
-        ctx.filesDir.listFiles()
-            ?.filter { it.isFile && it.name.startsWith("lumen.db") }
-            ?.sumOf { it.length() } ?: 0
+    /** Sum the database file (main DB plus its WAL/SHM siblings). */
+    private fun storeBytes(ctx: Context): Long {
+        val db = ctx.getDatabasePath(DB_NAME)
+        return listOf(db, File(db.path + "-wal"), File(db.path + "-shm"))
+            .filter { it.isFile }
+            .sumOf { it.length() }
+    }
 
     /** Top-level `*.log` files in filesDir plus a `logs` folder when present. */
     private fun sizeOfLogs(ctx: Context, deadline: Long): Long {
@@ -1114,11 +1155,18 @@ class ChatViewModel(
         val deb = debian
         if (env == null && deb == null) return
         viewModelScope.launch(io) {
+            val ready = deb?.ready() ?: false
+            val active = deb?.active() ?: false
+            val resolved = if (deb != null && ready && !active) {
+                runCatching { deb.probe() }.getOrDefault(false)
+            } else {
+                active
+            }
             _state.value = _state.value.copy(
                 linux = _state.value.linux.copy(
                     alpineReady = env?.ready() ?: false,
-                    debianReady = deb?.ready() ?: false,
-                    debianActive = deb?.active() ?: false,
+                    debianReady = ready,
+                    debianActive = resolved,
                 ),
             )
         }
@@ -1133,12 +1181,15 @@ class ChatViewModel(
         val env = debian ?: return
         if (_state.value.linux.installing) return
         _state.value = _state.value.copy(
-            linux = _state.value.linux.copy(installing = true, progress = "starting…"),
+            linux = _state.value.linux.copy(installing = true, progress = "starting…", failure = null),
         )
         diag("debian install: requested")
         viewModelScope.launch(io) {
+            var lastMessage: String? = "starting…"
+            var failure: String? = null
             try {
                 val ok = env.install { message ->
+                    lastMessage = message
                     diag("debian install: $message")
                     _state.value = _state.value.copy(linux = _state.value.linux.copy(progress = message))
                 }
@@ -1146,10 +1197,15 @@ class ChatViewModel(
                     runCatching { env.probe() }
                     diag("debian install: complete")
                 } else {
+                    failure = lastMessage?.takeIf { it.isNotBlank() && it != "starting…" }
+                        ?: "debian install failed"
                     diag("debian install: not active — alpine stays the shell")
                 }
             } catch (t: Throwable) {
-                diag("debian install failed: " + (t.message ?: t.toString()))
+                val message = t.message ?: t.toString()
+                failure = message
+                lastMessage = message
+                diag("debian install failed: $message")
             } finally {
                 _state.value = _state.value.copy(
                     linux = _state.value.linux.copy(
@@ -1157,7 +1213,8 @@ class ChatViewModel(
                         debianReady = env.ready(),
                         debianActive = env.active(),
                         installing = false,
-                        progress = null,
+                        progress = if (failure == null) null else (lastMessage ?: failure),
+                        failure = failure,
                     ),
                 )
             }
@@ -1299,11 +1356,18 @@ class ChatViewModel(
     }
 
     fun setProvider(provider: String) {
+        val changed = keys.provider != provider
         keys.provider = provider
-        keys.model = KeyStore.defaultModel(provider)
+        if (changed) {
+            keys.model = KeyStore.defaultModel(provider)
+            if (keys.subagentModel.isNotEmpty() && !keys.subagentModel.startsWith("$provider/")) {
+                keys.subagentModel = ""
+            }
+        }
         _state.value = _state.value.copy(
             provider = provider,
             model = keys.model,
+            subagentModel = keys.subagentModel,
             models = catalogue?.models(provider) ?: ProviderCatalogue.defaultModels(provider),
         )
         refreshModelMetrics()
@@ -1333,6 +1397,8 @@ class ChatViewModel(
         _state.value = _state.value.copy(subagentModel = value)
     }
 
+    private var modelsRefreshGeneration = 0
+
     /**
      * Fetch the live catalogue for [provider] on the run scope (the Application
      * scope in production, so it survives the Activity), seeding the UI with
@@ -1341,16 +1407,32 @@ class ChatViewModel(
     fun refreshModels(provider: String = keys.provider) {
         val cat = catalogue ?: return
         val scope = runScope ?: viewModelScope
+        val generation = ++modelsRefreshGeneration
+        val hadModels = _state.value.models.isNotEmpty()
+        val blankKey = provider != "openrouter" && keys.apiKey.isNullOrBlank()
         _state.value = _state.value.copy(modelsRefreshing = true)
         scope.launch {
-            val result = cat.refresh(provider)
-            if (_state.value.provider == provider) {
-                _state.value = _state.value.copy(
-                    models = result,
-                    modelsError = cat.errors.value[provider],
-                )
+            try {
+                val result = cat.refresh(provider)
+                if (generation == modelsRefreshGeneration && _state.value.provider == provider) {
+                    val error = when {
+                        blankKey -> null
+                        hadModels && cat.errors.value[provider] == null -> _state.value.modelsError
+                        else -> cat.errors.value[provider]
+                    }
+                    _state.value = _state.value.copy(models = result, modelsError = error)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                if (generation == modelsRefreshGeneration && _state.value.provider == provider) {
+                    _state.value = _state.value.copy(modelsError = t.message ?: t.toString())
+                }
+            } finally {
+                if (generation == modelsRefreshGeneration) {
+                    _state.value = _state.value.copy(modelsRefreshing = false)
+                }
             }
-            _state.value = _state.value.copy(modelsRefreshing = false)
         }
     }
 
@@ -1379,11 +1461,10 @@ class ChatViewModel(
      * [Usage]. Unknowns stay at defaults. Does not touch [ChatState.newTokens].
      */
     private fun refreshModelMetrics() {
-        val usage = _state.value.usage
         val info = modelsFor(keys.provider)
             .firstOrNull { it.id == keys.model.substringAfter('/') }
         val nextCostUsd = if (info != null && info.maxOutputTokens > 0) {
-            val input = usage.totalTokens / 1_000_000.0 * info.inputCostPerM
+            val input = _state.value.contextUsedTokens / 1_000_000.0 * info.inputCostPerM
             val output = info.maxOutputTokens / 1_000_000.0 * info.outputCostPerM
             (input + output).takeIf { it > 0.0 } ?: -1.0
         } else {
@@ -1414,6 +1495,14 @@ class ChatViewModel(
         lastPromptTokens = _state.value.usage.inputTokens +
             _state.value.usage.cacheReadTokens + _state.value.usage.cacheWriteTokens
         _state.value = _state.value.copy(newTokens = 0, contextUsedTokens = 0)
+        refreshModelMetrics()
+    }
+
+    private fun seedUsage(messages: List<Message>) {
+        val newest = messages.lastOrNull { it.role == Role.ASSISTANT }?.usage
+        val context = newest?.let { it.inputTokens + it.cacheReadTokens + it.cacheWriteTokens } ?: 0
+        val fresh = newest?.totalTokens ?: 0
+        _state.value = _state.value.copy(contextUsedTokens = context, newTokens = fresh)
         refreshModelMetrics()
     }
 
@@ -1469,6 +1558,7 @@ class ChatViewModel(
                 changes = RunChanges.EMPTY,
                 lastRevert = null,
                 todos = emptyList(),
+                ask = visibleAsk(id.value),
             )
             resetUsage()
             refreshSessions()
@@ -1485,8 +1575,13 @@ class ChatViewModel(
             // seq the collector sees as contiguous, and anything older is in
             // the messages we are about to load.
             resetEventBaseline()
-            val messages = store.messages(sid)
             val session = store.session(sid)
+            if (token != sessionOpenToken) return@launch
+            if (session == null) {
+                closeChat()
+                return@launch
+            }
+            val messages = store.messages(sid)
             if (token != sessionOpenToken) return@launch
             // Drop the previous session's subagent caches *before* enrich, so
             // the new session's own children are cached, not immediately wiped.
@@ -1498,15 +1593,18 @@ class ChatViewModel(
                 steps = steps,
                 input = "",
                 error = null,
-                busy = session?.state == SessionState.RUNNING,
+                hint = null,
+                attachments = emptyList(),
+                busy = session.state == SessionState.RUNNING,
                 usage = messages.fold(Usage()) { acc, m -> acc + m.usage },
                 changes = RunChanges.EMPTY,
                 lastRevert = null,
                 todos = loadTodos(sid),
                 // Restore a gate prompt that was hidden by navigating away mid-run.
-                ask = activeAsk?.ask,
+                ask = visibleAsk(id),
             )
             resetUsage()
+            seedUsage(messages)
         }
     }
 
@@ -1699,6 +1797,7 @@ class ChatViewModel(
      */
     fun rewindTo(messageId: String) {
         val current = _state.value.currentSessionId ?: return
+        if (_state.value.busy || runJob?.isActive == true) return
         viewModelScope.launch {
             val sid = SessionId(current)
             store.rewind(sid, MessageId(messageId))
@@ -1713,8 +1812,10 @@ class ChatViewModel(
                 error = null,
             )
             resetUsage()
+            seedUsage(messages)
             val todos = loadTodos(sid)
             _state.value = _state.value.copy(todos = todos)
+            refreshSessions()
         }
     }
 
@@ -1744,6 +1845,8 @@ class ChatViewModel(
                 error = null,
             )
             resetUsage()
+            seedUsage(remaining)
+            refreshSessions()
             send()
         }
     }
@@ -1775,6 +1878,8 @@ class ChatViewModel(
                 hint = "editing an earlier message",
             )
             resetUsage()
+            seedUsage(remaining)
+            refreshSessions()
         }
     }
 
@@ -1793,35 +1898,58 @@ class ChatViewModel(
         }
         searchJob = viewModelScope.launch {
             if (searchDebounceMs > 0) delay(searchDebounceMs)
-            val hits = runCatching { searchable.search(query) }.getOrDefault(emptyList())
-            if (_state.value.searchQuery == query) {
-                _state.value = _state.value.copy(search = hits)
+            _state.value = _state.value.copy(sessionsLoading = true)
+            try {
+                val hits = searchable.search(query)
+                if (_state.value.searchQuery == query) {
+                    _state.value = _state.value.copy(search = hits, sessionsError = null)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                if (_state.value.searchQuery == query) {
+                    _state.value = _state.value.copy(sessionsError = t.message ?: "search failed")
+                }
+            } finally {
+                if (_state.value.searchQuery == query) {
+                    _state.value = _state.value.copy(sessionsLoading = false)
+                }
             }
         }
     }
 
     private suspend fun refreshSessions() {
-        val rows = store.sessions(includeArchived = _state.value.showArchived)
-            .sortedWith(compareByDescending<Session> { it.pinned }.thenByDescending { it.updatedAt })
-            .map { s ->
-                val preview = runCatching { store.latestMessage(s.id) }.getOrNull()
-                    ?.parts?.filterIsInstance<Part.Text>()?.joinToString("") { it.text }
-                    ?.let { oneLine(it, 90) } ?: ""
-                SessionRow(
-                    id = s.id.value,
-                    title = s.title.ifBlank { "chat" },
-                    updatedAt = s.updatedAt,
-                    preview = preview,
-                    pinned = s.pinned,
-                    archived = s.archived,
-                    tags = normalizedTags(s.tags),
-                )
-            }
-        _state.value = _state.value.copy(
-            sessions = filterSessionsByTags(rows, _state.value.tagFilter),
-            availableTags = rows.asSequence().flatMap { it.tags }.distinct().sorted().toList(),
-        )
-        syncRunningSessions()
+        _state.value = _state.value.copy(sessionsLoading = true)
+        try {
+            val rows = store.sessions(limit = KEEP_SESSIONS, includeArchived = _state.value.showArchived)
+                .sortedWith(compareByDescending<Session> { it.pinned }.thenByDescending { it.updatedAt })
+                .map { s ->
+                    val preview = runCatching { store.latestMessage(s.id) }.getOrNull()
+                        ?.parts?.filterIsInstance<Part.Text>()?.joinToString("") { it.text }
+                        ?.let { oneLine(it, 90) } ?: ""
+                    SessionRow(
+                        id = s.id.value,
+                        title = s.title.ifBlank { "chat" },
+                        updatedAt = s.updatedAt,
+                        preview = preview,
+                        pinned = s.pinned,
+                        archived = s.archived,
+                        tags = normalizedTags(s.tags),
+                    )
+                }
+            _state.value = _state.value.copy(
+                sessions = filterSessionsByTags(rows, _state.value.tagFilter),
+                availableTags = rows.asSequence().flatMap { it.tags }.distinct().sorted().toList(),
+                sessionsError = null,
+            )
+            syncRunningSessions()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            _state.value = _state.value.copy(sessionsError = t.message ?: "cannot load sessions")
+        } finally {
+            _state.value = _state.value.copy(sessionsLoading = false)
+        }
     }
 
     /** Trim/lowercase a tag, rejecting blank input and capping its length. */
@@ -1847,8 +1975,17 @@ class ChatViewModel(
      */
     private fun inWorkspace(path: String): Path? {
         val base = workspace.toAbsolutePath().normalize()
+        val realBase = runCatching { workspace.toRealPath() }.getOrElse { base }
         val resolved = runCatching { base.resolve(path).normalize() }.getOrNull() ?: return null
-        return if (resolved.startsWith(base)) resolved else null
+        if (!resolved.startsWith(base)) return null
+        val real = runCatching { resolved.toRealPath() }.getOrNull()
+        if (real != null) return resolved.takeIf { real.startsWith(realBase) }
+        var ancestor: Path? = resolved.parent
+        while (ancestor != null && !Files.exists(ancestor, LinkOption.NOFOLLOW_LINKS)) {
+            ancestor = ancestor.parent
+        }
+        val realAncestor = ancestor?.let { runCatching { it.toRealPath() }.getOrNull() } ?: return null
+        return resolved.takeIf { realAncestor.startsWith(realBase) }
     }
 
     /** True when [rel] resolves to a real file inside the workspace. */
@@ -2144,19 +2281,36 @@ class ChatViewModel(
      * Write UTF-8 [content] to [path], creating parent folders as needed and
      * refusing escapes. The listing is refreshed afterwards either way.
      */
-    fun saveFile(path: String, content: String) {
+    fun saveFile(path: String, content: String): Boolean {
+        val editor = _state.value.editor
+        val sameEditor = editor != null && normalizeRel(editor.path) == normalizeRel(path)
+        if (sameEditor && editor?.readOnly == true) {
+            surfaceFilesError("read-only file")
+            return false
+        }
         val target = inWorkspace(path)
         if (target == null) {
             surfaceFilesError("cannot write $path")
-            return
+            return false
         }
         try {
+            var payload = content
+            if (sameEditor && editorFinalNewline && payload.isNotEmpty() && !payload.endsWith("\n")) {
+                payload += "\n"
+            }
             target.parent?.let { Files.createDirectories(it) }
-            Files.write(target, content.toByteArray(StandardCharsets.UTF_8))
+            Files.write(target, payload.toByteArray(StandardCharsets.UTF_8))
+            if (sameEditor) {
+                _state.value.editor?.let { current ->
+                    _state.value = _state.value.copy(editor = current.copy(draft = null, dirty = false))
+                }
+            }
             openFiles(_state.value.files?.dir.orEmpty())
             bumpFileRevision()
+            return true
         } catch (t: Throwable) {
             surfaceFilesError(t.message ?: "cannot write $path")
+            return false
         }
     }
 
@@ -2208,6 +2362,7 @@ class ChatViewModel(
             } else {
                 Files.delete(target)
             }
+            closeEditorForDelete(path)
             openFiles(_state.value.files?.dir.orEmpty())
             bumpFileRevision()
         } catch (t: Throwable) {
@@ -2225,6 +2380,7 @@ class ChatViewModel(
         if (source == null || dest == null) return surfaceFilesError("cannot rename $path")
         try {
             Files.move(source, dest)
+            retargetEditorForMove(relativeToWorkspace(source), relativeToWorkspace(dest))
             openFiles(_state.value.files?.dir.orEmpty())
             bumpFileRevision()
         } catch (t: Throwable) {
@@ -2304,37 +2460,75 @@ class ChatViewModel(
      * else the file's last recorded change range, is highlighted when it is
      * inside the read window.
      */
+    private data class DisplayText(
+        val lines: List<String>,
+        val truncated: Boolean,
+        val finalNewline: Boolean,
+    )
+
+    private var editorFinalNewline: Boolean = false
+
+    private fun decodeUtf8(bytes: ByteArray): String? {
+        val decoder = StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+        return runCatching { decoder.decode(ByteBuffer.wrap(bytes)).toString() }.getOrNull()
+    }
+
+    private fun displayText(text: String): DisplayText {
+        if (text.isEmpty()) return DisplayText(emptyList(), false, false)
+        val parts = text.split('\n').toMutableList()
+        val finalNewline = parts.lastOrNull()?.isEmpty() == true
+        if (finalNewline) parts.removeAt(parts.lastIndex)
+        val truncated = parts.size > MAX_PEEK_LINES
+        val lines = if (truncated) parts.subList(0, MAX_PEEK_LINES).toList() else parts.toList()
+        return DisplayText(lines, truncated, finalNewline)
+    }
+
     fun editFile(path: String, line: Int? = null) {
         val target = inWorkspace(path)
         if (target == null || !Files.isRegularFile(target)) {
+            editorFinalNewline = false
             _state.value = _state.value.copy(editor = EditorState(path, emptyList(), error = "cannot open $path"))
             return
         }
         try {
-            val lines = ArrayList<String>()
-            var truncated = false
-            Files.newBufferedReader(target, StandardCharsets.UTF_8).use { reader ->
-                while (true) {
-                    val l = reader.readLine() ?: break
-                    if (lines.size >= MAX_PEEK_LINES) {
-                        truncated = true
-                        break
-                    }
-                    lines.add(l)
-                }
-            }
+            val bytes = Files.readAllBytes(target)
             val rel = relativeToWorkspace(target)
+            val text = if (bytes.any { it == 0.toByte() }) null else decodeUtf8(bytes)
+            if (text == null) {
+                editorFinalNewline = false
+                _state.value = _state.value.copy(
+                    editor = EditorState(
+                        path = rel,
+                        lines = emptyList(),
+                        readOnly = true,
+                        error = "binary or non-UTF-8 file — read only",
+                    ),
+                )
+                return
+            }
+            val display = displayText(text)
+            editorFinalNewline = display.finalNewline
             _state.value = _state.value.copy(
                 editor = EditorState(
                     path = rel,
-                    lines = lines,
-                    truncated = truncated,
-                    highlight = highlightForEditor(rel, line, lines, truncated),
+                    lines = display.lines,
+                    truncated = display.truncated,
+                    highlight = highlightForEditor(rel, line, display.lines, display.truncated),
+                    draft = text,
+                    dirty = false,
                 ),
             )
         } catch (t: Throwable) {
+            editorFinalNewline = false
             _state.value = _state.value.copy(editor = EditorState(path, emptyList(), error = t.message ?: "cannot open $path"))
         }
+    }
+
+    fun updateEditorDraft(text: String) {
+        val editor = _state.value.editor ?: return
+        _state.value = _state.value.copy(editor = editor.copy(draft = text, dirty = true))
     }
 
     /**
@@ -2405,6 +2599,7 @@ class ChatViewModel(
             val p = normalizeRel(raw)
             if (p.isEmpty()) return@any false
             target.isEmpty() ||
+                p == target ||
                 p.substringBeforeLast('/', "") == target ||
                 p.startsWith("$target/")
         }
@@ -2425,6 +2620,9 @@ class ChatViewModel(
         if (editor != null && paths.any { normalizeRel(it) == normalizeRel(editor.path) }) {
             editFile(editor.path, editor.highlight?.first)
         }
+        current.canvasPath?.let { canvasPath ->
+            if (paths.any { normalizeRel(it) == normalizeRel(canvasPath) }) openCanvas(canvasPath)
+        }
         bumpFileRevision()
         refreshModelMetrics()
     }
@@ -2436,7 +2634,31 @@ class ChatViewModel(
 
     /** Dismiss the files editor. */
     fun closeEditor() {
+        editorFinalNewline = false
         _state.value = _state.value.copy(editor = null)
+    }
+
+    private fun closeEditorForDelete(path: String) {
+        val editor = _state.value.editor ?: return
+        val target = normalizeRel(path)
+        val current = normalizeRel(editor.path)
+        if (current == target || (target.isNotEmpty() && current.startsWith("$target/"))) {
+            editorFinalNewline = false
+            _state.value = _state.value.copy(editor = null)
+        }
+    }
+
+    private fun retargetEditorForMove(source: String, dest: String) {
+        val editor = _state.value.editor ?: return
+        val src = normalizeRel(source)
+        val dst = normalizeRel(dest)
+        val current = normalizeRel(editor.path)
+        val moved = when {
+            current == src -> dst
+            src.isNotEmpty() && current.startsWith("$src/") -> "$dst/${current.removePrefix("$src/")}"
+            else -> return
+        }
+        _state.value = _state.value.copy(editor = editor.copy(path = moved))
     }
 
     /** One directory's entries: folders first, then files, each name-ascending. */
@@ -2775,9 +2997,10 @@ class ChatViewModel(
                 busy = session?.state == SessionState.RUNNING,
                 usage = messages.fold(Usage()) { acc, m -> acc + m.usage },
                 todos = loadTodos(sid),
-                ask = activeAsk?.ask,
+                ask = visibleAsk(id),
             )
             resetUsage()
+            seedUsage(messages)
             // The rebuild is current as of the bus head; re-baseline so the
             // collector does not flag the next event as a gap.
             resetEventBaseline()
@@ -2824,11 +3047,17 @@ class ChatViewModel(
                     scheduleSurfaceRefresh(setOf(e.edit.path))
                 }
                 is AgentEvent.StateChanged -> {
-                    val busy = e.state == dev.spindle.core.model.SessionState.RUNNING
+                    val busy = e.state == SessionState.RUNNING
                     // A state change is authoritative: flush whatever streamed
                     // before re-reading, so no text is stranded in the buffer.
                     flushDeltas()
-                    _state.value = _state.value.copy(busy = busy, todos = loadTodos(SessionId(current)))
+                    val transientRetry = _state.value.error?.startsWith("retrying") == true &&
+                        e.state != SessionState.ERROR
+                    _state.value = _state.value.copy(
+                        busy = busy,
+                        todos = loadTodos(SessionId(current)),
+                        error = if (transientRetry) null else _state.value.error,
+                    )
                     if (!busy) {
                         // The store is the truth: replace optimistic/partial rows
                         // (the common case after a stop) with what was saved.
@@ -2966,13 +3195,31 @@ class ChatViewModel(
         expandedChildren.clear()
     }
 
-    private suspend fun enrich(steps: List<UiStep>): List<UiStep> = steps.map { step ->
-        val child = step.childId ?: return@map step
-        val kids = childSteps(child)
-        step.copy(
-            rows = kids.take(8).map { it.label to it.summary },
-            childSteps = if (child in expandedChildren) kids else emptyList(),
-        )
+    private class ChildBudget(var remaining: Int)
+
+    private suspend fun enrich(steps: List<UiStep>): List<UiStep> =
+        enrich(steps, 0, ChildBudget(MAX_CHILD_LOADS))
+
+    private suspend fun enrich(steps: List<UiStep>, depth: Int, budget: ChildBudget): List<UiStep> {
+        if (depth >= MAX_CHILD_DEPTH || budget.remaining <= 0) return steps
+        return steps.map { step ->
+            val ids = (step.childIds + listOfNotNull(step.childId)).distinct()
+            if (ids.isEmpty()) return@map step
+            val kids = ArrayList<UiStep>()
+            for (id in ids) {
+                if (budget.remaining <= 0) break
+                budget.remaining--
+                kids += childSteps(id, depth + 1, budget)
+            }
+            if (kids.isEmpty()) {
+                step
+            } else {
+                step.copy(
+                    rows = kids.take(8).map { it.label to it.summary },
+                    childSteps = if (ids.any { it in expandedChildren }) kids else emptyList(),
+                )
+            }
+        }
     }
 
     /**
@@ -2981,13 +3228,16 @@ class ChatViewModel(
      * an unbounded number of subagents still cannot grow it forever; an evicted
      * transcript is simply re-read from the store on demand.
      */
-    private suspend fun childSteps(child: String): List<UiStep> {
-        childCache[child]?.let { return it }
-        val loaded = runCatching { StepMapper.fromMessages(store.messages(SessionId(child))) }
-            .getOrDefault(emptyList())
-        if (childCache.size >= MAX_CHILD_CACHE) childCache.clear()
-        childCache[child] = loaded
-        return loaded
+    private suspend fun childSteps(child: String, depth: Int, budget: ChildBudget): List<UiStep> {
+        val raw = childCache[child] ?: run {
+            val loaded = runCatching { StepMapper.fromMessages(store.messages(SessionId(child))) }
+                .getOrDefault(emptyList())
+            if (childCache.size >= MAX_CHILD_CACHE) childCache.clear()
+            childCache[child] = loaded
+            loaded
+        }
+        return if (depth >= MAX_CHILD_DEPTH || budget.remaining <= 0) raw
+        else enrich(raw, depth, budget)
     }
 
     /** Load a subagent's full transcript (on tap) and attach it to the row. */
@@ -3008,7 +3258,7 @@ class ChatViewModel(
         expandedChildren += child
         patch { it.copy(childLoading = true) }
         viewModelScope.launch {
-            val kids = childSteps(child)
+            val kids = childSteps(child, 0, ChildBudget(MAX_CHILD_LOADS))
             // Re-attach in both the raw list and the enriched view; enrich() will
             // also pick this up on the next rebuild via childCache.
             patch { it.copy(childSteps = kids, childLoading = false) }
@@ -3137,7 +3387,7 @@ class ChatViewModel(
                 tools = tools,
                 store = store,
                 bus = bus,
-                permissions = permissionGate,
+                permissions = permissionGateFor(currentId),
                 questions = questionGate,
                 approval = approvalFor(keys.askBeforeTools) { keys.allowedPatterns },
                 snapshots = snapshots,
@@ -3288,6 +3538,10 @@ class ChatViewModel(
          */
         private const val MAX_CHILD_CACHE = 256
 
+        private const val MAX_CHILD_DEPTH = 3
+
+        private const val MAX_CHILD_LOADS = 24
+
         /** Longest normalized tag accepted; longer input is truncated. */
         const val MAX_TAG_LENGTH = 32
 
@@ -3318,6 +3572,8 @@ class ChatViewModel(
          * its WAL/SHM sidecars can never match.
          */
         private val DB_QUARANTINE = Regex("""^lumen\.db(?:-wal|-shm)?\.corrupt-\d+$""")
+
+        private const val QUARANTINE_RETAIN_MS = 7L * 24L * 60L * 60L * 1_000L
 
         /** The Debian maintenance "nothing to reclaim" status, filtered from the summary. */
         private const val ENVIRONMENT_READY = "environment ready"
@@ -3478,6 +3734,7 @@ private fun stepReferences(
     cwd: String,
     exists: (String) -> Boolean,
 ): Boolean {
+    if (resolvesBacklink(step.think.orEmpty(), target, cwd, exists)) return true
     val prose = step.kind == StepKind.ASSISTANT || step.kind == StepKind.THINKING
     if (prose && (resolvesBacklink(step.body, target, cwd, exists) ||
             resolvesBacklink(step.summary, target, cwd, exists))

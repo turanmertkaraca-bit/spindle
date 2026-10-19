@@ -257,7 +257,8 @@ private fun ArchiveDocument.toImported(): ImportedSession {
         providerId = this.session.providerId,
         agent = this.session.agent.ifBlank { "build" },
         parentId = null,
-        state = enumOf(this.session.state, SessionState.IDLE),
+        state = enumOf(this.session.state, SessionState.IDLE)
+            .let { if (it == SessionState.RUNNING) SessionState.IDLE else it },
         pinned = this.session.pinned,
         archived = this.session.archived,
         tags = this.session.tags,

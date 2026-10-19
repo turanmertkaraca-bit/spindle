@@ -165,6 +165,17 @@ class OpenAiProviderTest {
     }
 
     @Test
+    fun `models leaves context and output unknown for ids-only live entries`() = runTest {
+        server.enqueue(MockResponse().setBody("{\"data\":[{\"id\":\"live-only\"}]}"))
+
+        val m = provider().models().single { it.id == "live-only" }
+        assertEquals(0, m.contextWindow)
+        assertEquals(0, m.maxOutputTokens)
+        assertEquals(0.0, m.inputCostPerM, 1e-9)
+        assertEquals(0.0, m.outputCostPerM, 1e-9)
+    }
+
+    @Test
     fun `models enriches context price and capabilities from a rich payload`() = runTest {
         server.enqueue(
             MockResponse().setBody(
@@ -272,8 +283,8 @@ class OpenAiProviderTest {
         )
 
         val m = provider().models().single { it.id == "m" }
-        assertEquals(128_000, m.contextWindow)
-        assertEquals(8_192, m.maxOutputTokens)
+        assertEquals(0, m.contextWindow)
+        assertEquals(0, m.maxOutputTokens)
         assertEquals(0.0, m.inputCostPerM, 1e-9)
         assertEquals(0.0, m.outputCostPerM, 1e-9)
     }
@@ -390,13 +401,13 @@ class OpenAiProviderTest {
         assertEquals(listOf("weird", "broken", "modality"), models.map { it.id })
 
         val weird = models.single { it.id == "weird" }
-        assertEquals(128_000, weird.contextWindow)
+        assertEquals(0, weird.contextWindow)
         assertEquals(0.0, weird.inputCostPerM)
         assertEquals(0.0, weird.outputCostPerM)
         assertTrue(!weird.supportsVision)
 
         val broken = models.single { it.id == "broken" }
-        assertEquals(128_000, broken.contextWindow)
+        assertEquals(0, broken.contextWindow)
         assertEquals(0.0, broken.inputCostPerM)
         assertTrue(models.single { it.id == "modality" }.supportsVision)
     }

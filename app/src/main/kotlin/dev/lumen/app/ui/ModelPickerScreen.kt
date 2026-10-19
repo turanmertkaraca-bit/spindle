@@ -13,21 +13,33 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -56,12 +68,11 @@ internal fun modelRowData(provider: String, m: ModelInfo): ModelRowData = ModelR
     label = m.label.ifBlank { m.id },
     id = m.id,
     providerLabel = null,
-    contextWindow = m.contextWindow,
-    cost = if (m.inputCostPerM > 0.0 || m.outputCostPerM > 0.0) {
-        String.format(Locale.US, "%.2f/%.2f", m.inputCostPerM, m.outputCostPerM)
-    } else {
-        null
-    },
+    contextWindow = m.contextWindow.takeIf { it > 0 },
+    cost = buildList {
+        if (m.inputCostPerM > 0.0) add(String.format(Locale.US, "%.2f", m.inputCostPerM))
+        if (m.outputCostPerM > 0.0) add(String.format(Locale.US, "%.2f", m.outputCostPerM))
+    }.takeIf { it.isNotEmpty() }?.joinToString("/"),
     tag = "model-option-${m.id}",
 )
 
@@ -85,6 +96,7 @@ internal fun ModelRow(
     favorite: Boolean,
     onSelect: (String) -> Unit,
     onToggleFavorite: ((String) -> Unit)?,
+    starTag: String = "model-star-${data.id}",
 ) {
     Row(
         Modifier
@@ -112,7 +124,7 @@ internal fun ModelRow(
                 Spacer(Modifier.height(2.dp))
                 Text(
                     sub,
-                    color = colors.faint,
+                    color = colors.dim,
                     fontFamily = LumenFonts.value,
                     fontSize = LumenType.caption,
                     maxLines = 1,
@@ -124,40 +136,59 @@ internal fun ModelRow(
         // Fixed-width metric column: every row's name truncates at the same x and
         // context/cost stay aligned, instead of the column jittering per model.
         Column(Modifier.width(60.dp), horizontalAlignment = Alignment.End) {
-            if (data.contextWindow != null) {
+            val context = data.contextWindow?.takeIf { it > 0 }
+            if (context != null) {
                 Text(
-                    "${data.contextWindow / 1000}k",
-                    color = colors.faint,
+                    "${context / 1000}k",
+                    color = colors.dim,
                     fontFamily = LumenFonts.value,
                     fontSize = LumenType.caption,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             if (data.cost != null) {
                 Spacer(Modifier.height(2.dp))
                 Text(
                     data.cost,
-                    color = colors.faint,
+                    color = colors.dim,
                     fontFamily = LumenFonts.value,
                     fontSize = LumenType.micro,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
-        if (onToggleFavorite != null) {
+        if (selected) {
             Spacer(Modifier.width(8.dp))
-            Text(
-                if (favorite) "\u2605" else "\u2606",
-                color = if (favorite) colors.accent else colors.faint,
-                fontFamily = LumenFonts.value,
-                fontSize = LumenType.bodyLarge,
-                modifier = Modifier
+            Text("\u2713", color = colors.water, fontFamily = LumenFonts.value, fontSize = LumenType.bodyLarge)
+        }
+        if (onToggleFavorite != null) {
+            Spacer(Modifier.width(if (selected) 4.dp else 8.dp))
+            Box(
+                Modifier
+                    .size(40.dp)
                     .clip(LumenShapes.small)
                     .clickable { onToggleFavorite(data.ref) }
-                    .padding(4.dp)
-                    .testTag("model-star-${data.id}"),
-            )
-        } else if (selected) {
-            Spacer(Modifier.width(10.dp))
-            Text("\u2713", color = colors.water, fontFamily = LumenFonts.value, fontSize = LumenType.bodyLarge)
+                    .semantics {
+                        contentDescription = if (favorite) {
+                            "remove from favourites"
+                        } else {
+                            "add to favourites"
+                        }
+                        role = Role.Button
+                        selected = favorite
+                    }
+                    .testTag(starTag),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (favorite) "\u2605" else "\u2606",
+                    color = if (favorite) colors.accent else colors.fg,
+                    fontFamily = LumenFonts.value,
+                    fontSize = LumenType.bodyLarge,
+                )
+            }
         }
     }
 }
@@ -176,7 +207,7 @@ fun ModelPickerScreen(
     selected: String,
     refreshing: Boolean,
     error: String?,
-    onProvider: (String) -> Unit,
+    onProvider: (String) -> Unit = {},
     /** Select a full `provider/modelId`; the caller switches provider + navigates back. */
     onSelect: (String) -> Unit,
     onRefresh: () -> Unit,
@@ -186,7 +217,16 @@ fun ModelPickerScreen(
     recents: List<String> = emptyList(),
     onToggleFavorite: ((String) -> Unit)? = null,
 ) {
-    val known = models.associateBy { "$provider/${it.id}" }
+    var browseProvider by rememberSaveable(provider) { mutableStateOf(provider) }
+    val liveModels = remember(models, provider, browseProvider) {
+        if (browseProvider == provider) models else ProviderCatalogue.defaultModels(browseProvider)
+    }
+    val known = remember(models, provider, browseProvider) {
+        buildMap {
+            models.forEach { put("$provider/${it.id}", it) }
+            liveModels.forEach { put("$browseProvider/${it.id}", it) }
+        }
+    }
     Column(
         modifier
             .fillMaxSize()
@@ -227,7 +267,9 @@ fun ModelPickerScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             for ((id, label) in ProviderCatalogue.choices) {
-                ProviderChip(colors, label, provider == id, "models-provider-$id") { onProvider(id) }
+                ProviderChip(colors, label, browseProvider == id, "models-provider-$id") {
+                    browseProvider = id
+                }
             }
         }
 
@@ -241,11 +283,11 @@ fun ModelPickerScreen(
             )
         }
 
-        if (error != null && models.isEmpty()) {
+        if (error != null) {
             Spacer(Modifier.height(LumenSpacing.md))
             Text(
                 error,
-                color = LumenAlert,
+                color = alertOn(colors),
                 fontFamily = LumenFonts.value,
                 fontSize = LumenType.caption,
                 maxLines = 2,
@@ -257,7 +299,7 @@ fun ModelPickerScreen(
             )
         }
 
-        if (models.isEmpty()) {
+        if (liveModels.isEmpty()) {
             Box(
                 Modifier.fillMaxWidth().padding(top = LumenSpacing.xxl),
                 contentAlignment = Alignment.Center,
@@ -286,31 +328,31 @@ fun ModelPickerScreen(
                 if (favorites.isNotEmpty()) {
                     item { Column { LumenSectionHeader(colors, "favorites") } }
                     items(favorites.toList(), key = { "fav-$it" }) { ref ->
-                        val d = known[ref]?.let { modelRowData(provider, it) }
-                            ?: modelRowDataFromRef(ref, "model-fav-${ref.substringAfter('/')}")
+                        val d = pinnedRowData(ref, known, "model-fav-${ref.substringAfter('/')}")
                         ModelRow(
                             colors, d, selected == ref, favorite = true, onSelect,
                             onToggleFavorite = onToggleFavorite,
+                            starTag = "model-fav-star-$ref",
                         )
                     }
                 }
                 if (recents.isNotEmpty()) {
                     item { Column { LumenSectionHeader(colors, "recent") } }
                     items(recents, key = { "rec-$it" }) { ref ->
-                        val d = known[ref]?.let { modelRowData(provider, it) }
-                            ?: modelRowDataFromRef(ref, "model-recent-${ref.substringAfter('/')}")
+                        val d = pinnedRowData(ref, known, "model-recent-${ref.substringAfter('/')}")
                         ModelRow(
                             colors, d, selected == ref, favorite = ref in favorites, onSelect,
                             onToggleFavorite = onToggleFavorite,
+                            starTag = "model-recent-star-$ref",
                         )
                     }
                 }
-                item { Column { LumenSectionHeader(colors, providerLabel(provider)) } }
-                items(models, key = { it.id }) { m ->
-                    val ref = "$provider/${m.id}"
+                item { Column { LumenSectionHeader(colors, ProviderCatalogue.label(browseProvider)) } }
+                items(liveModels, key = { it.id }) { m ->
+                    val ref = "$browseProvider/${m.id}"
                     ModelRow(
                         colors,
-                        modelRowData(provider, m).copy(
+                        modelRowData(browseProvider, m).copy(
                             tag = if (selected == ref) {
                                 "model-option-selected-${m.id}"
                             } else {
@@ -328,8 +370,15 @@ fun ModelPickerScreen(
     }
 }
 
-private fun providerLabel(provider: String): String =
-    ProviderCatalogue.choices.firstOrNull { it.first == provider }?.second ?: provider
+internal fun pinnedRowData(
+    ref: String,
+    known: Map<String, ModelInfo>,
+    tag: String,
+): ModelRowData {
+    val refProvider = ref.substringBefore('/')
+    val base = known[ref]?.let { modelRowData(refProvider, it) } ?: modelRowDataFromRef(ref, tag)
+    return base.copy(providerLabel = ProviderCatalogue.label(refProvider), tag = tag)
+}
 
 @Composable
 private fun ProviderChip(
@@ -339,19 +388,24 @@ private fun ProviderChip(
     tag: String,
     onClick: () -> Unit,
 ) {
-    Text(
-        text,
-        color = if (selected) colors.fg else colors.dim,
-        fontFamily = LumenFonts.label,
-        fontSize = LumenType.body,
-        fontWeight = FontWeight.Medium,
-        maxLines = 1,
-        modifier = Modifier
+    Box(
+        Modifier
+            .heightIn(min = 40.dp)
             .clip(LumenShapes.inset)
             .background(if (selected) colors.surface else Color.Transparent)
             .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.inset)
-            .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 9.dp)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .padding(horizontal = 14.dp)
             .testTag(tag),
-    )
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text,
+            color = if (selected) colors.fg else colors.dim,
+            fontFamily = LumenFonts.label,
+            fontSize = LumenType.body,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+        )
+    }
 }

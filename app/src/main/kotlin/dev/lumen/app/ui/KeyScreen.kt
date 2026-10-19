@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -41,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -62,6 +64,7 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.util.UUID
 
 private val Mono = FontFamily.Monospace
 
@@ -118,7 +121,7 @@ private sealed interface ProbeOutcome {
  * unreachable rather than pretending the key is bad. The key is only ever sent
  * as an Authorization header — never logged.
  */
-private suspend fun probeKey(provider: String, key: String): ProbeOutcome =
+private suspend fun probeKey(provider: String, key: String, sessionId: String): ProbeOutcome =
     withContext(Dispatchers.IO) {
         val spec = ProbeSpecs[provider]
             ?: return@withContext ProbeOutcome.Unreachable("unknown provider")
@@ -134,6 +137,9 @@ private suspend fun probeKey(provider: String, key: String): ProbeOutcome =
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Accept", "application/json")
                 setRequestProperty("User-Agent", ProviderCatalogue.USER_AGENT)
+                if (provider == "opencode-go") {
+                    setRequestProperty("x-opencode-session", sessionId)
+                }
             }
             val payload =
                 "{\"model\":\"${spec.model}\"," +
@@ -173,8 +179,9 @@ fun KeyScreen(
     initialKey: String = "",
     busy: Boolean = false,
     error: String? = null,
+    onBack: (() -> Unit)? = null,
 ) {
-    var provider by rememberSaveable { mutableStateOf(initialProvider) }
+    var provider by remember(initialProvider) { mutableStateOf(initialProvider) }
     // Never rememberSaveable: a secret in the saved-instance Bundle can be
     // persisted to disk, defeating SecretCipher. `remember` re-reads
     // [initialKey] from the KeyStore on recreation.
@@ -182,6 +189,8 @@ fun KeyScreen(
     var visible by rememberSaveable { mutableStateOf(false) }
     var probe by remember { mutableStateOf<ProbeOutcome?>(null) }
     var testing by remember { mutableStateOf(false) }
+    var probeGeneration by remember { mutableStateOf(0) }
+    val sessionId = remember { UUID.randomUUID().toString() }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
     val focusInteraction = remember { MutableInteractionSource() }
@@ -201,6 +210,8 @@ fun KeyScreen(
         LumenTopBar(
             colors = colors,
             title = "API key",
+            onBack = onBack,
+            backTag = "key-back",
             titleSize = LumenType.title,
             actions = {
                 if (onToggleTheme != null) {
@@ -243,8 +254,13 @@ fun KeyScreen(
                     selected = provider == option.id,
                     enabled = !busy,
                     onClick = {
-                        provider = option.id
-                        probe = null
+                        if (option.id != provider) {
+                            provider = option.id
+                            key = if (option.id == initialProvider) initialKey else ""
+                            probe = null
+                            probeGeneration++
+                            testing = false
+                        }
                     },
                 )
             }
@@ -258,7 +274,7 @@ fun KeyScreen(
                 Spacer(Modifier.width(LumenSpacing.md))
                 Text(
                     defaultModel,
-                    color = colors.faint,
+                    color = colors.dim,
                     fontFamily = Mono,
                     fontSize = LumenType.body,
                 )
@@ -287,6 +303,8 @@ fun KeyScreen(
                 onValueChange = {
                     key = it
                     probe = null
+                    probeGeneration++
+                    testing = false
                 },
                 singleLine = true,
                 enabled = !busy,
@@ -315,7 +333,7 @@ fun KeyScreen(
                         if (key.isEmpty()) {
                             Text(
                                 "Paste your key",
-                                color = colors.faint,
+                                color = colors.dim,
                                 fontFamily = Mono,
                                 fontSize = LumenType.bodyLarge,
                             )
@@ -345,7 +363,7 @@ fun KeyScreen(
         Spacer(Modifier.height(LumenSpacing.sm))
         Text(
             KeyHints[provider] ?: "Paste the key for the provider you picked.",
-            color = colors.faint,
+            color = colors.dim,
             fontFamily = Mono,
             fontSize = LumenType.caption,
         )
@@ -357,6 +375,8 @@ fun KeyScreen(
                 if (!text.isNullOrBlank()) {
                     key = text.trim()
                     probe = null
+                    probeGeneration++
+                    testing = false
                 }
             }
             Spacer(Modifier.width(LumenSpacing.sm))
@@ -366,12 +386,22 @@ fun KeyScreen(
                 tag = "test-key",
                 enabled = canTest,
             ) {
+                val testedProvider = provider
+                val testedKey = key.trim()
+                probeGeneration++
+                val generation = probeGeneration
+                testing = true
+                probe = null
                 scope.launch {
-                    testing = true
-                    probe = null
-                    val result = probeKey(provider, key.trim())
-                    probe = result
-                    testing = false
+                    val result = probeKey(testedProvider, testedKey, sessionId)
+                    if (
+                        generation == probeGeneration &&
+                        provider == testedProvider &&
+                        key.trim() == testedKey
+                    ) {
+                        probe = result
+                        testing = false
+                    }
                 }
             }
         }
@@ -380,10 +410,10 @@ fun KeyScreen(
         val feedback: Pair<String, Color>? = when {
             testing -> "Testing\u2026" to colors.dim
             currentProbe is ProbeOutcome.Valid -> "Key looks valid" to colors.water
-            currentProbe is ProbeOutcome.Invalid -> "Key rejected by the provider" to LumenAlert
+            currentProbe is ProbeOutcome.Invalid -> "Key rejected by the provider" to alertOn(colors)
             currentProbe is ProbeOutcome.Unreachable ->
                 "Could not reach the provider (${currentProbe.detail})" to colors.dim
-            error != null -> error to LumenAlert
+            error != null -> error to alertOn(colors)
             else -> null
         }
         if (feedback != null) {
@@ -425,7 +455,7 @@ fun KeyScreen(
 private fun SectionLabel(colors: LumenColors, text: String) {
     Text(
         text,
-        color = colors.faint,
+        color = colors.dim,
         fontFamily = Mono,
         fontSize = LumenType.caption,
         letterSpacing = 2.sp,
@@ -443,10 +473,16 @@ private fun ProviderCard(
     Row(
         Modifier
             .fillMaxWidth()
+            .heightIn(min = LumenSize.touchMin)
             .clip(LumenShapes.card)
             .background(if (selected) colors.surface else Color.Transparent)
             .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.card)
-            .clickable(enabled = enabled) { onClick() }
+            .selectable(
+                selected = selected,
+                enabled = enabled,
+                role = Role.RadioButton,
+                onClick = onClick,
+            )
             .padding(horizontal = LumenSpacing.lg, vertical = LumenSpacing.md)
             .testTag("provider-${option.id}")
             .semantics { contentDescription = "provider ${option.name}" },

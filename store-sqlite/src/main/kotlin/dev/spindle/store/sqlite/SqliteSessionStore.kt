@@ -256,7 +256,7 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
         val now = System.currentTimeMillis()
         val fork = source.copy(
             id = newId,
-            parentId = sourceId,
+            parentId = null,
             createdAt = now,
             updatedAt = now,
             archived = false,

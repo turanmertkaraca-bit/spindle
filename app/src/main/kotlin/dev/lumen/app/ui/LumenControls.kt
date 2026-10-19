@@ -2,16 +2,17 @@ package dev.lumen.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -24,6 +25,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,6 +50,7 @@ internal fun LumenSwitch(
     colors: LumenColors,
     modifier: Modifier = Modifier,
     tag: String? = null,
+    contentDescription: String? = null,
 ) {
     Switch(
         checked = checked,
@@ -57,7 +62,15 @@ internal fun LumenSwitch(
             uncheckedTrackColor = colors.surface,
             uncheckedBorderColor = colors.outline,
         ),
-        modifier = modifier.then(if (tag != null) Modifier.testTag(tag) else Modifier),
+        modifier = modifier
+            .then(if (tag != null) Modifier.testTag(tag) else Modifier)
+            .then(
+                if (contentDescription != null) {
+                    Modifier.semantics { this.contentDescription = contentDescription }
+                } else {
+                    Modifier
+                },
+            ),
     )
 }
 
@@ -98,7 +111,12 @@ internal fun LumenSegmented(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .weight(1f)
-                    .clickable { onSelect(seg.value) }
+                    .heightIn(min = LumenSize.touchMin)
+                    .selectable(
+                        selected = active,
+                        onClick = { if (!active) onSelect(seg.value) },
+                        role = Role.RadioButton,
+                    )
                     .background(if (active) colors.water else Color.Transparent)
                     .padding(vertical = 10.dp, horizontal = 4.dp)
                     .testTag(seg.tag),

@@ -1,6 +1,9 @@
 package dev.lumen.app.ui
 
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -32,6 +35,7 @@ class SettingsScreenTest {
     @Test
     fun `picking a budget chip reports its ceiling`() {
         var picked: Double? = null
+        var cost by mutableStateOf(0.0)
         compose.setContent {
             SettingsScreen(
                 colors = LumenColors.Dark,
@@ -44,8 +48,11 @@ class SettingsScreenTest {
                 onEditKey = {},
                 onBack = {},
                 modifier = viewport,
-                maxCostUsd = 0.0,
-                onMaxCost = { picked = it },
+                maxCostUsd = cost,
+                onMaxCost = {
+                    picked = it
+                    cost = it
+                },
             )
         }
 

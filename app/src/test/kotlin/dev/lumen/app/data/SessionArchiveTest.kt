@@ -7,6 +7,7 @@ import dev.spindle.core.model.PartId
 import dev.spindle.core.model.Role
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
+import dev.spindle.core.model.SessionState
 import dev.spindle.core.model.ToolCall
 import dev.spindle.core.model.ToolResult
 import dev.spindle.core.model.ToolState
@@ -138,6 +139,24 @@ class SessionArchiveTest {
         val tool = restored[1].parts.filterIsInstance<Part.Tool>().single()
         assertEquals("--- a\n+++ b", tool.result?.diff)
         assertEquals(longOutput, tool.result?.output)
+    }
+
+    @Test
+    fun `import normalizes a running state to idle`() {
+        val session = Session(
+            id = SessionId("ses_running"),
+            cwd = "/work",
+            createdAt = 1L,
+            updatedAt = 2L,
+            state = SessionState.RUNNING,
+        )
+        val restored = SessionArchive.decode(SessionArchive.encode(session, emptyList())).single().session
+        assertEquals(SessionState.IDLE, restored.state)
+
+        val errored = SessionArchive.decode(
+            SessionArchive.encode(session.copy(state = SessionState.ERROR), emptyList()),
+        ).single().session
+        assertEquals(SessionState.ERROR, errored.state)
     }
 
     @Test

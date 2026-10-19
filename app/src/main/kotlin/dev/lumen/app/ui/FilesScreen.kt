@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -33,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,7 +42,10 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -51,6 +56,9 @@ import androidx.compose.ui.unit.sp
 import dev.lumen.app.EditorState
 import dev.lumen.app.FileEntry
 import dev.lumen.app.FilesState
+import java.io.File
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 
 private val Mono = FontFamily.Monospace
 
@@ -80,8 +88,11 @@ fun FilesScreen(
     /** Open an `.html`/`.htm` file in the sandboxed canvas. */
     onOpenCanvas: (String) -> Unit = {},
     modifier: Modifier = Modifier,
+    onDraftChange: (String) -> Unit = {},
 ) {
     val dir = files?.dir.orEmpty()
+    val context = LocalContext.current
+    val spillRoot = remember(context) { File(context.filesDir, "workspace/.spindle/truncated") }
 
     var newKind by remember { mutableStateOf<NewKind?>(null) }
     var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
@@ -96,7 +107,14 @@ fun FilesScreen(
                 colors = colors,
                 editor = openEditor,
                 onCancel = onCloseEditor,
-                onSave = { content -> pendingSave = openEditor.path to content },
+                onSave = { content, hadContents ->
+                    if (hadContents) {
+                        pendingSave = openEditor.path to content
+                    } else {
+                        onSaveFile(openEditor.path, content)
+                    }
+                },
+                onDraftChange = onDraftChange,
             )
         }
     } else {
@@ -150,6 +168,15 @@ fun FilesScreen(
                                 tag = "files-empty",
                             )
                         } else {
+                            val spillCount = remember(listing.dir, listing.entries) {
+                                if (listing.dir.isEmpty()) {
+                                    runCatching {
+                                        spillRoot.listFiles()?.count { it.isFile } ?: 0
+                                    }.getOrDefault(0)
+                                } else {
+                                    0
+                                }
+                            }
                             LazyColumn(
                                 Modifier
                                     .fillMaxWidth()
@@ -161,7 +188,7 @@ fun FilesScreen(
                                     item(key = "__error") {
                                         Text(
                                             listingError,
-                                            color = LumenAlert,
+                                            color = alertOn(colors),
                                             fontFamily = Mono,
                                             fontSize = LumenType.caption,
                                             modifier = Modifier
@@ -173,13 +200,30 @@ fun FilesScreen(
                                 if (listing.truncated) {
                                     item(key = "__truncated") {
                                         Text(
-                                            "\u2026 workspace scan truncated; some files may be hidden",
-                                            color = colors.faint,
+                                            "\u2026 showing the first ${listing.entries.size} entries \u2014 workspace has more",
+                                            color = colors.dim,
                                             fontFamily = Mono,
                                             fontSize = LumenType.caption,
                                             modifier = Modifier
                                                 .padding(horizontal = 6.dp, vertical = 4.dp)
                                                 .testTag("files-truncated"),
+                                        )
+                                    }
+                                }
+                                if (spillCount > 0) {
+                                    item(key = "__spill") {
+                                        Text(
+                                            "\u2026 $spillCount saved output ${if (spillCount == 1) "file" else "files"} \u00b7 .spindle/truncated",
+                                            color = colors.dim,
+                                            fontFamily = Mono,
+                                            fontSize = LumenType.caption,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(min = 40.dp)
+                                                .clip(LumenShapes.small)
+                                                .clickable { onOpenDir(".spindle/truncated") }
+                                                .padding(horizontal = 6.dp, vertical = 10.dp)
+                                                .testTag("files-spill"),
                                         )
                                     }
                                 }
@@ -280,6 +324,7 @@ private fun Breadcrumb(colors: LumenColors, dir: String, onOpenDir: (String) -> 
             fontFamily = Mono,
             fontSize = LumenType.body,
             modifier = Modifier
+                .heightIn(min = 40.dp)
                 .clip(LumenShapes.glyph)
                 .clickable { onOpenDir("") }
                 .padding(horizontal = 5.dp, vertical = 4.dp)
@@ -304,6 +349,7 @@ private fun Breadcrumb(colors: LumenColors, dir: String, onOpenDir: (String) -> 
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
+                    .heightIn(min = 40.dp)
                     .clip(LumenShapes.glyph)
                     .clickable { onOpenDir(target) }
                     .padding(horizontal = 5.dp, vertical = 4.dp)
@@ -356,7 +402,7 @@ private fun EntryRow(
             Spacer(Modifier.width(8.dp))
             Text(
                 humanSize(entry.size),
-                color = colors.faint,
+                color = colors.dim,
                 fontFamily = Mono,
                 fontSize = LumenType.micro,
             )
@@ -369,6 +415,7 @@ private fun EntryRow(
                     fontSize = LumenType.micro,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier
+                        .heightIn(min = 40.dp)
                         .clip(LumenShapes.small)
                         .background(colors.surface)
                         .border(1.dp, colors.outline, LumenShapes.small)
@@ -381,7 +428,8 @@ private fun EntryRow(
         Box {
             Box(
                 modifier = Modifier
-                    .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
+                    .sizeIn(minWidth = 40.dp, minHeight = 40.dp)
+                    .semantics { contentDescription = "file actions" }
                     .clip(LumenShapes.small)
                     .clickable { menu = true }
                     .padding(horizontal = 8.dp)
@@ -390,7 +438,7 @@ private fun EntryRow(
             ) {
                 Text(
                     "\u22ef",
-                    color = colors.faint,
+                    color = colors.dim,
                     fontFamily = Mono,
                     fontSize = 16.sp,
                 )
@@ -416,7 +464,7 @@ private fun EntryRow(
                     text = {
                         Text(
                             "Delete",
-                            color = LumenAlert,
+                            color = alertOn(colors),
                             fontFamily = Mono,
                             fontSize = LumenType.body,
                         )
@@ -439,33 +487,54 @@ private fun EditorOverlay(
     colors: LumenColors,
     editor: EditorState,
     onCancel: () -> Unit,
-    onSave: (String) -> Unit,
+    onSave: (String, Boolean) -> Unit,
+    onDraftChange: (String) -> Unit,
 ) {
-    val failed = editor.error != null
-    // Key on the CONTENT revision, not just the path, so re-reading the same path
-    // refreshes the draft. A dirty (unsaved) draft is protected: we keep the
-    // user's edits rather than clobbering them with a background re-read.
+    val binary = editor.readOnly
+    val failed = editor.error != null && !binary
     val revision = remember(editor.path, editor.lines, editor.truncated) {
         editor.path + "\u0000" + editor.truncated + "\u0000" + editor.lines.hashCode()
     }
-    var dirty by remember(editor.path) { mutableStateOf(false) }
-    var draft by remember(editor.path) { mutableStateOf(editor.lines.joinToString("\n")) }
+    val source = editor.draft ?: editor.lines.joinToString("\n")
+    var localDraft by remember(editor.path) { mutableStateOf<String?>(null) }
+    var localDirty by remember(editor.path) { mutableStateOf(false) }
+    var baseline by remember(revision) { mutableStateOf(source) }
+    var lastDraft by remember(editor.path) { mutableStateOf(editor.draft) }
+    var wasDirty by remember(editor.path) { mutableStateOf(editor.dirty) }
+    val draft = localDraft ?: source
+    val dirty = editor.dirty || localDirty || draft != baseline
+
     LaunchedEffect(revision) {
-        if (!dirty) draft = editor.lines.joinToString("\n")
+        if (!editor.dirty && !localDirty) {
+            localDraft = null
+            localDirty = false
+            baseline = editor.draft ?: editor.lines.joinToString("\n")
+        }
+    }
+    LaunchedEffect(editor.draft, editor.dirty) {
+        val external = editor.draft
+        val justCleared = external == null && lastDraft != null && localDirty
+        val saved = (wasDirty && !editor.dirty) || justCleared
+        if (external != null) lastDraft = external
+        wasDirty = editor.dirty
+        if (saved) {
+            val content = localDraft ?: lastDraft ?: editor.lines.joinToString("\n")
+            localDraft = content
+            localDirty = false
+            baseline = content
+        }
     }
 
-    // The highlighted (agent-edited) line band. Purely visual: the field keeps
-    // its own scroll state, and the band is drawn in content coordinates so it
-    // travels with the text instead of floating over it.
     val scroll = rememberScrollState()
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     val highlight = editor.highlight
+    var scrolledFor by remember(editor.path) { mutableStateOf<IntRange?>(null) }
 
-    // Bring the first edited line into view whenever the target changes or the
-    // text is (re)measured. Purely a convenience; it never mutates the draft.
-    LaunchedEffect(highlight, layout) {
+    LaunchedEffect(highlight) {
         val h = highlight ?: return@LaunchedEffect
-        val l = layout ?: return@LaunchedEffect
+        if (scrolledFor == h) return@LaunchedEffect
+        val l = snapshotFlow { layout }.filterNotNull().first()
+        scrolledFor = h
         if (l.lineCount == 0) return@LaunchedEffect
         val line = (h.first - 1).coerceIn(0, l.lineCount - 1)
         scroll.scrollTo(l.getLineTop(line).toInt())
@@ -479,12 +548,16 @@ private fun EditorOverlay(
             titleSize = 13.sp,
             actions = {
                 LumenBarAction(colors, "Cancel", "editor-cancel", onCancel)
-                val canSave = !editor.truncated && !failed
+                val canSave = !binary && !editor.truncated && !failed && dirty
                 LumenBarAction(
                     colors = colors,
-                    label = if (editor.truncated) "Truncated" else "Save",
+                    label = when {
+                        binary -> "Read only"
+                        editor.truncated -> "Truncated"
+                        else -> "Save"
+                    },
                     tag = "editor-save",
-                    onClick = { onSave(draft) },
+                    onClick = { onSave(draft, baseline.isNotEmpty()) },
                     primary = true,
                     enabled = canSave,
                 )
@@ -515,17 +588,29 @@ private fun EditorOverlay(
         if (failed) {
             Text(
                 editor.error.orEmpty(),
-                color = LumenAlert,
+                color = alertOn(colors),
                 fontFamily = Mono,
                 fontSize = LumenType.body,
                 modifier = Modifier.padding(horizontal = LumenSpacing.page, vertical = 10.dp),
             )
             return@Column
         }
+        if (binary) {
+            Text(
+                "binary file \u00b7 read only",
+                color = colors.dim,
+                fontFamily = Mono,
+                fontSize = LumenType.micro,
+                letterSpacing = 0.4.sp,
+                modifier = Modifier
+                    .padding(start = LumenSpacing.page, end = LumenSpacing.page, bottom = 6.dp)
+                    .testTag("editor-binary"),
+            )
+        }
         if (editor.truncated) {
             Text(
                 "File is too long to edit safely \u2014 saving is off",
-                color = colors.faint,
+                color = colors.dim,
                 fontFamily = Mono,
                 fontSize = LumenType.micro,
                 letterSpacing = 0.4.sp,
@@ -544,9 +629,11 @@ private fun EditorOverlay(
             BasicTextField(
                 value = draft,
                 onValueChange = {
-                    draft = it
-                    dirty = true
+                    localDraft = it
+                    localDirty = true
+                    onDraftChange(it)
                 },
+                readOnly = editor.readOnly,
                 textStyle = LocalTextStyle.current.copy(
                     color = colors.fg,
                     fontFamily = Mono,
@@ -662,7 +749,7 @@ private fun ConfirmDialog(
         confirmButton = {
             Text(
                 confirm,
-                color = if (destructive) LumenAlert else colors.accent,
+                color = if (destructive) alertOn(colors) else colors.accent,
                 fontFamily = Mono,
                 fontSize = LumenType.body,
                 fontWeight = FontWeight.Medium,
@@ -708,7 +795,7 @@ private fun ColumnScope.CenteredHint(
             text = text,
             detail = detail,
             tag = tag,
-            tint = if (error) LumenAlert else colors.water,
+            tint = if (error) alertOn(colors) else colors.water,
         )
     }
 }

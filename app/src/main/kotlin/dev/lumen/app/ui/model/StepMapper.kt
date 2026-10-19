@@ -22,18 +22,43 @@ object StepMapper {
 
     fun fromMessages(messages: List<Message>): List<UiStep> {
         val out = ArrayList<UiStep>()
-        for (m in messages) {
+        var i = 0
+        while (i < messages.size) {
+            val m = messages[i]
             when (m.role) {
                 Role.USER -> {
-                    val text = m.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }.trim()
-                    val images = m.parts.filterIsInstance<Part.File>().map { f ->
+                    var text = m.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }.trim()
+                    var images = m.parts.filterIsInstance<Part.File>().map { f ->
                         UiImage(name = f.path, mime = f.mime ?: "image/*", base64 = f.dataBase64.orEmpty())
+                    }
+                    var id = m.id.value
+                    var summary = if (text.isNotBlank()) {
+                        oneLine(text)
+                    } else if (images.isNotEmpty()) {
+                        oneLine(images.first().name)
+                    } else {
+                        ""
+                    }
+                    if (text.isBlank() && images.isNotEmpty()) {
+                        val next = messages.getOrNull(i + 1)
+                        if (next != null && next.role == Role.USER) {
+                            val nextText = next.parts.filterIsInstance<Part.Text>()
+                                .joinToString("") { it.text }.trim()
+                            if (nextText.isNotBlank()) {
+                                text = nextText
+                                images = images + next.parts.filterIsInstance<Part.File>().map { f ->
+                                    UiImage(name = f.path, mime = f.mime ?: "image/*", base64 = f.dataBase64.orEmpty())
+                                }
+                                id = next.id.value
+                                summary = oneLine(text)
+                                i++
+                            }
+                        }
                     }
                     if (text.isNotBlank() || images.isNotEmpty()) {
                         out += UiStep(
-                            id = m.id.value, kind = StepKind.YOU, label = "YOU", tag = tag(m.id.value),
-                            summary = if (text.isNotBlank()) oneLine(text) else oneLine(images.first().name),
-                            body = text, images = images, messageId = m.id.value,
+                            id = id, kind = StepKind.YOU, label = "YOU", tag = tag(id),
+                            summary = summary, body = text, images = images, messageId = id,
                         )
                     }
                 }
@@ -45,6 +70,7 @@ object StepMapper {
                                 out += UiStep(
                                     id = p.id.value, kind = StepKind.THINKING, label = "THINKING", tag = tag(p.id.value),
                                     summary = oneLine(p.text), body = p.text.trim(), messageId = m.id.value,
+                                    agent = m.agent,
                                 )
                             }
                             is Part.Text -> {
@@ -52,6 +78,7 @@ object StepMapper {
                                 out += UiStep(
                                     id = p.id.value, kind = StepKind.ASSISTANT, label = "ASSISTANT", tag = tag(p.id.value),
                                     summary = oneLine(p.text), body = p.text.trim(), messageId = m.id.value,
+                                    agent = m.agent,
                                 )
                             }
                             is Part.Tool -> {
@@ -84,8 +111,14 @@ object StepMapper {
                                     running = p.state == ToolState.RUNNING || p.state == ToolState.PENDING,
                                     failed = p.state == ToolState.ERROR,
                                     childId = if (isSub) p.result?.metadata?.get("sessionId") else null,
+                                    childIds = if (isSub) {
+                                        listOfNotNull(p.result?.metadata?.get("sessionId")).distinct()
+                                    } else {
+                                        emptyList()
+                                    },
                                     toolMetadata = p.result?.metadata.orEmpty(),
                                     messageId = m.id.value,
+                                    agent = m.agent,
                                 )
                             }
                             else -> Unit
@@ -94,6 +127,7 @@ object StepMapper {
                 }
                 else -> Unit
             }
+            i++
         }
         return mergeAdjacent(out)
     }
@@ -107,7 +141,7 @@ object StepMapper {
         val res = ArrayList<UiStep>(steps.size)
         for (s in steps) {
             val last = res.lastOrNull()
-            if (last != null && isMergeable(last.kind) && isMergeable(s.kind)) {
+            if (last != null && isMergeable(last.kind) && isMergeable(s.kind) && !last.failed && !s.failed) {
                 res[res.size - 1] = merge(last, s)
             } else {
                 res += s
@@ -217,6 +251,8 @@ object StepMapper {
             rows = a.rows + b.rows,
             toolNames = a.toolNames + b.toolNames,
             toolMetadata = a.toolMetadata + b.toolMetadata,
+            childId = a.childId ?: b.childId,
+            childIds = (a.childIds + b.childIds + listOfNotNull(a.childId, b.childId)).distinct(),
             running = a.running || b.running,
             failed = a.failed || b.failed,
         )
@@ -318,6 +354,7 @@ object StepMapper {
                     if (rest.isEmpty()) lines.removeAt(0) else lines[0] = rest
                 }
                 first == "[timeout]" -> lines.removeAt(0)
+                SUBAGENT_HEADER.matches(first) -> lines.removeAt(0)
             }
         }
         while (lines.isNotEmpty()) {
@@ -332,6 +369,8 @@ object StepMapper {
     }
 
     private val EXIT_LINE = Regex("^\\[exit\\s+-?\\d+\\]\\s*(.*)$")
+
+    private val SUBAGENT_HEADER = Regex("^\\[subagent [^\\]]*\\]$")
 
     private val EXIT_IN_TEXT = Regex("\\[exit\\s+(-?\\d+)\\]")
 

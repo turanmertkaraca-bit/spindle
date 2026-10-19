@@ -171,6 +171,11 @@ class GitRunner(
         ensureWorkspace()
         if (!probe().installed) return GitResult.NotInstalled
 
+        val pushUrls = resolvePushUrls()
+        if (pushUrls.isEmpty() || pushUrls.any { !isGitHubHttps(it) }) {
+            return GitResult.Failed(-1, "refusing to push: origin is not GitHub over https")
+        }
+
         // Defined with single quotes around the helper so the outer shell does
         // not expand $GITHUB_TOKEN; git runs it later with the env var set.
         val helper = "!f(){ echo username=x-access-token; echo password=\"\$GITHUB_TOKEN\"; };f"
@@ -270,17 +275,19 @@ class GitRunner(
         ensureWorkspace()
         val cap = maxBytes.coerceIn(1024, MAX_DIFF_BYTES)
         val result = shell.run(
-            "git show --no-color --format= --patch --stat ${quote(hash)} | head -c $cap",
+            "git show --no-color --format= --patch --stat ${quote(hash)}",
             workspace,
             SHORT_TIMEOUT_MS,
         )
-        val text = result.output
-        val body = if (text.length >= cap) text + "\n\u2026 (truncated)" else text
-        return if (result.exitCode == 0) {
-            GitResult.Ok(body)
-        } else {
-            GitResult.Failed(result.exitCode, body.trim().ifBlank { "diff unavailable" })
+        val text = stripCredentials(result.output)
+        if (result.exitCode != 0) {
+            return GitResult.Failed(
+                result.exitCode,
+                text.trim().ifBlank { "diff unavailable" },
+            )
         }
+        val body = if (text.length >= cap) text.take(cap) + "\n\u2026 (truncated)" else text
+        return GitResult.Ok(body)
     }
 
     /** The public web URL for `owner/name`, or null when the slug is invalid. */
@@ -290,6 +297,36 @@ class GitRunner(
     /** First non-empty trimmed line of a result's output, or "". */
     private fun firstLine(result: ShellResult): String =
         result.output.trim().lineSequence().firstOrNull()?.trim().orEmpty()
+
+    private suspend fun resolvePushUrls(): List<String> {
+        val upstream = shell.run(
+            "git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}'",
+            workspace,
+            SHORT_TIMEOUT_MS,
+        )
+        val tracked = if (upstream.exitCode == 0) {
+            firstLine(upstream).substringBefore('/', "").trim()
+        } else {
+            ""
+        }
+        val remote = tracked.takeIf { it.isNotBlank() && it != "." } ?: "origin"
+        val result = shell.run(
+            "git remote get-url --push ${quote(remote)}",
+            workspace,
+            SHORT_TIMEOUT_MS,
+        )
+        if (result.exitCode != 0) return emptyList()
+        return result.output.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .toList()
+    }
+
+    private fun isGitHubHttps(url: String): Boolean {
+        val clean = stripCredentials(url.trim())
+        val match = GITHUB_HTTPS.find(clean) ?: return false
+        return match.groupValues[1].equals("github.com", ignoreCase = true)
+    }
 
     /** Parse the `%x1f`-joined log lines into commits, dropping malformed rows. */
     private fun parseCommits(output: String): List<GitCommit> =
@@ -359,6 +396,8 @@ class GitRunner(
 
         /** A full or abbreviated commit id: 7–40 hex digits, nothing else. */
         private val HASH = Regex("^[0-9a-fA-F]{7,40}$")
+
+        private val GITHUB_HTTPS = Regex("^https://([^/:?#]+)(?::\\d+)?(?:[/?#]|$)", RegexOption.IGNORE_CASE)
 
         private const val PROBE_TIMEOUT_MS = 10_000L
         private const val SHORT_TIMEOUT_MS = 20_000L

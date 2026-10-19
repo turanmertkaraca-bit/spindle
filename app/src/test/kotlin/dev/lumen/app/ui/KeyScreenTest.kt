@@ -4,12 +4,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertContentDescriptionEquals
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
 import org.junit.Rule
 import org.junit.Test
@@ -78,6 +80,8 @@ class KeyScreenTest {
         }
         compose.onNodeWithTag("provider-deepseek").performScrollTo().performClick()
         compose.waitForIdle()
+        compose.onNodeWithTag("continue").assertIsNotEnabled()
+        compose.onNodeWithTag("keyfield").performTextInput("abc")
         compose.onNodeWithTag("continue").performScrollTo().performClick()
         compose.waitForIdle()
         assertEquals("deepseek" to "abc", submitted)

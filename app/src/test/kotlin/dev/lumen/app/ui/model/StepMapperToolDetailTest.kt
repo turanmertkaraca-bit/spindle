@@ -86,6 +86,22 @@ class StepMapperToolDetailTest {
     }
 
     @Test
+    fun `cleanToolOutput drops a leading subagent transport header`() {
+        assertEquals(
+            "the answer",
+            StepMapper.cleanToolOutput("[subagent general · 12 tok · \$0.0042]\nthe answer"),
+        )
+    }
+
+    @Test
+    fun `failureLine skips the subagent transport header`() {
+        assertEquals(
+            "subagent failed: boom",
+            StepMapper.failureLine(emptyMap(), "[subagent general · 12 tok · \$0.0042]\nsubagent failed: boom"),
+        )
+    }
+
+    @Test
     fun `humanMillis formats a short human duration`() {
         assertEquals("450ms", StepMapper.humanMillis(450))
         assertEquals("1s", StepMapper.humanMillis(1000))
@@ -105,6 +121,38 @@ class StepMapperToolDetailTest {
         ),
         createdAt = 0,
     )
+
+    @Test
+    fun `a failed subagent stands alone and reports its own output`() {
+        val rows = StepMapper.fromMessages(
+            listOf(
+                tool("m1", "task", "{}", "[subagent general · 1 tok · \$0.0001]\nfirst answer"),
+                tool(
+                    "m2", "task", "{}", "[subagent general · 2 tok · \$0.0002]\nsecond failure",
+                    state = ToolState.ERROR,
+                ),
+            ),
+        )
+        assertEquals(2, rows.size)
+        assertEquals("first answer", rows[0].body)
+        assertEquals("second failure", rows[1].body)
+        assertEquals("second failure", StepMapper.failureLine(rows[1]))
+    }
+
+    @Test
+    fun `a subagent row carries its child session id and child list`() {
+        val step = StepMapper.fromMessages(
+            listOf(
+                tool(
+                    "m1", "task", "{\"description\":\"inspect\"}", "done",
+                    metadata = mapOf("sessionId" to "child-1"),
+                ),
+            ),
+        ).single()
+        assertEquals(StepKind.SUBAGENT, step.kind)
+        assertEquals("child-1", step.childId)
+        assertEquals(listOf("child-1"), step.childIds)
+    }
 
     @Test
     fun `a pending question tool shows the question, never the raw JSON`() {

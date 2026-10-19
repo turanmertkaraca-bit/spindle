@@ -6,8 +6,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /**
  * Owns at most one [PtySession] for the app's terminal screen. The shell is
@@ -65,9 +67,18 @@ class AndroidTerminal(
         session?.write(line + "\n")
     }
 
-    /** Deliver the interrupt byte (ETX); only a real PTY would honour it. */
+    /** Stop the running command and release its stdin. */
     suspend fun interrupt() {
-        session?.write("\u0003")
+        val live = session ?: return
+        val processId = live.pid
+        if (processId > 0) {
+            signal("INT", processId)
+            delay(120)
+            if (groupAlive(processId)) signal("TERM", processId)
+        }
+        runCatching { live.write("\u0003") }
+        runCatching { live.close() }
+        if (session === live) session = null
     }
 
     /** Stop the shell, draining its output before releasing it. */
@@ -86,4 +97,17 @@ class AndroidTerminal(
         session = null
         runCatching { live?.close() }
     }
+
+    private fun signal(name: String, processId: Int) {
+        runCatching {
+            val killed = Runtime.getRuntime().exec(arrayOf("kill", "-$name", "-$processId"))
+            killed.waitFor(500, TimeUnit.MILLISECONDS)
+        }
+    }
+
+    private fun groupAlive(processId: Int): Boolean = runCatching {
+        val probe = Runtime.getRuntime().exec(arrayOf("kill", "-0", "-$processId"))
+        val done = probe.waitFor(500, TimeUnit.MILLISECONDS)
+        !done || probe.exitValue() == 0
+    }.getOrDefault(false)
 }

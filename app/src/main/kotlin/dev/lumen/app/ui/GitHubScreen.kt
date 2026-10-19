@@ -18,12 +18,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -61,6 +64,7 @@ import dev.lumen.app.platform.GitHubUserStatus
 import dev.lumen.app.platform.GitProbe
 import dev.lumen.app.platform.GitResult
 import dev.lumen.app.platform.GitRunner
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private val Mono = FontFamily.Monospace
@@ -69,6 +73,8 @@ private const val GITHUB_URL_HINT = "owner/name"
 
 /** Prefilled commit summary; the user can edit it in the confirm dialog. */
 private const val DEFAULT_COMMIT_MESSAGE = "lumen: update from agent"
+
+private const val OPERATION_FEEDBACK_MS = 1_200L
 
 /**
  * The GitHub integration screen. Self-contained: it reads and writes its own
@@ -94,6 +100,10 @@ fun GitHubScreen(
     onCommit: (String) -> Unit = {},
     /** Invoked when the user confirms a non-force push; the host wires this to the ViewModel. */
     onPush: () -> Unit = {},
+    onCommitResult: (suspend (String) -> GitResult?)? = null,
+    onPushResult: (suspend () -> GitResult?)? = null,
+    onClearLogin: (() -> Unit)? = null,
+    onLoginChanged: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val keys = remember(context) { KeyStore(context) }
@@ -105,21 +115,49 @@ fun GitHubScreen(
     // The token is a secret: keep it out of rememberSaveable (whose Bundle can
     // be persisted to disk). `remember` rehydrates from the KeyStore instead.
     var token by remember { mutableStateOf(keys.githubToken.orEmpty()) }
+    var savedToken by remember { mutableStateOf(token) }
     var visible by rememberSaveable { mutableStateOf(false) }
     var repo by rememberSaveable { mutableStateOf(keys.githubRepo) }
     var login by rememberSaveable { mutableStateOf(keys.githubLogin) }
     var status by remember { mutableStateOf<String?>(null) }
     var statusIsError by remember { mutableStateOf(false) }
-    var busy by remember { mutableStateOf(false) }
+    var operation by remember { mutableStateOf<String?>(null) }
+    var checkingToken by remember { mutableStateOf(false) }
+    var checkingGit by remember { mutableStateOf(false) }
+    var installingGit by remember { mutableStateOf(false) }
     var gitProbe by remember { mutableStateOf<GitProbe?>(null) }
     var showCommit by remember { mutableStateOf(false) }
     var showPush by remember { mutableStateOf(false) }
 
-    val connected = token.isNotBlank() || login.isNotBlank()
+    val busy = operation != null || checkingToken || checkingGit || installingGit
+    val tokenUnsaved = token.trim() != savedToken.trim()
+    val connected = login.isNotBlank()
+    val tokenSaved = savedToken.isNotBlank() && !tokenUnsaved
+    val pushReady = connected && tokenSaved
 
     fun report(message: String, isError: Boolean) {
         status = message
         statusIsError = isError
+    }
+
+    fun applyLogin(value: String) {
+        val wasConnected = login.isNotBlank()
+        login = value
+        keys.githubLogin = value
+        if (value.isBlank() && wasConnected) onClearLogin?.invoke()
+        onLoginChanged(value)
+    }
+
+    fun finishOperation() {
+        operation = null
+    }
+
+    fun reportOutcome(result: GitResult) {
+        when (result) {
+            is GitResult.Ok -> report(result.output.trim().ifBlank { "Done" }, false)
+            is GitResult.Failed -> report(result.message, true)
+            GitResult.NotInstalled -> report("Git is not installed", true)
+        }
     }
 
     Column(
@@ -181,7 +219,8 @@ fun GitHubScreen(
                 modifier = Modifier
                     .weight(1f)
                     .padding(vertical = 14.dp)
-                    .testTag("github-token"),
+                    .testTag("github-token")
+                    .semantics { contentDescription = "GitHub token" },
                 decorationBox = { inner ->
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
                         if (token.isEmpty()) {
@@ -218,39 +257,67 @@ fun GitHubScreen(
         Spacer(Modifier.height(LumenSpacing.md))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             ActionPill(colors = colors, label = "Save", tag = "github-save", enabled = !busy) {
-                keys.githubToken = token.trim().takeIf { it.isNotBlank() }
+                val trimmed = token.trim()
+                val changed = trimmed != savedToken.trim()
+                keys.githubToken = trimmed.takeIf { it.isNotBlank() }
                 keys.githubRepo = repo.trim()
-                report(if (token.isBlank()) "Token cleared" else "Saved on this device", false)
+                token = trimmed
+                savedToken = trimmed
+                if (trimmed.isBlank()) {
+                    applyLogin("")
+                    report("Token cleared", false)
+                } else {
+                    if (changed) {
+                        applyLogin("")
+                    } else {
+                        applyLogin(keys.githubLogin)
+                    }
+                    report("Saved on this device", false)
+                }
             }
             Spacer(Modifier.width(LumenSpacing.sm))
             ActionPill(
                 colors,
-                if (busy) "Working\u2026" else "Test connection",
+                if (checkingToken) "Testing\u2026" else "Test connection",
                 "github-test",
                 enabled = !busy && token.isNotBlank(),
+                busy = checkingToken,
             ) {
                 scope.launch {
-                    busy = true
+                    checkingToken = true
                     report("Checking token\u2026", false)
                     when (val result = client.user(token.trim())) {
                         is GitHubUserStatus.Valid -> {
-                            login = result.login
-                            keys.githubToken = token.trim()
-                            keys.githubLogin = result.login
+                            val trimmed = token.trim()
+                            keys.githubToken = trimmed
+                            token = trimmed
+                            savedToken = trimmed
+                            applyLogin(result.login)
                             report("Connected as ${result.login}", false)
                         }
-                        GitHubUserStatus.Invalid -> report("Token rejected (401)", true)
-                        GitHubUserStatus.NoPermission -> report("Token lacks permission (403)", true)
+                        GitHubUserStatus.Invalid -> {
+                            applyLogin("")
+                            report("Token rejected (401)", true)
+                        }
+                        GitHubUserStatus.NoPermission -> {
+                            applyLogin("")
+                            report("Token lacks permission (403)", true)
+                        }
                         GitHubUserStatus.Unreachable -> report("Could not reach GitHub", true)
                     }
-                    busy = false
+                    checkingToken = false
                 }
             }
         }
 
-        status?.let { message ->
+        val visibleStatus = when {
+            tokenUnsaved && status == null -> "Save the token first"
+            tokenUnsaved -> "$status \u00b7 Save the token first"
+            else -> status
+        }
+        visibleStatus?.let { message ->
             Spacer(Modifier.height(LumenSpacing.md))
-            StatusLine(colors, message, statusIsError)
+            StatusLine(colors, message, statusIsError && !tokenUnsaved)
         }
 
         Spacer(Modifier.height(LumenSpacing.xxl))
@@ -277,18 +344,30 @@ fun GitHubScreen(
                 },
             )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                ActionPill(colors, "Check git", "github-git-check", enabled = !busy) {
+                ActionPill(
+                    colors,
+                    if (checkingGit) "Checking\u2026" else "Check git",
+                    "github-git-check",
+                    enabled = !busy,
+                    busy = checkingGit,
+                ) {
                     scope.launch {
-                        busy = true
+                        checkingGit = true
                         gitProbe = git.probe()
-                        busy = false
+                        checkingGit = false
                     }
                 }
                 if (gitProbe?.installed == false) {
                     Spacer(Modifier.width(LumenSpacing.sm))
-                    ActionPill(colors, "Install git", "github-git-install", enabled = !busy) {
+                    ActionPill(
+                        colors,
+                        if (installingGit) "Installing\u2026" else "Install git",
+                        "github-git-install",
+                        enabled = !busy,
+                        busy = installingGit,
+                    ) {
                         scope.launch {
-                            busy = true
+                            installingGit = true
                             report("Installing git\u2026", false)
                             when (val r = git.installGit()) {
                                 is GitResult.Ok -> report("Git installed", false)
@@ -296,7 +375,7 @@ fun GitHubScreen(
                                 GitResult.NotInstalled -> report("Git is not installed", true)
                             }
                             gitProbe = git.probe()
-                            busy = false
+                            installingGit = false
                         }
                     }
                 }
@@ -338,7 +417,10 @@ fun GitHubScreen(
                     capitalization = KeyboardCapitalization.None,
                     imeAction = ImeAction.Done,
                 ),
-                modifier = Modifier.fillMaxWidth().testTag("github-repo"),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("github-repo")
+                    .semantics { contentDescription = "Repository owner/name" },
             )
         }
 
@@ -352,18 +434,19 @@ fun GitHubScreen(
         ) {
             ActionPill(
                 colors,
-                "Clone",
+                if (operation == "clone") "Cloning\u2026" else "Clone",
                 "github-clone",
-                enabled = !busy && token.isNotBlank() && repo.isNotBlank(),
+                enabled = !busy && pushReady && repo.isNotBlank(),
+                busy = operation == "clone",
             ) {
                 val slug = repo.trim()
                 if (slug.isBlank()) {
                     report("Enter a repo as $GITHUB_URL_HINT", true)
                 } else {
                     scope.launch {
-                        busy = true
+                        operation = "clone"
                         report("Cloning\u2026", false)
-                        val result = git.clone(slug, slug.substringAfter('/'), token.trim())
+                        val result = git.clone(slug, slug.substringAfter('/'), savedToken.trim())
                         report(
                             when (result) {
                                 is GitResult.Ok -> result.output
@@ -372,13 +455,19 @@ fun GitHubScreen(
                             },
                             result is GitResult.Failed || result == GitResult.NotInstalled,
                         )
-                        busy = false
+                        finishOperation()
                     }
                 }
             }
-            ActionPill(colors, "Status", "github-status", enabled = !busy) {
+            ActionPill(
+                colors,
+                "Status",
+                "github-status",
+                enabled = !busy,
+                busy = operation == "status",
+            ) {
                 scope.launch {
-                    busy = true
+                    operation = "status"
                     report(
                         when (val r = git.status()) {
                             is GitResult.Ok -> r.output
@@ -387,7 +476,7 @@ fun GitHubScreen(
                         },
                         false,
                     )
-                    busy = false
+                    finishOperation()
                 }
             }
             ActionPill(colors, "Open on GitHub", "github-open", enabled = repo.isNotBlank()) {
@@ -400,15 +489,17 @@ fun GitHubScreen(
             }
             ActionPill(
                 colors,
-                "Commit",
+                if (operation == "commit") "Committing\u2026" else "Commit",
                 "git-commit",
-                enabled = !busy && token.isNotBlank() && repo.isNotBlank(),
+                enabled = !busy && tokenSaved && repo.isNotBlank(),
+                busy = operation == "commit",
             ) { showCommit = true }
             ActionPill(
                 colors,
-                "Push",
+                if (operation == "push") "Pushing\u2026" else "Push",
                 "git-push",
-                enabled = !busy && token.isNotBlank() && repo.isNotBlank(),
+                enabled = !busy && pushReady && repo.isNotBlank(),
+                busy = operation == "push",
             ) { showPush = true }
         }
 
@@ -439,7 +530,22 @@ fun GitHubScreen(
             onDismiss = { showCommit = false },
             onConfirm = { message ->
                 showCommit = false
-                onCommit(message)
+                if (operation == null) {
+                    scope.launch {
+                        operation = "commit"
+                        report("Committing\u2026", false)
+                        val result = onCommitResult?.invoke(message)
+                        if (result != null) {
+                            reportOutcome(result)
+                            finishOperation()
+                        } else {
+                            onCommit(message)
+                            report("Requested", false)
+                            delay(OPERATION_FEEDBACK_MS)
+                            finishOperation()
+                        }
+                    }
+                }
             },
         )
     }
@@ -450,7 +556,22 @@ fun GitHubScreen(
             onDismiss = { showPush = false },
             onConfirm = {
                 showPush = false
-                onPush()
+                if (operation == null) {
+                    scope.launch {
+                        operation = "push"
+                        report("Pushing\u2026", false)
+                        val result = onPushResult?.invoke()
+                        if (result != null) {
+                            reportOutcome(result)
+                            finishOperation()
+                        } else {
+                            onPush()
+                            report("Requested", false)
+                            delay(OPERATION_FEEDBACK_MS)
+                            finishOperation()
+                        }
+                    }
+                }
             },
         )
     }
@@ -670,7 +791,13 @@ private fun ActivitySection(
                 verticalArrangement = Arrangement.spacedBy(LumenSpacing.sm),
             ) {
                 StatusRow(colors, "branch", current.branch.ifBlank { "detached" })
-                StatusRow(colors, "remote", current.remote.ifBlank { "none" })
+                StatusRow(
+                    colors,
+                    "remote",
+                    current.remote.ifBlank { "none" },
+                    valueMaxLines = 2,
+                    selectable = true,
+                )
                 StatusRow(
                     colors,
                     "working",
@@ -742,7 +869,10 @@ private fun CommitRow(
                 color = colors.accent,
                 fontFamily = Mono,
                 fontSize = LumenType.body,
-                modifier = Modifier.width(64.dp),
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(min = 64.dp, max = 72.dp),
             )
             Column(Modifier.weight(1f)) {
                 Text(
@@ -771,6 +901,7 @@ private fun CommitRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 320.dp)
+                    .verticalScroll(rememberScrollState())
                     .padding(start = 64.dp, top = LumenSpacing.xs)
                     .testTag("github-diff"),
             )
@@ -798,30 +929,49 @@ private fun ActionPill(
     label: String,
     tag: String,
     enabled: Boolean,
+    busy: Boolean = false,
     onClick: () -> Unit,
 ) {
     Box(
         modifier = Modifier
+            .heightIn(min = LumenSize.touchMin)
             .clip(LumenShapes.pill)
             .background(colors.surface)
             .border(1.dp, colors.outline, LumenShapes.pill)
             .clickable(enabled = enabled) { onClick() }
             .padding(horizontal = LumenSpacing.lg, vertical = 10.dp)
             .testTag(tag),
+        contentAlignment = Alignment.Center,
     ) {
-        Text(
-            label,
-            color = if (enabled) colors.dim else colors.faint,
-            fontFamily = Mono,
-            fontSize = LumenType.body,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (busy) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(11.dp),
+                    color = if (enabled) colors.dim else colors.faint,
+                    strokeWidth = 1.4.dp,
+                )
+                Spacer(Modifier.width(5.dp))
+            }
+            Text(
+                label,
+                color = if (enabled) colors.dim else colors.faint,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+        }
     }
 }
 
 @Composable
-private fun StatusRow(colors: LumenColors, label: String, value: String) {
+private fun StatusRow(
+    colors: LumenColors,
+    label: String,
+    value: String,
+    valueMaxLines: Int = 1,
+    selectable: Boolean = false,
+) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
             label,
@@ -829,16 +979,35 @@ private fun StatusRow(colors: LumenColors, label: String, value: String) {
             fontFamily = Mono,
             fontSize = LumenType.caption,
             letterSpacing = 1.sp,
-            modifier = Modifier.width(84.dp),
-        )
-        Text(
-            value,
-            color = colors.fg,
-            fontFamily = Mono,
-            fontSize = LumenType.bodyLarge,
             maxLines = 1,
+            softWrap = false,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(min = 84.dp),
         )
+        if (selectable) {
+            SelectionContainer(Modifier.weight(1f)) {
+                Text(
+                    value,
+                    color = colors.fg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.bodyLarge,
+                    maxLines = valueMaxLines,
+                    softWrap = valueMaxLines > 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        } else {
+            Text(
+                value,
+                color = colors.fg,
+                fontFamily = Mono,
+                fontSize = LumenType.bodyLarge,
+                maxLines = valueMaxLines,
+                softWrap = valueMaxLines > 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 

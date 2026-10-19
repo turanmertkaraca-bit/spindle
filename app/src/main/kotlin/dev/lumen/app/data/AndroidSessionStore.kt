@@ -327,7 +327,7 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
         val now = System.currentTimeMillis()
         val fork = source.copy(
             id = newId,
-            parentId = sourceId,
+            parentId = null,
             createdAt = now,
             updatedAt = now,
             archived = false,

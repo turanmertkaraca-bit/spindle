@@ -237,6 +237,8 @@ class OpenAiProvider(
                         providerId = id,
                         id = mid,
                         label = mid,
+                        contextWindow = 0,
+                        maxOutputTokens = 0,
                         supportsReasoning = supportsReasoning(mid),
                     )
                     enrichModel(base, o)

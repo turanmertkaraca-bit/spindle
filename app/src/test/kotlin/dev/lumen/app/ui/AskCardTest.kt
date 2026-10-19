@@ -3,6 +3,8 @@ package dev.lumen.app.ui
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -87,5 +89,25 @@ class AskCardTest {
         compose.onNodeWithTag("ask-answer").performClick()
         compose.waitForIdle()
         assertEquals(setOf("a", "b"), answered?.toSet())
+    }
+
+    @Test
+    fun `answer is disabled until an option is staged`() {
+        var answered: List<String>? = null
+        compose.setContent {
+            LumenChatScreen(
+                emptyList(), input = "", busy = true, error = null,
+                modifier = viewport, ambient = false,
+                ask = PendingAsk.Question("q3", "pick one", listOf("debug", "release"), multiple = false),
+                onAnswerQuestion = { answered = it },
+            )
+        }
+        compose.onNodeWithTag("ask-answer").assertIsNotEnabled()
+        compose.onNodeWithTag("ask-answer").performClick()
+        compose.waitForIdle()
+        assertNull(answered, "an unstaged answer must not be sent")
+        compose.onNodeWithTag("ask-option-0").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("ask-answer").assertIsEnabled()
     }
 }

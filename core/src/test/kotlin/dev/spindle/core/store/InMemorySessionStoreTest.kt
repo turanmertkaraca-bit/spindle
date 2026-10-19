@@ -58,7 +58,8 @@ class InMemorySessionStoreTest {
 
         val fork = store.forkSession(SessionId("s1"), MessageId("m2"), SessionId("s2"))
         assertEquals(SessionId("s2"), fork?.id)
-        assertEquals(SessionId("s1"), fork?.parentId)
+        assertNull(fork?.parentId)
+        assertTrue(store.sessions(limit = 100).any { it.id == SessionId("s2") })
 
         val copied = store.messages(SessionId("s2"))
         assertEquals(listOf("text m1", "text m2"), copied.map { (it.parts.first() as Part.Text).text })
@@ -69,7 +70,7 @@ class InMemorySessionStoreTest {
 
         val whole = store.forkSession(SessionId("s1"), null, SessionId("s3"))
         assertEquals(3, store.messages(SessionId("s3")).size)
-        assertEquals(SessionId("s1"), whole?.parentId)
+        assertNull(whole?.parentId)
 
         assertNull(store.forkSession(SessionId("missing"), null, SessionId("s4")))
         assertNull(store.forkSession(SessionId("s1"), MessageId("nope"), SessionId("s5")))

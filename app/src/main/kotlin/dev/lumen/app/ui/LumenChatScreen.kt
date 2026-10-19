@@ -28,6 +28,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.FlingBehavior
 import androidx.compose.foundation.gestures.ScrollScope
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
@@ -37,6 +38,8 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -101,10 +104,16 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -441,30 +450,32 @@ fun LumenChatScreen(
     onQuickSettings: (() -> Unit)? = null,
     /** Dismiss the quick settings sheet (scrim tap or close). */
     onCloseQuickSettings: () -> Unit = {},
-    /** Active provider id, shown as chips in the quick settings sheet. */
+    /** Active provider id. Retained for host compatibility; the sheet omits it. */
     provider: String = "",
-    /** Switch provider from the quick settings sheet. */
+    /** Legacy provider-switch hook. Not exposed by the current quick settings sheet. */
     onProvider: ((String) -> Unit)? = null,
-    /** Active theme: "system" | "light" | "dark". */
+    /** Active theme: "system" | "light" | "dark". Retained for host compatibility. */
     theme: String = "system",
-    /** Switch theme from the quick settings sheet. */
+    /** Legacy theme-switch hook. Not exposed by the current quick settings sheet. */
     onTheme: ((String) -> Unit)? = null,
-    /** Active palette: "prism" | "ember" | "phosphor" | "abyss". */
+    /** Active palette: "prism" | "ember" | "phosphor" | "abyss". Retained for host compatibility. */
     palette: String = "abyss",
-    /** Switch palette from the quick settings sheet. */
+    /** Legacy palette-switch hook. Not exposed by the current quick settings sheet. */
     onPalette: (String) -> Unit = {},
-    /** Whether every tool asks for confirmation first. */
+    /** Whether every tool asks for confirmation first. Retained for host compatibility. */
     askBeforeTools: Boolean = false,
-    /** Toggle ask-before-tools from the quick settings sheet. */
+    /** Legacy ask-before-tools hook. Not exposed by the current quick settings sheet. */
     onAskBeforeTools: ((Boolean) -> Unit)? = null,
-    /** Set the per-session cost ceiling from the quick settings sheet. */
+    /** Legacy cost-ceiling hook. Not exposed by the current quick settings sheet. */
     onMaxCost: ((Double) -> Unit)? = null,
-    /** Auto-compaction threshold percentage (50..95), shown in quick settings. */
+    /** Auto-compaction threshold percentage (50..95). Retained for host compatibility. */
     autoCompactPercent: Int = 80,
-    /** Set the auto-compaction threshold percentage. */
+    /** Legacy auto-compaction threshold hook. Not exposed by the current quick settings sheet. */
     onAutoCompactPercent: ((Int) -> Unit)? = null,
     /** Fold the session's context now; null hides the action. */
     onCompactNow: (() -> Unit)? = null,
+    /** True while a manual compaction is in flight; the shortcut shows a spinner. */
+    compacting: Boolean = false,
     /** Open the full Settings screen from the quick settings footer. */
     onOpenFullSettings: (() -> Unit)? = null,
     /** Select a model ref (`provider/id`) from the quick settings sheet. */
@@ -479,6 +490,7 @@ fun LumenChatScreen(
     pickerModels: List<ModelInfo> = emptyList(),
     /** True while the picker sheet's catalogue refresh is in flight. */
     pickerRefreshing: Boolean = false,
+    modelsError: String? = null,
     /** True while the composer's model catalogue is loading; its chip spins. */
     catalogueLoading: Boolean = false,
     /** Starred model refs, pinned on top of the picker sheet. */
@@ -553,7 +565,21 @@ fun LumenChatScreen(
     // grouped/deduped `display` list; map raw → display by id so a folded row
     // still opens. Fall back to -1 (nothing open) when it cannot be mapped.
     val forceOpenId = remember(forceOpenIndex, steps, display) {
-        forceOpenIndex?.let { steps.getOrNull(it)?.id }
+        val index = forceOpenIndex ?: return@remember null
+        val raw = steps.getOrNull(index) ?: return@remember null
+        var foldedId: String? = null
+        var j = if (raw.kind == StepKind.THINKING) index else index - 1
+        while (j >= 0 && steps[j].kind == StepKind.THINKING) {
+            foldedId = steps[j].id
+            j--
+        }
+        val folded = foldedId
+        display.firstOrNull {
+            it.id == raw.id || (folded != null && it.id == folded) || it.thinkTag == raw.tag
+        }?.id ?: raw.id
+    }
+    val lastAssistantId = remember(display) {
+        display.lastOrNull { it.kind == StepKind.ASSISTANT }?.id
     }
 
     // Follow the tail while streaming, gently. We re-anchor when content actually
@@ -565,13 +591,23 @@ fun LumenChatScreen(
     // to the bottom even though they had scrolled up; the latest cue is driven
     // from followTail (see below).
     var followTail by rememberSaveable { mutableStateOf(true) }
-    LaunchedEffect(listState) {
+    val tailTolerancePx = with(LocalDensity.current) { 4.dp.toPx() }
+    LaunchedEffect(listState, tailTolerancePx) {
         snapshotFlow {
             val info = listState.layoutInfo
-            val lastVisible = info.visibleItemsInfo.lastOrNull()
-            (info.totalItemsCount == 0) || (lastVisible != null && lastVisible.index >= info.totalItemsCount - 2)
-        }.collect {
-            followTail = it
+            if (info.totalItemsCount == 0) return@snapshotFlow true
+            val lastVisible = info.visibleItemsInfo.lastOrNull() ?: return@snapshotFlow true
+            val gap = (info.viewportEndOffset - info.afterContentPadding) -
+                (lastVisible.offset + lastVisible.size)
+            when {
+                !listState.canScrollForward -> true
+                lastVisible.index < info.totalItemsCount - 2 -> false
+                listState.isScrollInProgress -> false
+                abs(gap) <= tailTolerancePx -> true
+                else -> null
+            }
+        }.collect { desired ->
+            if (desired != null) followTail = desired
         }
     }
     LaunchedEffect(count, last?.id, last?.body?.length) {
@@ -620,7 +656,7 @@ fun LumenChatScreen(
     // haptic still fires once per new off-screen step. `cueArmed` skips the first
     // emission so opening a session never buzzes.
     var cueArmed by remember { mutableStateOf(false) }
-    LaunchedEffect(count, last?.id, last?.body?.length) {
+    LaunchedEffect(count, last?.id) {
         if (!cueArmed) {
             cueArmed = true
             return@LaunchedEffect
@@ -715,6 +751,7 @@ fun LumenChatScreen(
                                         fileKind = fileKind,
                                         onRewind = onRewind,
                                         onRegenerate = onRegenerate,
+                                        canRegenerate = step.id == lastAssistantId,
                                         onEdit = onEdit,
                                         onOpenCanvas = onOpenCanvas,
                                         modifier = Modifier
@@ -752,7 +789,16 @@ fun LumenChatScreen(
                                     .padding(bottom = 10.dp),
                             ) {
                                 NewCue(colors) {
-                                    scope.launch { listState.animateScrollToItem((count - 1).coerceAtLeast(0)) }
+                                    scope.launch {
+                                        val target = (count - 1).coerceAtLeast(0)
+                                        listState.animateScrollToItem(target)
+                                        val info = listState.layoutInfo
+                                        val item = info.visibleItemsInfo.lastOrNull { it.index == target }
+                                            ?: return@launch
+                                        val gap = (info.viewportEndOffset - info.afterContentPadding) -
+                                            (item.offset + item.size)
+                                        if (gap < 0) listState.animateScrollBy(-gap.toFloat())
+                                    }
                                 }
                             }
                         }
@@ -816,13 +862,16 @@ fun LumenChatScreen(
             colors = colors,
             visible = quickSettings,
             model = model,
-            onOpenModel = {
-                onCloseQuickSettings()
-                onOpenModels?.invoke()
+            onOpenModel = onOpenModels?.let { open ->
+                {
+                    onCloseQuickSettings()
+                    open()
+                }
             },
             agentMode = agentMode,
             onAgentMode = onAgentMode,
             onCompactNow = onCompactNow,
+            compacting = compacting,
             busy = busy,
             onEditKey = onEditKey,
             onOpenFullSettings = onOpenFullSettings,
@@ -838,6 +887,7 @@ fun LumenChatScreen(
             favorites = favoriteModels,
             recents = recentModels,
             refreshing = pickerRefreshing,
+            modelsError = modelsError,
             onSelect = { ref ->
                 onModelSelect?.invoke(ref)
                 onCloseModelPicker()
@@ -962,6 +1012,7 @@ private fun MessageRow(
     fileKind: ((String) -> FileKind?)? = null,
     onRewind: (String) -> Unit = {},
     onRegenerate: () -> Unit = {},
+    canRegenerate: Boolean = false,
     onOpenCanvas: (String) -> Unit = {},
     onEdit: (String) -> Unit = {},
     modifier: Modifier = Modifier,
@@ -1010,22 +1061,26 @@ private fun MessageRow(
                     .clip(bubbleShape)
                     .background(colors.surface, bubbleShape)
                     .border(1.dp, colors.outline, bubbleShape)
-                    .padding(start = if (isYou) 12.dp else 13.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
-            ) {
-                // role stamp for agent turns (double-tap it to copy the body)
-                if (!isYou) {
-                    Row(
-                        Modifier.pointerInput(step.id) {
-                            detectTapGestures(
-                                onDoubleTap = {
+                    .pointerInput(step.id, isYou) {
+                        detectTapGestures(
+                            onDoubleTap = if (!isYou) {
+                                {
                                     clipboard.setText(AnnotatedString(step.body))
                                     copied = true
-                                },
-                                onLongPress = {
-                                    if (step.messageId != null) rewindArmed = !rewindArmed
-                                },
-                            )
-                        },
+                                }
+                            } else {
+                                null
+                            },
+                            onLongPress = {
+                                if (step.messageId != null) rewindArmed = !rewindArmed
+                            },
+                        )
+                    }
+                    .padding(start = if (isYou) 12.dp else 13.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
+            ) {
+                // role stamp for agent turns (double-tap the bubble to copy the body)
+                if (!isYou) {
+                    Row(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // A friendly role label, never the internal row tag (the
@@ -1042,7 +1097,7 @@ private fun MessageRow(
                 }
 
                 if (step.think != null) {
-                    ThinkSection(step.think, colors)
+                    ThinkSection(step.think, colors, startOpen = open)
                     Spacer(Modifier.height(6.dp))
                 }
 
@@ -1110,7 +1165,7 @@ private fun MessageRow(
                             .testTag("rewind-${step.id}"),
                     )
                 }
-                if (rewindArmed && step.kind == StepKind.ASSISTANT) {
+                if (rewindArmed && step.kind == StepKind.ASSISTANT && canRegenerate) {
                     Spacer(Modifier.height(8.dp))
                     Text(
                         "regenerate",
@@ -1153,7 +1208,8 @@ private fun MessageRow(
  * The internal [UiStep.tag] hash is deliberately never shown.
  */
 private fun agentLabel(step: UiStep, agentMode: String): String = when (step.kind) {
-    StepKind.ASSISTANT -> agentMode.lowercase().ifBlank { "agent" }
+    StepKind.ASSISTANT -> (step.agent?.takeIf { it.isNotBlank() } ?: agentMode)
+        .lowercase().ifBlank { "agent" }
     else -> step.label.lowercase().ifBlank { "agent" }
 }
 
@@ -1359,6 +1415,7 @@ private fun ToolCard(
 ) {
     var expanded by remember(step.id, startExpanded) { mutableStateOf(startExpanded) }
     val isSub = step.kind == StepKind.SUBAGENT
+    val childSession = step.childId ?: step.childIds.firstOrNull()
 
     // Read the animated `pulse` only inside draw so a running card's stripe does
     // not recompose the card (and thus every row) each frame.
@@ -1370,8 +1427,8 @@ private fun ToolCard(
             isSub = isSub,
             expanded = expanded,
             onToggle = {
-                if (!expanded && isSub && step.childId != null && step.childSteps.isEmpty()) {
-                    onExpandSubagent(step)
+                if (!expanded && isSub && childSession != null && step.childSteps.isEmpty()) {
+                    onExpandSubagent(step.copy(childId = childSession))
                 }
                 expanded = !expanded
             },
@@ -1393,8 +1450,8 @@ private fun ToolCard(
         isSub = isSub,
         expanded = expanded,
         onToggle = {
-            if (!expanded && isSub && step.childId != null && step.childSteps.isEmpty()) {
-                onExpandSubagent(step)
+            if (!expanded && isSub && childSession != null && step.childSteps.isEmpty()) {
+                onExpandSubagent(step.copy(childId = childSession))
             }
             expanded = !expanded
         },
@@ -1471,12 +1528,13 @@ private fun ToolCardFrame(
     ) {
         if (step.think != null) {
             Box(Modifier.padding(start = 10.dp, end = 10.dp, top = 6.dp)) {
-                ThinkSection(step.think, colors)
+                ThinkSection(step.think, colors, startOpen = expanded)
             }
         }
         Row(
             Modifier
                 .fillMaxWidth()
+                .heightIn(min = LumenSize.touchMin)
                 .clickable { onToggle() }
                 .padding(start = 10.dp, end = 9.dp, top = 8.dp, bottom = if (errorLine != null) 3.dp else 8.dp)
                 .testTag("tools-toggle"),
@@ -1843,7 +1901,8 @@ private fun TodoBoard(todos: List<TodoItem>, colors: LumenColors, pulse: () -> F
             Box(Modifier.size(8.dp).clip(WaterShapes.droplet(tail = 0.55f)).background(edge))
             Spacer(Modifier.width(9.dp))
             Text(
-                "${if (expanded) "\u25be" else "\u25b8"} $done/${todos.size} tasks",
+                "${if (expanded) "\u25be" else "\u25b8"} $done/${todos.size} " +
+                    (if (todos.size == 1) "task" else "tasks"),
                 color = colors.fg, fontFamily = Mono, fontSize = 11.5.sp, letterSpacing = 0.4.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.testTag("todo-summary"),
@@ -1944,8 +2003,8 @@ private fun ToolStatusPill(failed: Boolean, running: Boolean, loading: Boolean, 
  * string every frame, which is the jitter + ANR from the field report.
  */
 @Composable
-private fun ThinkSection(think: String, colors: LumenColors) {
-    var open by remember(think) { mutableStateOf(false) }
+private fun ThinkSection(think: String, colors: LumenColors, startOpen: Boolean = false) {
+    var open by remember(think, startOpen) { mutableStateOf(startOpen) }
     var showAll by remember(think) { mutableStateOf(false) }
     // A single low-contrast line: `thinking` faint, the character count fainter
     // still, so the row reads as ambient context rather than a headline. No filled
@@ -1961,12 +2020,13 @@ private fun ThinkSection(think: String, colors: LumenColors) {
     Column(
         Modifier
             .fillMaxWidth()
+            .heightIn(min = LumenSize.touchMin)
             .clickable { open = !open }
             .padding(vertical = 3.dp)
             .testTag("think-toggle"),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (open) "\u25be" else "\u25b8", color = colors.faint, fontFamily = Mono, fontSize = 10.sp)
+            Text(if (open) "\u25be" else "\u25b8", color = colors.dim, fontFamily = Mono, fontSize = 10.sp)
             Spacer(Modifier.width(6.dp))
             Text(header, fontFamily = Mono, fontSize = 11.sp, letterSpacing = 0.4.sp)
         }
@@ -2193,6 +2253,13 @@ private fun ChangesCard(
     var expanded by remember { mutableStateOf(false) }
     var openFile by remember { mutableStateOf<String?>(null) }
     var confirmRevert by remember { mutableStateOf<FileEdit?>(null) }
+    var copiedDiff by remember { mutableStateOf(false) }
+    LaunchedEffect(copiedDiff) {
+        if (copiedDiff) {
+            kotlinx.coroutines.delay(1200)
+            copiedDiff = false
+        }
+    }
     val edge = colors.spectrum.getOrElse(2) { colors.water }
     val shape = LumenShapes.card
 
@@ -2216,8 +2283,10 @@ private fun ChangesCard(
             Box(Modifier.size(8.dp).clip(WaterShapes.droplet(tail = 0.55f)).background(edge))
             Spacer(Modifier.width(9.dp))
             Text(
-                "${if (expanded) "▾" else "▸"} ${changes.fileCount} files · " +
-                    "${changes.editCount} edits · +${changes.added} −${changes.removed}",
+                "${if (expanded) "▾" else "▸"} ${changes.fileCount} " +
+                    "${if (changes.fileCount == 1) "file" else "files"} · ${changes.editCount} " +
+                    "${if (changes.editCount == 1) "edit" else "edits"} · " +
+                    "+${changes.added} −${changes.removed}",
                 color = colors.fg, fontFamily = Mono, fontSize = 11.5.sp, letterSpacing = 0.4.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.testTag("changes-summary"),
@@ -2297,11 +2366,15 @@ private fun ChangesCard(
                 val all = changes.byFile().values.flatten().joinToString("\n") { it.unifiedDiff }.trim()
                 if (all.isNotEmpty()) {
                     Text(
-                        "copy diff",
-                        color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                        if (copiedDiff) "copied" else "copy diff",
+                        color = if (copiedDiff) colors.water else colors.accent,
+                        fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
                         modifier = Modifier
                             .clip(LumenShapes.small)
-                            .clickable { clipboard.setText(AnnotatedString(all)) }
+                            .clickable {
+                                clipboard.setText(AnnotatedString(all))
+                                copiedDiff = true
+                            }
                             .padding(horizontal = 6.dp, vertical = 5.dp)
                             .testTag("copy-diff"),
                     )
@@ -2418,6 +2491,10 @@ private fun ContextMeter(colors: LumenColors, usedFraction: Float) {
             .height(3.dp)
             .clip(LumenShapes.pill)
             .background(colors.outline.copy(alpha = 0.5f))
+            .semantics {
+                progressBarRangeInfo = ProgressBarRangeInfo(remaining, 0f..1f)
+                contentDescription = "context ${(remaining * 100).roundToInt()}% free"
+            }
             .testTag("context-meter"),
     ) {
         Box(
@@ -2449,6 +2526,7 @@ private fun AskCard(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp)
+            .heightIn(max = 340.dp)
             .shadow(LumenElevation.card, shape)
             .clip(shape)
             .background(colors.surface)
@@ -2463,6 +2541,7 @@ private fun AskCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PermissionAsk(
     ask: PendingAsk.Permission,
@@ -2480,7 +2559,10 @@ private fun PermissionAsk(
         )
     }
     Spacer(Modifier.height(10.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         AskAction(colors, "allow once", "ask-allow", accent = true) { onAnswer(true, false) }
         AskAction(colors, "always allow", "ask-always", accent = false) { onAnswer(true, true) }
         AskAction(colors, "deny", "ask-deny", accent = false) { onAnswer(false, false) }
@@ -2495,48 +2577,62 @@ private fun QuestionAsk(
     onSkip: () -> Unit,
 ) {
     var selected by remember(ask.id) { mutableStateOf(emptySet<String>()) }
-    Text("question", color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 2.sp)
-    Spacer(Modifier.height(6.dp))
-    Text(ask.question, color = colors.fg, fontFamily = FontFamily.Default, fontSize = 13.sp, lineHeight = 18.sp)
-    Spacer(Modifier.height(10.dp))
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(max = 280.dp)
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        ask.options.forEachIndexed { index, option ->
-            val isSelected = option in selected
-            Text(
-                option,
-                color = if (isSelected) colors.fg else colors.dim,
-                fontFamily = FontFamily.Default, fontSize = 12.5.sp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(LumenShapes.inset)
-                    .border(1.dp, if (isSelected) colors.water else colors.outline, LumenShapes.inset)
-                    .background(if (isSelected) colors.water.copy(alpha = 0.18f) else Color.Transparent)
-                    .clickable {
-                        // Stage the choice; the answer button sends it. A single
-                        // tap therefore cannot submit a random option by accident.
-                        selected = if (ask.multiple) {
-                            if (isSelected) selected - option else selected + option
-                        } else {
-                            setOf(option)
+    Column(Modifier.fillMaxWidth()) {
+        Text("question", color = colors.faint, fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 2.sp)
+        Spacer(Modifier.height(6.dp))
+        Text(ask.question, color = colors.fg, fontFamily = FontFamily.Default, fontSize = 13.sp, lineHeight = 18.sp)
+        Spacer(Modifier.height(10.dp))
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            ask.options.forEachIndexed { index, option ->
+                val isSelected = option in selected
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = LumenSize.touchMin)
+                        .clip(LumenShapes.inset)
+                        .border(1.dp, if (isSelected) colors.water else colors.outline, LumenShapes.inset)
+                        .background(if (isSelected) colors.water.copy(alpha = 0.18f) else Color.Transparent)
+                        .clickable {
+                            // Stage the choice; the answer button sends it. A single
+                            // tap therefore cannot submit a random option by accident.
+                            selected = if (ask.multiple) {
+                                if (isSelected) selected - option else selected + option
+                            } else {
+                                setOf(option)
+                            }
                         }
-                    }
-                    .padding(horizontal = 12.dp, vertical = 9.dp)
-                    .testTag("ask-option-$index"),
-            )
+                        .semantics {
+                            this.selected = isSelected
+                            role = if (ask.multiple) Role.Checkbox else Role.RadioButton
+                        }
+                        .padding(horizontal = 12.dp)
+                        .testTag("ask-option-$index"),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    Text(
+                        option,
+                        color = if (isSelected) colors.fg else colors.dim,
+                        fontFamily = FontFamily.Default, fontSize = 12.5.sp,
+                    )
+                }
+            }
         }
-    }
-    Spacer(Modifier.height(10.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (ask.options.isNotEmpty()) {
-            AskAction(colors, "answer", "ask-answer", accent = true) { onAnswer(selected.toList()) }
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (ask.options.isNotEmpty()) {
+                AskAction(
+                    colors, "answer", "ask-answer", accent = true,
+                    enabled = selected.isNotEmpty(),
+                ) { onAnswer(selected.toList()) }
+            }
+            AskAction(colors, "skip", "ask-skip", accent = false) { onSkip() }
         }
-        AskAction(colors, "skip", "ask-skip", accent = false) { onSkip() }
     }
 }
 
@@ -2546,20 +2642,30 @@ private fun AskAction(
     label: String,
     tag: String,
     accent: Boolean,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
-    Text(
-        label,
-        color = if (accent) colors.bg else colors.fg,
-        fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-        modifier = Modifier
+    Box(
+        Modifier
+            .heightIn(min = LumenSize.touchMin)
             .clip(LumenShapes.pill)
-            .background(if (accent) colors.water else colors.surface)
-            .border(1.dp, if (accent) colors.water else colors.outline, LumenShapes.pill)
-            .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 8.dp)
+            .background(if (accent && enabled) colors.water else colors.surface)
+            .border(1.dp, if (accent && enabled) colors.water else colors.outline, LumenShapes.pill)
+            .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 14.dp)
             .testTag(tag),
-    )
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = when {
+                !enabled -> colors.faint
+                accent -> colors.bg
+                else -> colors.fg
+            },
+            fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+        )
+    }
 }
 
 @Composable
@@ -2722,7 +2828,7 @@ private fun Composer(
                     Spacer(Modifier.width(5.dp))
                     AgentModeChip("plan", "agent-plan", agentMode == "plan", colors.accent, colors, onAgentMode)
                     val modelLabel = model.substringAfterLast('/')
-                    if (onModel != null && modelLabel.isNotBlank()) {
+                    if ((onModel != null || onOpenModels != null) && modelLabel.isNotBlank()) {
                         Spacer(Modifier.width(5.dp))
                         // Tapping the model opens the full picker when wired;
                         // otherwise it keeps the historical picker + quick sheet.
@@ -2739,21 +2845,21 @@ private fun Composer(
                     if (onEditKey != null) {
                         Box(
                             Modifier
-                                .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
+                                .sizeIn(minWidth = LumenSize.touchMin, minHeight = LumenSize.touchMin)
                                 .clip(LumenShapes.small)
                                 .clickable { onEditKey() }
                                 .testTag("key"),
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                "key", color = colors.faint, fontFamily = Mono, fontSize = 11.5.sp,
+                                "key", color = colors.dim, fontFamily = Mono, fontSize = 11.5.sp,
                             )
                         }
                     }
                     if (onQuickSettings != null) {
                         Box(
                             Modifier
-                                .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
+                                .sizeIn(minWidth = LumenSize.touchMin, minHeight = LumenSize.touchMin)
                                 .clip(LumenShapes.small)
                                 .clickable { onQuickSettings() }
                                 .semantics { contentDescription = "Settings" }
@@ -2761,14 +2867,14 @@ private fun Composer(
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                "\u2699", color = colors.faint, fontFamily = Mono, fontSize = 15.sp,
+                                "\u2699", color = colors.dim, fontFamily = Mono, fontSize = 15.sp,
                             )
                         }
                     }
                     if (onToggleTheme != null) {
                         Box(
                             Modifier
-                                .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
+                                .sizeIn(minWidth = LumenSize.touchMin, minHeight = LumenSize.touchMin)
                                 .clip(LumenShapes.small)
                                 .clickable { onToggleTheme() }
                                 .semantics { contentDescription = "Toggle theme" }
@@ -2776,7 +2882,7 @@ private fun Composer(
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                "◐", color = colors.faint, fontFamily = Mono, fontSize = 15.sp,
+                                "◐", color = colors.dim, fontFamily = Mono, fontSize = 15.sp,
                             )
                         }
                     }
@@ -2833,7 +2939,7 @@ private fun ComposerControl(
 ) {
     Box(
         Modifier
-            .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
+            .sizeIn(minWidth = LumenSize.touchMin, minHeight = LumenSize.touchMin)
             .clip(LumenShapes.small)
             .clickable { onClick() }
             .then(
@@ -2861,7 +2967,7 @@ private fun ComposerControl(
 private fun ModelChip(label: String, colors: LumenColors, loading: Boolean = false, onClick: () -> Unit) {
     Box(
         Modifier
-            .heightIn(min = 34.dp)
+            .heightIn(min = LumenSize.touchMin)
             .widthIn(max = 112.dp)
             .clip(LumenShapes.pill)
             .background(colors.water.copy(alpha = 0.10f))
@@ -2964,7 +3070,7 @@ private fun AttachmentChip(
         Spacer(Modifier.width(4.dp))
         Text(
             "\u00d7",
-            color = colors.faint, fontFamily = Mono, fontSize = 14.sp,
+            color = colors.dim, fontFamily = Mono, fontSize = 14.sp,
             modifier = Modifier
                 .clip(LumenShapes.pill)
                 .clickable { onRemove(index) }
@@ -3017,7 +3123,7 @@ private fun UndoNotice(path: String, colors: LumenColors, onUndo: () -> Unit, on
         Spacer(Modifier.width(4.dp))
         Text(
             "\u00d7",
-            color = colors.faint, fontFamily = Mono, fontSize = 13.sp,
+            color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
             modifier = Modifier
                 .clip(LumenShapes.pill)
                 .clickable { onDismiss() }
@@ -3062,18 +3168,18 @@ private fun AgentModeChip(
 ) {
     Box(
         Modifier
-            .heightIn(min = 34.dp)
+            .heightIn(min = LumenSize.touchMin)
             .clip(LumenShapes.pill)
             .background(if (selected) tint.copy(alpha = 0.16f) else Color.Transparent)
             .border(1.dp, if (selected) tint.copy(alpha = 0.45f) else colors.outline, LumenShapes.pill)
             .clickable { onSelect(label) }
-            .padding(horizontal = 11.dp, vertical = 5.dp)
+            .padding(horizontal = 11.dp)
             .testTag(tag),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             label,
-            color = if (selected) tint else colors.faint,
+            color = if (selected) tint else colors.dim,
             fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
         )
     }
@@ -3252,6 +3358,7 @@ private fun PeekBacklinks(
  * and "compact now", plus links to the key screen and the full Settings page.
  * A real bottom sheet — deliberately not a shrunken copy of Settings.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun QuickSettingsSheet(
     colors: LumenColors,
@@ -3261,6 +3368,7 @@ private fun QuickSettingsSheet(
     agentMode: String = "build",
     onAgentMode: ((String) -> Unit)? = null,
     onCompactNow: (() -> Unit)? = null,
+    compacting: Boolean = false,
     busy: Boolean = false,
     onEditKey: (() -> Unit)? = null,
     onOpenFullSettings: (() -> Unit)? = null,
@@ -3315,38 +3423,48 @@ private fun QuickSettingsSheet(
             segments = listOf(
                 LumenSegment("build", "build", "quick-agent-build"),
                 LumenSegment("plan", "plan", "quick-agent-plan"),
-                LumenSegment("delegate", "delegate", "quick-agent-delegate"),
             ),
             selected = agentMode,
             onSelect = { onAgentMode?.invoke(it) },
             colors = colors,
         )
 
-        if (onCompactNow != null && !busy) {
+        if (onCompactNow != null && (compacting || !busy)) {
             Spacer(Modifier.height(LumenSpacing.lg))
-            Text(
-                "compact now",
-                color = colors.accent,
-                fontFamily = LumenFonts.label,
-                fontSize = LumenType.body,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier
+            Row(
+                Modifier
                     .clip(LumenShapes.small)
-                    .clickable { onCompactNow() }
+                    .clickable(enabled = !compacting && !busy) { onCompactNow() }
                     .padding(horizontal = 8.dp, vertical = 6.dp)
                     .testTag("quick-compact-now"),
-            )
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (compacting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        color = colors.accent,
+                        strokeWidth = 1.5.dp,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(
+                    if (compacting) "compacting…" else "compact now",
+                    color = if (compacting) colors.dim else colors.accent,
+                    fontFamily = LumenFonts.label,
+                    fontSize = LumenType.body,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
         }
 
         Spacer(Modifier.height(LumenSpacing.xl))
-        Row(
+        FlowRow(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             QuickAction("API key", "quick-edit-key", colors) { onEditKey?.invoke() }
             QuickAction("All settings", "quick-full-settings", colors) { onOpenFullSettings?.invoke() }
-            Spacer(Modifier.weight(1f))
             QuickAction("close", "quick-close", colors) { onClose() }
         }
     }

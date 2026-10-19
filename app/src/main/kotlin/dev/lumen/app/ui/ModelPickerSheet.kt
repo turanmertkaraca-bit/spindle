@@ -6,9 +6,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -18,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.spindle.core.provider.ModelInfo
 
@@ -42,6 +46,7 @@ internal fun ModelPickerSheet(
     onToggleFavorite: (String) -> Unit,
     onRefresh: () -> Unit,
     onBrowseAll: () -> Unit,
+    modelsError: String? = null,
 ) {
     // Built once per (models, provider) rather than on every recomposition of
     // the hosting screen (which happens on every streaming delta).
@@ -92,64 +97,91 @@ internal fun ModelPickerSheet(
         }
         Spacer(Modifier.height(LumenSpacing.md))
 
-        if (favorites.isNotEmpty()) {
-            LumenSectionHeader(colors, "favorites")
-            Spacer(Modifier.height(LumenSpacing.sm))
-            for (ref in favorites) {
-                val d = known[ref]?.let { modelRowData(provider, it) }
-                    ?: modelRowDataFromRef(ref, "sheet-fav-${ref.substringAfter('/')}")
-                ModelRow(
-                    colors, d, selected == ref, favorite = true, onSelect, onToggleFavorite,
-                )
-                Spacer(Modifier.height(LumenSpacing.sm))
-            }
-            Spacer(Modifier.height(LumenSpacing.sm))
-        }
-
-        if (recents.isNotEmpty()) {
-            LumenSectionHeader(colors, "recent")
-            Spacer(Modifier.height(LumenSpacing.sm))
-            for (ref in recents) {
-                val d = known[ref]?.let { modelRowData(provider, it) }
-                    ?: modelRowDataFromRef(ref, "sheet-recent-${ref.substringAfter('/')}")
-                ModelRow(
-                    colors, d, selected == ref, favorite = ref in favorites, onSelect, onToggleFavorite,
-                )
-                Spacer(Modifier.height(LumenSpacing.sm))
-            }
+        if (modelsError != null) {
+            Text(
+                modelsError,
+                color = LumenAlert,
+                fontFamily = LumenFonts.value,
+                fontSize = LumenType.caption,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("model-sheet-error"),
+            )
             Spacer(Modifier.height(LumenSpacing.sm))
         }
 
-        LumenSectionHeader(colors, "all models")
-        Spacer(Modifier.height(LumenSpacing.sm))
-        when {
-            models.isEmpty() && refreshing -> {
-                LumenLoading(colors, "loading\u2026", tag = "model-sheet-loading")
-                Spacer(Modifier.height(LumenSpacing.sm))
-            }
-            models.isEmpty() -> {
-                Text(
-                    "no models",
-                    color = colors.faint,
-                    fontFamily = LumenFonts.label,
-                    fontSize = LumenType.caption,
-                )
-                Spacer(Modifier.height(LumenSpacing.sm))
-            }
-            else -> {
-                for (m in models) {
-                    val ref = "$provider/${m.id}"
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
+            if (favorites.isNotEmpty()) {
+                item(key = "fav-header") {
+                    LumenSectionHeader(colors, "favorites")
+                    Spacer(Modifier.height(LumenSpacing.sm))
+                }
+                items(favorites.toList(), key = { "fav-$it" }) { ref ->
+                    val d = pinnedRowData(ref, known, "sheet-fav-${ref.substringAfter('/')}")
                     ModelRow(
-                        colors,
-                        modelRowData(provider, m).copy(
-                            tag = if (selected == ref) "sheet-model-selected-${m.id}" else "sheet-model-${m.id}",
-                        ),
-                        selected = selected == ref,
-                        favorite = ref in favorites,
-                        onSelect = onSelect,
-                        onToggleFavorite = onToggleFavorite,
+                        colors, d, selected == ref, favorite = true, onSelect, onToggleFavorite,
+                        starTag = "sheet-fav-star-$ref",
                     )
                     Spacer(Modifier.height(LumenSpacing.sm))
+                }
+                item(key = "fav-footer") { Spacer(Modifier.height(LumenSpacing.sm)) }
+            }
+
+            if (recents.isNotEmpty()) {
+                item(key = "recent-header") {
+                    LumenSectionHeader(colors, "recent")
+                    Spacer(Modifier.height(LumenSpacing.sm))
+                }
+                items(recents, key = { "recent-$it" }) { ref ->
+                    val d = pinnedRowData(ref, known, "sheet-recent-${ref.substringAfter('/')}")
+                    ModelRow(
+                        colors, d, selected == ref, favorite = ref in favorites, onSelect, onToggleFavorite,
+                        starTag = "sheet-recent-star-$ref",
+                    )
+                    Spacer(Modifier.height(LumenSpacing.sm))
+                }
+                item(key = "recent-footer") { Spacer(Modifier.height(LumenSpacing.sm)) }
+            }
+
+            item(key = "all-header") {
+                LumenSectionHeader(colors, "all models")
+                Spacer(Modifier.height(LumenSpacing.sm))
+            }
+            when {
+                models.isEmpty() && refreshing -> {
+                    item(key = "loading") {
+                        LumenLoading(colors, "loading\u2026", tag = "model-sheet-loading")
+                        Spacer(Modifier.height(LumenSpacing.sm))
+                    }
+                }
+                models.isEmpty() -> {
+                    item(key = "empty") {
+                        Text(
+                            "no models",
+                            color = colors.faint,
+                            fontFamily = LumenFonts.label,
+                            fontSize = LumenType.caption,
+                        )
+                        Spacer(Modifier.height(LumenSpacing.sm))
+                    }
+                }
+                else -> {
+                    items(models, key = { "model-${it.id}" }) { m ->
+                        val ref = "$provider/${m.id}"
+                        ModelRow(
+                            colors,
+                            modelRowData(provider, m).copy(
+                                tag = if (selected == ref) "sheet-model-selected-${m.id}" else "sheet-model-${m.id}",
+                            ),
+                            selected = selected == ref,
+                            favorite = ref in favorites,
+                            onSelect = onSelect,
+                            onToggleFavorite = onToggleFavorite,
+                        )
+                        Spacer(Modifier.height(LumenSpacing.sm))
+                    }
                 }
             }
         }

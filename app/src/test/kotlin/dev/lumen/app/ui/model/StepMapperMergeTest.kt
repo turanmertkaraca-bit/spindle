@@ -69,4 +69,35 @@ class StepMapperMergeTest {
         assertEquals(3, merged.size)
         assertEquals(1, merged[0].merged)
     }
+
+    @Test
+    fun `a failed call stands alone instead of merging into a successful run`() {
+        val merged = StepMapper.mergeAdjacent(
+            listOf(
+                step("a", StepKind.TOOL),
+                step("b", StepKind.TOOL).copy(failed = true),
+                step("c", StepKind.TOOL),
+            ),
+        )
+        assertEquals(3, merged.size)
+        assertEquals(false, merged[0].failed)
+        assertEquals(true, merged[1].failed)
+        assertEquals("bb", merged[1].body)
+        assertEquals(false, merged[2].failed)
+    }
+
+    @Test
+    fun `a merged run keeps every subagent child id`() {
+        val merged = StepMapper.mergeAdjacent(
+            listOf(
+                step("a", StepKind.SUBAGENT).copy(childId = "c1"),
+                step("b", StepKind.SUBAGENT).copy(childId = "c2", childIds = listOf("c2")),
+                step("c", StepKind.TOOL).copy(childId = "c3"),
+            ),
+        )
+        assertEquals(1, merged.size)
+        assertEquals(StepKind.SUBAGENT, merged[0].kind)
+        assertEquals("c1", merged[0].childId)
+        assertEquals(listOf("c1", "c2", "c3"), merged[0].childIds)
+    }
 }

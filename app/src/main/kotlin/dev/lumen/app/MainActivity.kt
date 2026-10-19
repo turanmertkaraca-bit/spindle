@@ -6,10 +6,12 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -33,6 +35,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -55,6 +58,8 @@ import dev.lumen.app.ui.StorageScreen
 import dev.lumen.app.ui.TerminalScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import java.io.File
 import java.nio.charset.StandardCharsets
 
@@ -95,6 +100,7 @@ class MainActivity : ComponentActivity() {
             val view = LocalView.current
             SideEffect {
                 val window = (view.context as? Activity)?.window ?: return@SideEffect
+                window.setBackgroundDrawable(ColorDrawable(colors.bg.toArgb()))
                 WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !dark
                 WindowCompat.getInsetsController(window, view).isAppearanceLightNavigationBars = !dark
             }
@@ -110,6 +116,8 @@ class MainActivity : ComponentActivity() {
             var canvasReturn by rememberSaveable { mutableStateOf("chat") }
             // The route to return to when leaving the full model picker.
             var modelsReturn by rememberSaveable { mutableStateOf("settings") }
+            var settingsReturn by rememberSaveable { mutableStateOf("home") }
+            var keyReturn by rememberSaveable { mutableStateOf("settings") }
             // The dedicated in-chat model picker sheet; never a route on its own.
             var modelPicker by rememberSaveable { mutableStateOf(false) }
             // Which slot the full-screen picker is filling: "default" | "subagent".
@@ -129,6 +137,9 @@ class MainActivity : ComponentActivity() {
             var booted by rememberSaveable { mutableStateOf(false) }
             var bootMessage by remember { mutableStateOf("preparing environment…") }
             val appContext = LocalContext.current
+            val toast: (String) -> Unit = { message ->
+                Toast.makeText(appContext, message, Toast.LENGTH_SHORT).show()
+            }
             val storagePermission = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestPermission(),
             ) { granted -> viewModel.setDownloadsAccess(granted) }
@@ -156,14 +167,20 @@ class MainActivity : ComponentActivity() {
                 val id = pendingExportId
                 pendingExportId = null
                 if (uri == null || id == null) return@rememberLauncherForActivityResult
-                ioScope.launch(Dispatchers.IO) {
-                    runCatching {
-                        val json = viewModel.exportSession(id) ?: error("session not found")
-                        appContext.contentResolver.openOutputStream(uri)?.use { out ->
-                            out.write(json.toByteArray(StandardCharsets.UTF_8))
-                        } ?: error("cannot open export destination")
+                ioScope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val json = viewModel.exportSession(id) ?: error("session not found")
+                            appContext.contentResolver.openOutputStream(uri)?.use { out ->
+                                out.write(json.toByteArray(StandardCharsets.UTF_8))
+                            } ?: error("cannot open export destination")
+                        }
+                    }
+                    result.onSuccess {
+                        toast("Session exported")
                     }.onFailure { e ->
                         viewModel.recordDiagnostic("export failed: ${e.message}")
+                        toast("Export failed: ${e.message ?: "unknown error"}")
                     }
                 }
             }
@@ -171,15 +188,26 @@ class MainActivity : ComponentActivity() {
                 ActivityResultContracts.OpenDocument(),
             ) { uri ->
                 if (uri == null) return@rememberLauncherForActivityResult
-                ioScope.launch(Dispatchers.IO) {
-                    runCatching {
-                        val json = appContext.contentResolver.openInputStream(uri)?.use { input ->
-                            input.readBytes().toString(StandardCharsets.UTF_8)
-                        } ?: error("cannot open import source")
-                        val count = viewModel.importSessions(json)
+                ioScope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val json = appContext.contentResolver.openInputStream(uri)?.use { input ->
+                                input.readBytes().toString(StandardCharsets.UTF_8)
+                            } ?: error("cannot open import source")
+                            json to viewModel.importSessions(json)
+                        }
+                    }
+                    result.onSuccess { (json, count) ->
                         viewModel.recordDiagnostic("imported $count session(s)")
+                        when {
+                            count > 0 -> toast("Imported $count session(s)")
+                            runCatching { Json.parseToJsonElement(json) }.isFailure ->
+                                toast("Malformed session file")
+                            else -> toast("No sessions found in file")
+                        }
                     }.onFailure { e ->
                         viewModel.recordDiagnostic("import failed: ${e.message}")
+                        toast("Import failed: ${e.message ?: "unknown error"}")
                     }
                 }
             }
@@ -249,9 +277,9 @@ class MainActivity : ComponentActivity() {
                         viewModel.refreshGitActivity()
                         route = "settings"
                     }
-                    route == "key" -> route = "settings"
+                    route == "key" -> route = keyReturn
                     route == "models" -> route = modelsReturn
-                    route == "settings" -> route = "home"
+                    route == "settings" -> route = settingsReturn
                     route == "chat" -> {
                         viewModel.closeChat()
                         route = "home"
@@ -274,6 +302,7 @@ class MainActivity : ComponentActivity() {
                     },
                     onAddKey = {
                         viewModel.completeOnboarding()
+                        keyReturn = "settings"
                         route = "key"
                     },
                     onFinish = {
@@ -344,6 +373,7 @@ class MainActivity : ComponentActivity() {
                     onToggleTheme = toggleTheme,
                     onEditKey = {
                         quickSettings = false
+                        keyReturn = "chat"
                         route = "key"
                     },
                     onFiles = {
@@ -397,8 +427,10 @@ class MainActivity : ComponentActivity() {
                     autoCompactPercent = state.autoCompactPercent,
                     onAutoCompactPercent = viewModel::setAutoCompactPercent,
                     onCompactNow = viewModel::compactNow,
+                    compacting = state.compacting,
                     onOpenFullSettings = {
                         quickSettings = false
+                        settingsReturn = "chat"
                         route = "settings"
                     },
                     onModelSelect = pickModel,
@@ -407,21 +439,27 @@ class MainActivity : ComponentActivity() {
                     onCloseModelPicker = { modelPicker = false },
                     pickerModels = state.models,
                     pickerRefreshing = state.modelsRefreshing,
+                    modelsError = state.modelsError,
                     catalogueLoading = state.modelsRefreshing,
                     favoriteModels = state.favoriteModels,
                     recentModels = state.recentModels,
                     onToggleFavorite = viewModel::toggleFavorite,
                     onRefreshModels = { viewModel.refreshModels() },
-                    onBrowseAllModels = { modelPicker = false; modelsReturn = "chat"; route = "models" },
+                    onBrowseAllModels = {
+                        modelPicker = false
+                        modelsTarget = "default"
+                        modelsReturn = "chat"
+                        route = "models"
+                    },
                 )
                 route == "models" -> ModelPickerScreen(
                     colors = colors,
                     provider = state.provider,
                     models = state.models,
-                    selected = state.model,
+                    selected = if (modelsTarget == "subagent") state.subagentModel else state.model,
                     refreshing = state.modelsRefreshing,
                     error = state.modelsError,
-                    onProvider = viewModel::setProvider,
+                    onProvider = { if (modelsTarget != "subagent") viewModel.setProvider(it) },
                     onSelect = { ref ->
                         if (modelsTarget == "subagent") viewModel.setSubagentModel(ref) else pickModel(ref)
                         route = modelsReturn
@@ -446,8 +484,11 @@ class MainActivity : ComponentActivity() {
                             if (entry.isDir) viewModel.enterDir(entry.path) else viewModel.editFile(entry.path)
                         },
                         onSaveFile = { path, content ->
-                            viewModel.saveFile(path, content)
-                            viewModel.closeEditor()
+                            if (viewModel.saveFile(path, content)) {
+                                viewModel.closeEditor()
+                            } else {
+                                toast("Could not save ${path.substringAfterLast('/')}")
+                            }
                         },
                         onCloseEditor = viewModel::closeEditor,
                         onCreateFile = viewModel::createFile,
@@ -460,6 +501,7 @@ class MainActivity : ComponentActivity() {
                         },
                         onOpenCanvas = openCanvas,
                         modifier = modifier,
+                        onDraftChange = viewModel::updateEditorDraft,
                     )
                 }
                 route == "terminal" -> {
@@ -494,6 +536,7 @@ class MainActivity : ComponentActivity() {
                             route = canvasReturn
                         },
                         modifier = modifier,
+                        onReload = { state.canvasPath?.let { viewModel.openCanvas(it) } },
                     )
                 }
                 route == "storage" -> {
@@ -535,8 +578,11 @@ class MainActivity : ComponentActivity() {
                     onPalette = { viewModel.setPalette(it) },
                     reduceMotion = state.reduceMotion,
                     onReduceMotion = viewModel::setReduceMotion,
-                    onEditKey = { route = "key" },
-                    onBack = { route = "home" },
+                    onEditKey = {
+                        keyReturn = "settings"
+                        route = "key"
+                    },
+                    onBack = { route = settingsReturn },
                     modifier = modifier,
                     askBeforeTools = state.askBeforeTools,
                     onAskBeforeTools = viewModel::setAskBeforeTools,
@@ -561,17 +607,19 @@ class MainActivity : ComponentActivity() {
                     onBrowseModels = { modelsTarget = "default"; modelsReturn = "settings"; route = "models" },
                     onBrowseSubagent = { modelsTarget = "subagent"; modelsReturn = "settings"; route = "models" },
                     modelsLoading = state.modelsRefreshing,
+                    modelsError = state.modelsError,
                 )
                 route == "key" -> KeyScreen(
                     colors = colors,
                     onSubmit = { provider, key ->
                         viewModel.saveKey(provider, key)
-                        route = "settings"
+                        route = keyReturn
                     },
                     modifier = modifier,
                     onToggleTheme = toggleTheme,
                     initialProvider = state.provider,
                     initialKey = viewModel.currentApiKey(),
+                    onBack = { route = keyReturn },
                 )
                 route == "github" -> {
                     LaunchedEffect(Unit) { viewModel.refreshGitActivity() }
@@ -619,7 +667,10 @@ class MainActivity : ComponentActivity() {
                     search = state.search,
                     searchQuery = state.searchQuery,
                     onSearch = viewModel::searchSessions,
-                    onSettings = { route = "settings" },
+                    onSettings = {
+                        settingsReturn = "home"
+                        route = "settings"
+                    },
                     modifier = modifier,
                     onToggleTheme = toggleTheme,
                     onFiles = {
@@ -645,6 +696,8 @@ class MainActivity : ComponentActivity() {
                     onDiagnostics = { route = "diagnostics" },
                     onStorage = { route = "storage" },
                     onGitHub = { route = "github" },
+                    sessionsLoading = state.sessionsLoading,
+                    sessionsError = state.sessionsError,
                 )
                     }             // close when
                 }                 // close SaveableStateProvider

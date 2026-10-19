@@ -8,6 +8,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -20,6 +21,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import dev.lumen.app.ui.model.StepKind
 import dev.lumen.app.ui.model.UiImage
@@ -844,10 +846,90 @@ class LumenChatScreenTest {
         // Just the chat-scoped controls: model shortcut + agent mode.
         compose.onNodeWithTag("quick-model").assertExists()
         compose.onNodeWithTag("quick-agent-build").assertExists()
-        compose.onNodeWithTag("quick-agent-delegate").assertExists()
+        compose.onNodeWithTag("quick-agent-plan").assertExists()
+        check(compose.onAllNodesWithTag("quick-agent-delegate").fetchSemanticsNodes().isEmpty()) {
+            "the dead delegate segment must stay removed"
+        }
         // Footer reaches the key screen and the full Settings page.
         compose.onNodeWithTag("quick-edit-key").assertExists()
         compose.onNodeWithTag("quick-full-settings").assertExists()
         compose.onNodeWithTag("quick-close").assertExists()
+    }
+
+    @Test
+    fun `long pressing a you row arms edit and resend`() {
+        compose.setContent {
+            LumenChatScreen(
+                listOf(UiStep("u", StepKind.YOU, "YOU", "x", "hi", "hi", messageId = "m1")),
+                input = "", busy = false, error = null, modifier = viewport, ambient = false, haptics = false,
+            )
+        }
+        compose.onNodeWithText("hi").performTouchInput { longClick() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("edit-u", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun `regenerate is only offered on the last assistant row`() {
+        compose.setContent {
+            LumenChatScreen(
+                listOf(
+                    UiStep("u", StepKind.YOU, "YOU", "x", "go", "go", messageId = "m0"),
+                    UiStep("a1", StepKind.ASSISTANT, "ASSISTANT", "x", "first", "first answer", messageId = "m1"),
+                    UiStep("a2", StepKind.ASSISTANT, "ASSISTANT", "x", "second", "second answer", messageId = "m2"),
+                ),
+                input = "", busy = false, error = null, modifier = viewport, ambient = false, haptics = false,
+            )
+        }
+        compose.onNodeWithText("first answer").performTouchInput { longClick() }
+        compose.waitForIdle()
+        check(compose.onAllNodesWithTag("regenerate-a1").fetchSemanticsNodes().isEmpty()) {
+            "an older answer must not offer regenerate"
+        }
+        compose.onNodeWithText("second answer").performTouchInput { longClick() }
+        compose.waitForIdle()
+        compose.onNodeWithTag("regenerate-a2", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun `forceOpenIndex opens a folded thinking row`() {
+        compose.setContent {
+            LumenChatScreen(
+                listOf(
+                    UiStep("u", StepKind.YOU, "YOU", "x", "hi", "hi"),
+                    UiStep("t", StepKind.THINKING, "THINKING", "x", "reasoning", "the folded reasoning"),
+                    UiStep("a", StepKind.ASSISTANT, "ASSISTANT", "x", "answer", "the answer"),
+                ),
+                input = "", busy = false, error = null, modifier = viewport, ambient = false,
+                forceOpenIndex = 1,
+            )
+        }
+        compose.onNodeWithTag("think-body", useUnmergedTree = true).assertExists()
+    }
+
+    @Test
+    fun `the model chip renders when only the full picker is wired`() {
+        compose.setContent {
+            LumenChatScreen(
+                steps(1), input = "", busy = false, error = null, modifier = viewport, ambient = false,
+                model = "opencode-go/deepseek-v4.1-flash",
+                onOpenModels = {},
+            )
+        }
+        compose.onNodeWithTag("model-chip", useUnmergedTree = true).assertExists()
+    }
+
+    @Test
+    fun `compact now shows in-flight feedback and is disabled`() {
+        compose.setContent {
+            LumenChatScreen(
+                steps(1), input = "", busy = true, error = null, modifier = viewport, ambient = false,
+                quickSettings = true,
+                onCompactNow = {},
+                compacting = true,
+            )
+        }
+        compose.onNodeWithText("compacting…", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag("quick-compact-now").assertIsNotEnabled()
     }
 }

@@ -15,6 +15,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** The live picker is a pure hoisted list: every tag and tap reports up. */
@@ -110,7 +111,7 @@ class ModelPickerScreenTest {
     }
 
     @Test
-    fun `provider chips report the chosen provider`() {
+    fun `provider chips only change the local browse filter`() {
         var provider: String? = null
         compose.setContent {
             ModelPickerScreen(
@@ -129,7 +130,9 @@ class ModelPickerScreenTest {
         }
         compose.onNodeWithTag("models-provider-openrouter").performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
-        assertEquals("openrouter", provider)
+        assertNull(provider)
+        compose.onNodeWithTag("model-option-openrouter/free").assertExists()
+        compose.onNodeWithTag("model-option-alpha").assertDoesNotExist()
     }
 
     @Test

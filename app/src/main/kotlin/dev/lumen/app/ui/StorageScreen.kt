@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -36,6 +37,7 @@ import dev.lumen.app.StorageReport
 import java.util.Locale
 
 private val Mono = FontFamily.Monospace
+private const val LOGS_CATEGORY = "logs"
 
 /**
  * The storage manager: a big total, a categorized breakdown and a safe clear
@@ -53,6 +55,7 @@ fun StorageScreen(
     modifier: Modifier = Modifier,
 ) {
     var confirmClearAll by remember { mutableStateOf(false) }
+    val scanning = storage?.scanning == true
 
     Column(
         modifier
@@ -68,7 +71,13 @@ fun StorageScreen(
             onBack = onBack,
             backTag = "storage-back",
             actions = {
-                LumenBarAction(colors, "Rescan", "storage-rescan", onRescan)
+                LumenBarAction(
+                    colors = colors,
+                    label = if (scanning) "Scanning\u2026" else "Rescan",
+                    tag = "storage-rescan",
+                    onClick = onRescan,
+                    enabled = !scanning,
+                )
             },
         )
         Spacer(Modifier.height(LumenSpacing.xl))
@@ -99,16 +108,16 @@ fun StorageScreen(
             Modifier
                 .fillMaxWidth()
                 .clip(LumenShapes.pill)
-                .background(LumenAlert.copy(alpha = 0.08f))
-                .border(1.dp, LumenAlert.copy(alpha = 0.55f), LumenShapes.pill)
-                .clickable { confirmClearAll = true }
+                .background(LumenAlert.copy(alpha = if (scanning) 0.04f else 0.08f))
+                .border(1.dp, LumenAlert.copy(alpha = if (scanning) 0.25f else 0.55f), LumenShapes.pill)
+                .clickable(enabled = !scanning) { confirmClearAll = true }
                 .padding(vertical = 14.dp)
                 .testTag("storage-clear-all"),
             contentAlignment = Alignment.Center,
         ) {
             Text(
-                "Clear all caches",
-                color = LumenAlert,
+                if (scanning) "Scanning\u2026" else "Clear all caches",
+                color = if (scanning) colors.dim else alertOn(colors),
                 fontFamily = Mono,
                 fontSize = LumenType.bodyLarge,
                 fontWeight = FontWeight.Medium,
@@ -116,7 +125,9 @@ fun StorageScreen(
         }
         Spacer(Modifier.height(LumenSpacing.lg))
 
-        val categories = storage?.categories.orEmpty().sortedByDescending { it.bytes }
+        val categories = storage?.categories.orEmpty()
+            .filterNot { it.name == LOGS_CATEGORY && it.bytes == 0L }
+            .sortedByDescending { it.bytes }
         if (categories.isEmpty()) {
             Box(
                 Modifier
@@ -152,7 +163,7 @@ fun StorageScreen(
         Spacer(Modifier.height(10.dp))
         Text(
             "Your chats, source and keys are never cleared.",
-            color = colors.faint,
+            color = colors.dim,
             fontFamily = Mono,
             fontSize = LumenType.micro,
             letterSpacing = 0.3.sp,
@@ -175,34 +186,44 @@ fun StorageScreen(
                 )
             },
             confirmButton = {
-                Text(
-                    "Clear all",
-                    color = LumenAlert,
-                    fontFamily = Mono,
-                    fontSize = LumenType.body,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier
+                Box(
+                    Modifier
+                        .heightIn(min = LumenSize.touchMin)
                         .clip(LumenShapes.small)
                         .clickable {
                             onClearAll()
                             confirmClearAll = false
                         }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .padding(horizontal = 8.dp)
                         .testTag("storage-clear-all-confirm"),
-                )
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Clear all",
+                        color = alertOn(colors),
+                        fontFamily = Mono,
+                        fontSize = LumenType.body,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
             },
             dismissButton = {
-                Text(
-                    "Cancel",
-                    color = colors.dim,
-                    fontFamily = Mono,
-                    fontSize = LumenType.body,
-                    modifier = Modifier
+                Box(
+                    Modifier
+                        .heightIn(min = LumenSize.touchMin)
                         .clip(LumenShapes.small)
                         .clickable { confirmClearAll = false }
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                        .padding(horizontal = 8.dp)
                         .testTag("storage-clear-all-cancel"),
-                )
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Cancel",
+                        color = colors.dim,
+                        fontFamily = Mono,
+                        fontSize = LumenType.body,
+                    )
+                }
             },
         )
     }
@@ -234,7 +255,7 @@ private fun CategoryRow(
             Spacer(Modifier.height(2.dp))
             Text(
                 if (category.clearable) "Clearable" else "Kept",
-                color = if (category.clearable) colors.water else colors.faint,
+                color = if (category.clearable) colors.water else colors.dim,
                 fontFamily = Mono,
                 fontSize = LumenType.micro,
                 letterSpacing = 0.4.sp,
@@ -249,20 +270,25 @@ private fun CategoryRow(
         )
         if (category.clearable) {
             Spacer(Modifier.width(10.dp))
-            Text(
-                "Clear",
-                color = colors.accent,
-                fontFamily = Mono,
-                fontSize = LumenType.body,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier
+            Box(
+                Modifier
+                    .heightIn(min = LumenSize.touchMin)
                     .clip(LumenShapes.small)
                     .background(colors.surface)
                     .border(1.dp, colors.outline, LumenShapes.small)
                     .clickable { onClear() }
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .padding(horizontal = 10.dp)
                     .testTag("storage-clear-${category.name}"),
-            )
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "Clear",
+                    color = colors.accent,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
         }
     }
 }

@@ -82,7 +82,7 @@ class SessionSurfacesTest {
     }
 
     @Test
-    fun `forkSession creates a child session with copied messages`() {
+    fun `forkSession creates a root session with copied messages`() {
         val dir = tmp()
         val store = InMemorySessionStore()
         val sid = SessionId("ses_parent")
@@ -105,10 +105,11 @@ class SessionSurfacesTest {
         val vm = ChatViewModel(dir.toPath(), keys(), store)
         vm.forkSession(sid.value)
 
-        val kids = runBlocking { store.sessions(includeChildren = true) }.filter { it.parentId == sid }
-        assertEquals(1, kids.size, "forking should create one child")
-        assertEquals(2, runBlocking { store.messages(kids.single().id) }.size, "the fork copies every message")
-        assertEquals(kids.single().id.value, vm.state.value.currentSessionId, "the fork opens")
+        val roots = runBlocking { store.sessions(includeChildren = false) }
+        val fork = roots.single { it.id != sid }
+        assertNull(fork.parentId, "a user fork is a root session")
+        assertEquals(2, runBlocking { store.messages(fork.id) }.size, "the fork copies every message")
+        assertEquals(fork.id.value, vm.state.value.currentSessionId, "the fork opens")
     }
 
     @Test
