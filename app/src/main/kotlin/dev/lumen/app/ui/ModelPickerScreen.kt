@@ -177,7 +177,7 @@ internal fun ModelRow(
                             "add to favourites"
                         }
                         role = Role.Button
-                        selected = favorite
+                        this.selected = favorite
                     }
                     .testTag(starTag),
                 contentAlignment = Alignment.Center,
