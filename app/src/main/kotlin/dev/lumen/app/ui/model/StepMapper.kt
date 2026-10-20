@@ -252,7 +252,10 @@ object StepMapper {
             toolNames = a.toolNames + b.toolNames,
             toolMetadata = a.toolMetadata + b.toolMetadata,
             childId = a.childId ?: b.childId,
-            childIds = (a.childIds + b.childIds + listOfNotNull(a.childId, b.childId)).distinct(),
+            childIds = (
+                a.childIds + listOfNotNull(a.childId) +
+                    b.childIds + listOfNotNull(b.childId)
+                ).distinct(),
             running = a.running || b.running,
             failed = a.failed || b.failed,
         )

@@ -4,10 +4,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.dp
 import dev.lumen.app.SessionRow
 import org.junit.Rule
@@ -132,6 +134,7 @@ class HomeScreenTest {
             screen(sessions = rows, runningSessionIds = setOf("live"))
         }
 
+        compose.onNodeWithTag("sessions").performScrollToNode(hasTestTag("session-live-live"))
         compose.onNodeWithTag("session-live-live", useUnmergedTree = true).assertExists()
         compose.onNodeWithTag("session-live-idle", useUnmergedTree = true).assertDoesNotExist()
     }

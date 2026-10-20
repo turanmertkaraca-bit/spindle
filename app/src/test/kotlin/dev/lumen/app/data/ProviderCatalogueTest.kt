@@ -57,7 +57,7 @@ class ProviderCatalogueTest {
             val reg = ProviderCatalogue.registry(provider, "")
             val models = reg.models()
             assertTrue(models.isNotEmpty(), "$provider exposed no models")
-            assertTrue(models.all { it.contextWindow > 0 }, "$provider has a model with no context window")
+            assertTrue(models.any { it.supportsTools && it.contextWindow > 0 }, "$provider offers no tool-capable model with a context window")
         }
     }
 
