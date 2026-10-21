@@ -114,14 +114,18 @@ fun TerminalScreen(
                         .verticalScroll(scroll)
                         .padding(horizontal = LumenSpacing.page, vertical = 8.dp),
                 ) {
-                    Text(
-                        output,
-                        color = colors.fg,
-                        fontFamily = Mono,
-                        fontSize = LumenType.body,
-                        lineHeight = LumenType.lineBody,
-                        modifier = Modifier.fillMaxWidth().testTag("terminal-output"),
-                    )
+                    Column(Modifier.fillMaxWidth().testTag("terminal-output")) {
+                        for (chunk in textChunks(output, TERMINAL_CHUNK_CHARS)) {
+                            Text(
+                                chunk,
+                                color = colors.fg,
+                                fontFamily = Mono,
+                                fontSize = LumenType.body,
+                                lineHeight = LumenType.lineBody,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
                 }
             }
 
@@ -251,6 +255,7 @@ private fun InputRow(
 private enum class EscapeState { None, Esc, Csi, Osc, OscEsc, Intermediate }
 
 private const val TERMINAL_MAX_CHARS = 200_000
+private const val TERMINAL_CHUNK_CHARS = 4_000
 private const val EARLIER_OUTPUT_DROPPED = "\u2026[earlier output dropped]\u2026\n"
 
 private class TerminalRenderState {
