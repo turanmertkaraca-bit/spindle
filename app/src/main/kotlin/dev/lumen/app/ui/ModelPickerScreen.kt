@@ -62,10 +62,21 @@ internal data class ModelRowData(
     val tag: String,
 )
 
+/**
+ * Model labels from routers read "Vendor: Model" (e.g. "DeepSeek: DeepSeek-V4.1").
+ * Show just the model name so the title is not the vendor repeated and the row
+ * has the width to render it whole.
+ */
+internal fun displayModelLabel(raw: String): String {
+    val trimmed = raw.trim()
+    val sep = trimmed.indexOf(": ")
+    return if (sep in 1 until trimmed.length - 2) trimmed.substring(sep + 2).trim() else trimmed
+}
+
 /** Build a row from a live model of the given provider. */
 internal fun modelRowData(provider: String, m: ModelInfo): ModelRowData = ModelRowData(
     ref = "$provider/${m.id}",
-    label = m.label.ifBlank { m.id },
+    label = displayModelLabel(m.label.ifBlank { m.id }),
     id = m.id,
     providerLabel = null,
     contextWindow = m.contextWindow.takeIf { it > 0 },
