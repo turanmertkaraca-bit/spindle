@@ -1169,24 +1169,24 @@ class AgentLoopTest {
         )
         newSession(store, "ses_cancel_tool")
 
-        val events = mutableListOf<AgentEvent>()
-        val collector = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
-            bus.events.collect { events += it }
-        }
         val job = launch(UnconfinedTestDispatcher(testScheduler)) {
             runCatching { loop.prompt(SessionId("ses_cancel_tool"), "hello", "fake/fake-1") }
         }
         started.await()
         job.cancel()
         job.join()
-        collector.cancel()
 
         val tool = store.messages(SessionId("ses_cancel_tool"))
             .flatMap { it.parts }.filterIsInstance<Part.Tool>().single()
         assertEquals(ToolState.ERROR, tool.state, "an in-flight tool must be aborted on cancellation")
         assertEquals("aborted", tool.result?.output)
 
-        val idle = events.filterIsInstance<AgentEvent.StateChanged>().filter { it.state == SessionState.IDLE }
+        // The tool runs on a real IO worker, so the idle is emitted off the test
+        // thread; read it from the durable replay ring instead of racing a collector.
+        val idle = bus.replayAfter(0)
+            .map { it.event }
+            .filterIsInstance<AgentEvent.StateChanged>()
+            .filter { it.state == SessionState.IDLE }
         assertEquals(1, idle.size, "cancellation must emit exactly one terminal idle")
     }
 

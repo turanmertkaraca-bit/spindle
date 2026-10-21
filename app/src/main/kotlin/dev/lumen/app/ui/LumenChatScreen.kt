@@ -728,7 +728,7 @@ fun LumenChatScreen(
                                 contentPadding = PaddingValues(start = 8.dp, end = 12.dp, top = 12.dp, bottom = 14.dp),
                                 modifier = Modifier.fillMaxSize().testTag("timeline"),
                             ) {
-                                itemsIndexed(display, key = { _, s -> s.id }) { index, step ->
+                                itemsIndexed(display, key = { _, s -> s.id }, contentType = { _, s -> s.kind }) { index, step ->
                                     // Rows in a tool run sit tight (3dp) and draw a
                                     // thin rail joining them; independent rows keep
                                     // the old 10dp breath. Top padding, not the
@@ -3295,7 +3295,7 @@ private fun FilePeekOverlay(
                 state = listState,
                 modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp).testTag("peek-body"),
             ) {
-                itemsIndexed(peek.lines) { index, line ->
+                itemsIndexed(peek.lines, key = { index, _ -> "${peek.path}:$index" }, contentType = { _, _ -> "line" }) { index, line ->
                     val n = index + 1
                     val hl = n == peek.highlight
                     Row(

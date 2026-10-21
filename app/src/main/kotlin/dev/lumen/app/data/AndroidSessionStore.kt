@@ -724,10 +724,22 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
             // these orphans would grow the DB forever.
             runCatching {
                 transaction {
-                    db.execSQL("DELETE FROM parts WHERE session_id NOT IN (SELECT id FROM sessions)")
-                    db.execSQL("DELETE FROM messages WHERE session_id NOT IN (SELECT id FROM sessions)")
-                    db.execSQL("DELETE FROM todos WHERE session_id NOT IN (SELECT id FROM sessions)")
-                    db.execSQL("DELETE FROM snapshots WHERE session_id NOT IN (SELECT id FROM sessions)")
+                    db.execSQL(
+                        "DELETE FROM parts WHERE NOT EXISTS " +
+                            "(SELECT 1 FROM sessions s WHERE s.id = parts.session_id)",
+                    )
+                    db.execSQL(
+                        "DELETE FROM messages WHERE NOT EXISTS " +
+                            "(SELECT 1 FROM sessions s WHERE s.id = messages.session_id)",
+                    )
+                    db.execSQL(
+                        "DELETE FROM todos WHERE NOT EXISTS " +
+                            "(SELECT 1 FROM sessions s WHERE s.id = todos.session_id)",
+                    )
+                    db.execSQL(
+                        "DELETE FROM snapshots WHERE NOT EXISTS " +
+                            "(SELECT 1 FROM sessions s WHERE s.id = snapshots.session_id)",
+                    )
                     // Content-addressed snapshot bodies referenced by no snapshot
                     // row (a session was deleted, or a snapshot was pruned) are
                     // unreachable; drop them so the blob table cannot grow forever.
