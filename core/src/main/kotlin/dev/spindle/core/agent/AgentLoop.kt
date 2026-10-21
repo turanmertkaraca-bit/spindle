@@ -205,6 +205,12 @@ class AgentLoop(
                 currentCoroutineContext().ensureActive()
                 step++
 
+                // Load the durable history once per step and reuse this snapshot
+                // for the overflow decision, the budget check, and the request
+                // build. trim/compact below can rewrite history, so when the
+                // decision is not NONE we reload before continuing.
+                var history = store.messages(sessionId)
+
                 // ---- context policy: trim/compact before we build the request ----
                 val decision = evaluateOverflow(
                     sessionId,
@@ -213,6 +219,7 @@ class AgentLoop(
                     budget,
                     active,
                     system,
+                    history,
                 )
                 if (decision.action != OverflowAction.NONE) {
                     bus.emit(AgentEvent.StateChanged(sessionId, SessionState.RUNNING))
@@ -229,9 +236,14 @@ class AgentLoop(
                     }
                     OverflowAction.NONE -> Unit
                 }
-                budgetCheck(budget, store, sessionId, budgetWarning)
+                // trim/compact just rewrote persisted history, so the snapshot
+                // taken above is stale for the wire request and budget check.
+                // NONE leaves the snapshot valid, so the common path does not reload.
+                if (decision.action != OverflowAction.NONE) {
+                    history = store.messages(sessionId)
+                }
+                budgetCheck(budget, sessionId, budgetWarning, history)
 
-                val history = store.messages(sessionId)
                 val wire = Wire.toWire(history)
                 val specs = if (model.supportsTools) active.specs else emptyList()
 
@@ -397,7 +409,11 @@ class AgentLoop(
                     store.updateMessage(errored)
                     errored.parts.forEach { bus.emit(AgentEvent.PartUpdated(sessionId, errored.id.value, it)) }
                     bus.emit(AgentEvent.Error(sessionId, e.failure.message.ifBlank { "provider error" }))
-                    bus.emit(AgentEvent.UsageUpdated(sessionId, store.messages(sessionId).fold(Usage()) { acc, m -> acc + m.usage }))
+                    // The assistant just written is the only message added since
+                    // the step's snapshot, so its usage is the delta; avoid a
+                    // full re-query of the store on this terminal path.
+                    val failedUsage = history.fold(Usage()) { acc, m -> acc + m.usage } + errored.usage
+                    bus.emit(AgentEvent.UsageUpdated(sessionId, failedUsage))
                     terminalState = SessionState.ERROR
                     bus.emit(AgentEvent.StateChanged(sessionId, SessionState.ERROR))
                     persistState(store, sessionId, SessionState.ERROR)
@@ -420,7 +436,9 @@ class AgentLoop(
                 parts.forEach { bus.emit(AgentEvent.PartUpdated(sessionId, finalized.id.value, it)) }
                 // Bump updatedAt only, preserving the RUNNING state persisted above.
                 store.session(sessionId)?.let { store.updateSession(it.copy(updatedAt = clock())) }
-                val sessionUsage = store.messages(sessionId).fold(Usage()) { acc, m -> acc + m.usage }
+                // The snapshot predates the assistant we just finalized; add its
+                // usage instead of re-querying the whole store every step.
+                val sessionUsage = history.fold(Usage()) { acc, m -> acc + m.usage } + finalized.usage
                 bus.emit(AgentEvent.UsageUpdated(sessionId, sessionUsage))
 
                 if (toolCalls.isEmpty()) break
@@ -573,8 +591,8 @@ class AgentLoop(
         budget: ContextBudget,
         active: ToolRegistry,
         system: String,
+        history: List<Message>,
     ): OverflowDecision {
-        val history = store.messages(sessionId)
         val open = history.any { m ->
             m.parts.filterIsInstance<Part.Tool>()
                 .any { it.state == ToolState.PENDING || it.state == ToolState.RUNNING }
@@ -610,12 +628,12 @@ class AgentLoop(
 
     private suspend fun budgetCheck(
         budget: ContextBudget,
-        store: SessionStore,
         sessionId: SessionId,
         warning: BudgetWarningState,
+        history: List<Message>,
     ) {
         val max = budget.maxCostUsd ?: return
-        val spent = store.messages(sessionId).sumOf { it.usage.costUsd }
+        val spent = history.sumOf { it.usage.costUsd }
         val fraction = if (max > 0.0) spent / max else if (spent > 0.0) 1.0 else 0.0
         if (spent >= max) {
             if (!warning.warned) {

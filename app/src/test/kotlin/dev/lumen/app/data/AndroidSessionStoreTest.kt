@@ -105,6 +105,21 @@ class AndroidSessionStoreTest {
     }
 
     @Test
+    fun `message lookup is scoped to its session`() = runTest {
+        newStore().use { store ->
+            store.createSession(Session(SessionId("ses_a"), "a", "/tmp", 0, 0))
+            store.createSession(Session(SessionId("ses_b"), "b", "/tmp", 0, 0))
+            store.appendMessage(Message(MessageId("scoped"), SessionId("ses_a"), Role.USER, createdAt = 1))
+
+            assertNotNull(store.message(SessionId("ses_a"), MessageId("scoped")))
+            assertNull(
+                store.message(SessionId("ses_b"), MessageId("scoped")),
+                "a message id from another session must not resolve",
+            )
+        }
+    }
+
+    @Test
     fun `child sessions are linked by parentId`() = runTest {
         newStore().use { store ->
             store.createSession(Session(SessionId("p"), "parent", "/tmp", 0, 0))

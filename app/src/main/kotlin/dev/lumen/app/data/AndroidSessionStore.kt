@@ -505,7 +505,10 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
         }
 
     override suspend fun message(sessionId: SessionId, id: MessageId): Message? = locked {
-        val row = db.rawQuery("SELECT * FROM messages WHERE id=?", arrayOf(id.value)).use { c ->
+        val row = db.rawQuery(
+            "SELECT * FROM messages WHERE id=? AND session_id=?",
+            arrayOf(id.value, sessionId.value),
+        ).use { c ->
             if (c.moveToFirst()) c.toMessageRow() else null
         } ?: return@locked null
         row.copy(parts = partsFor(listOf(row.id.value))[row.id.value].orEmpty())
