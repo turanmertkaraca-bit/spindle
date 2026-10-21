@@ -147,15 +147,15 @@ fun MarkdownBody(
         markdown.length <= cap -> {
             val blocks = remember(markdown) { Markdown.parse(markdown) }
             Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind)
+                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind, streaming)
             }
         }
 
         streaming -> {
-            val shown = "\u2026\n" + markdown.takeLast(cap)
+            val shown = remember(markdown, cap) { "\u2026\n" + markdown.takeLast(cap) }
             val blocks = remember(shown) { Markdown.parse(shown) }
             Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind)
+                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind, streaming)
             }
         }
 
@@ -172,7 +172,7 @@ fun MarkdownBody(
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         for (blocks in chunks) {
-                            MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind)
+                            MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind, streaming)
                         }
                     }
                 }
@@ -190,10 +190,10 @@ fun MarkdownBody(
         }
 
         else -> {
-            val shown = "\u2026\n" + markdown.takeLast(cap)
+            val shown = remember(markdown, cap) { "\u2026\n" + markdown.takeLast(cap) }
             val blocks = remember(shown) { Markdown.parse(shown) }
             Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind)
+                MarkdownBlocks(blocks, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind, streaming)
                 Text(
                     "\u2026[${markdown.length - cap} chars hidden] \u00b7 show full",
                     color = colors.accent, fontFamily = MdMono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
@@ -221,13 +221,14 @@ private fun MarkdownBlocks(
     onOpenUrl: (String) -> Unit,
     fileRevision: Int,
     fileKind: ((String) -> FileKind?)?,
+    streaming: Boolean = false,
 ) {
     for (block in blocks) {
         when (block) {
             is MdBlock.Heading -> MarkdownHeading(block, colors)
-            is MdBlock.Paragraph -> MarkdownParagraph(block.spans, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind)
-            is MdBlock.Bullet -> MarkdownList(block.items, colors, ordered = false, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile, onOpenUrl = onOpenUrl, fileRevision = fileRevision, fileKind = fileKind)
-            is MdBlock.Ordered -> MarkdownList(block.items, colors, ordered = true, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile, onOpenUrl = onOpenUrl, fileRevision = fileRevision, fileKind = fileKind)
+            is MdBlock.Paragraph -> MarkdownParagraph(block.spans, colors, cwd, exists, touchedPaths, onOpenFile, onOpenUrl, fileRevision, fileKind, streaming)
+            is MdBlock.Bullet -> MarkdownList(block.items, colors, ordered = false, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile, onOpenUrl = onOpenUrl, fileRevision = fileRevision, fileKind = fileKind, streaming = streaming)
+            is MdBlock.Ordered -> MarkdownList(block.items, colors, ordered = true, cwd = cwd, exists = exists, touchedPaths = touchedPaths, onOpenFile = onOpenFile, onOpenUrl = onOpenUrl, fileRevision = fileRevision, fileKind = fileKind, streaming = streaming)
             is MdBlock.Code -> MarkdownCode(block, colors)
         }
     }
@@ -265,6 +266,7 @@ private fun MarkdownParagraph(
     onOpenUrl: (String) -> Unit,
     fileRevision: Int,
     fileKind: ((String) -> FileKind?)?,
+    streaming: Boolean = false,
 ) {
     // Resolving references stats the filesystem, so memoise the annotated run on
     // everything that can change its result — the workspace revision included,
@@ -275,8 +277,8 @@ private fun MarkdownParagraph(
     val gate by rememberUpdatedState(exists)
     val kindGate by rememberUpdatedState(fileKind)
     val hasKind = fileKind != null
-    val annotated = remember(spans, colors, cwd, touchedPaths, fileRevision, hasKind) {
-        markdownAnnotated(spans, colors, cwd, gate, touchedPaths, kindGate)
+    val annotated = remember(spans, colors, cwd, touchedPaths, fileRevision, hasKind, streaming) {
+        markdownAnnotated(spans, colors, cwd, gate, touchedPaths, kindGate, streaming)
     }
     LinkedText(
         text = annotated,
@@ -300,14 +302,15 @@ private fun MarkdownList(
     onOpenUrl: (String) -> Unit,
     fileRevision: Int,
     fileKind: ((String) -> FileKind?)?,
+    streaming: Boolean = false,
 ) {
     val gate by rememberUpdatedState(exists)
     val kindGate by rememberUpdatedState(fileKind)
     val hasKind = fileKind != null
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         for ((index, item) in items.withIndex()) {
-            val annotated = remember(item, colors, cwd, touchedPaths, fileRevision, hasKind) {
-                markdownAnnotated(item, colors, cwd, gate, touchedPaths, kindGate)
+            val annotated = remember(item, colors, cwd, touchedPaths, fileRevision, hasKind, streaming) {
+                markdownAnnotated(item, colors, cwd, gate, touchedPaths, kindGate, streaming)
             }
             Row(Modifier.fillMaxWidth()) {
                 Text(
@@ -416,8 +419,8 @@ private fun LinkedText(
     lineHeight: TextUnit = 21.sp,
     onOpenUrl: (String) -> Unit = {},
 ) {
-    val refs = text.getStringAnnotations(FILE_TAG, 0, text.length)
-    val urls = text.getStringAnnotations(URL_TAG, 0, text.length)
+    val refs = remember(text) { text.getStringAnnotations(FILE_TAG, 0, text.length) }
+    val urls = remember(text) { text.getStringAnnotations(URL_TAG, 0, text.length) }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
 
     fun urlAt(offset: Int): String? =
@@ -499,6 +502,7 @@ private fun markdownAnnotated(
     exists: (String) -> Boolean,
     touchedPaths: Set<String>,
     fileKind: ((String) -> FileKind?)? = null,
+    streaming: Boolean = false,
 ): AnnotatedString = buildAnnotatedString {
     for (span in spans) {
         val spanStart = length
@@ -546,7 +550,7 @@ private fun markdownAnnotated(
             }
         }
 
-        if (cwd.isEmpty() || span.text.isEmpty()) continue
+        if (streaming || cwd.isEmpty() || span.text.isEmpty()) continue
         val kind = fileKind
         val refs = if (kind != null) {
             tag(ReferenceResolver.resolveKinds(span.text, cwd) { kind(it) }, touchedPaths)

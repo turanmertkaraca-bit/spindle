@@ -151,6 +151,9 @@ import kotlinx.coroutines.withContext
 
 private val Mono = FontFamily.Monospace
 
+/** Hoisted so a per-composition `\\s+` replace never recompiles the pattern. */
+private val WhitespaceRun = Regex("\\s+")
+
 /** Fling friction: higher bleeds energy faster, so a flick never races away. */
 private const val FLING_FRICTION = 3.0f
 
@@ -1112,7 +1115,11 @@ private fun MessageRow(
                         WindowedText(step.body, colors)
                     }
                 } else if (step.running && step.body.isBlank()) {
-                    Text("thinking…", color = colors.water.copy(alpha = 0.5f + 0.5f * pulse()), fontFamily = Mono, fontSize = 14.sp)
+                    // The blinking alpha is read only in the layer's draw phase, so
+                    // the pulse never recomposes this bubble each frame.
+                    Box(modifier = Modifier.graphicsLayer { alpha = 0.5f + 0.5f * pulse() }) {
+                        Text("thinking…", color = colors.water, fontFamily = Mono, fontSize = 14.sp)
+                    }
                 } else {
                     val body = step.body.ifBlank { step.summary }
                     // Assistant prose is markdown; the user's own words and every
@@ -1792,7 +1799,7 @@ private fun ChildTreeRow(child: UiStep, depth: Int, colors: LumenColors, pulse: 
         )
         Spacer(Modifier.width(7.dp))
         Text(
-            child.summary.ifBlank { child.body }.replace(Regex("\\s+"), " ").trim(),
+            child.summary.ifBlank { child.body }.replace(WhitespaceRun, " ").trim(),
             color = if (child.failed) colors.danger() else colors.faint,
             fontFamily = Mono, fontSize = 10.5.sp,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -1922,9 +1929,10 @@ private fun TodoBoard(todos: List<TodoItem>, colors: LumenColors, pulse: () -> F
                     .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
             ) {
                 todos.forEachIndexed { i, todo ->
+                    val inProgress = todo.status == TodoStatus.IN_PROGRESS
                     val (glyph, tint) = when (todo.status) {
                         TodoStatus.PENDING -> "\u25cb" to colors.faint
-                        TodoStatus.IN_PROGRESS -> "\u25d0" to colors.water.copy(alpha = 0.35f + 0.65f * pulse())
+                        TodoStatus.IN_PROGRESS -> "\u25d0" to colors.water
                         TodoStatus.DONE -> "\u2713" to colors.spectrum.getOrElse(3) { colors.water }
                         TodoStatus.CANCELLED -> "\u2715" to colors.faint
                     }
@@ -1935,7 +1943,16 @@ private fun TodoBoard(todos: List<TodoItem>, colors: LumenColors, pulse: () -> F
                             .testTag("todo-item-$i"),
                         verticalAlignment = Alignment.Top,
                     ) {
-                        Text(glyph, color = tint, fontFamily = Mono, fontSize = 12.sp)
+                        // The in-progress glyph blinks via the draw phase only; the
+                        // pulse no longer recomposes the whole board each frame.
+                        Text(
+                            glyph, color = tint, fontFamily = Mono, fontSize = 12.sp,
+                            modifier = if (inProgress) {
+                                Modifier.graphicsLayer { alpha = 0.35f + 0.65f * pulse() }
+                            } else {
+                                Modifier
+                            },
+                        )
                         Spacer(Modifier.width(9.dp))
                         Text(
                             todo.content,
@@ -2237,7 +2254,7 @@ private fun ErrorNotice(message: String, colors: LumenColors, onEditKey: (() -> 
 }
 
 private fun oneLine(s: String): String =
-    s.replace(Regex("\\s+"), " ").trim().let { if (it.length > 160) it.take(160) + "…" else it }
+    s.replace(WhitespaceRun, " ").trim().let { if (it.length > 160) it.take(160) + "…" else it }
 
 /**
  * A compact summary of the files the agent changed this run, pinned above the
@@ -3144,6 +3161,14 @@ private val HtmlPath = Regex("[A-Za-z0-9_./-]+\\.html?\\b")
  * External URLs are skipped: only workspace-relative files can open in canvas.
  */
 private fun firstHtmlPath(step: UiStep): String? {
+    // Cheap pre-filter: only a ".htm"/".html" token can match below, so skip the
+    // concatenation + regex scan entirely when nothing in the row looks like one.
+    if (!step.body.contains(".htm") &&
+        !step.summary.contains(".htm") &&
+        step.rows.none { it.second.contains(".htm") }
+    ) {
+        return null
+    }
     val hay = buildString {
         append(step.body)
         append('\n').append(step.summary)

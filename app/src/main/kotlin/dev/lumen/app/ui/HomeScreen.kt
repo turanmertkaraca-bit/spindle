@@ -332,6 +332,13 @@ fun HomeScreen(
         if (onImport != null) add(TopMenuAction("Import session", "home-import", onImport))
     }
 
+    val distinctHits = remember(search) {
+        search.orEmpty()
+            .map { hit -> hit to (hit.sessionId.value + ":" + hit.messageId) }
+            .distinctBy { it.second }
+    }
+    val distinctSessions = remember(sessions) { sessions.distinctBy { it.id } }
+
     Column(
         modifier
             .fillMaxSize()
@@ -478,7 +485,9 @@ fun HomeScreen(
                         }
                     }
 
-                    val filterTags = (availableTags + tagFilter).distinct().sorted()
+                    val filterTags = remember(availableTags, tagFilter) {
+                        (availableTags + tagFilter).distinct().sorted()
+                    }
                     if (filterTags.isNotEmpty()) {
                         Spacer(Modifier.height(LumenSpacing.md))
                         Row(
@@ -605,9 +614,9 @@ fun HomeScreen(
                     }
                 } else {
                     items(
-                        search.distinctBy { it.sessionId.value + ":" + it.messageId },
-                        key = { it.sessionId.value + ":" + it.messageId },
-                    ) { hit ->
+                        distinctHits,
+                        key = { it.second },
+                    ) { (hit, _) ->
                         SearchHitRow(colors, hit, onOpen)
                     }
                 }
@@ -628,7 +637,7 @@ fun HomeScreen(
                     }
                 }
             } else {
-                items(sessions.distinctBy { it.id }, key = { it.id }) { s ->
+                items(distinctSessions, key = { it.id }) { s ->
                     SessionCard(
                         colors = colors,
                         session = s,
