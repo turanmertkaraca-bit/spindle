@@ -1561,7 +1561,7 @@ private fun ToolCardFrame(
                 summary,
                 color = colors.dim,
                 fontFamily = Mono, fontSize = 10.5.sp,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f).testTag("tools-summary"),
             )
             Spacer(Modifier.width(8.dp))
@@ -1802,7 +1802,7 @@ private fun ChildTreeRow(child: UiStep, depth: Int, colors: LumenColors, pulse: 
             child.summary.ifBlank { child.body }.replace(WhitespaceRun, " ").trim(),
             color = if (child.failed) colors.danger() else colors.faint,
             fontFamily = Mono, fontSize = 10.5.sp,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            maxLines = 2, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
         if (child.failed) {

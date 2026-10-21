@@ -80,10 +80,16 @@ internal fun modelRowData(provider: String, m: ModelInfo): ModelRowData = ModelR
     id = m.id,
     providerLabel = null,
     contextWindow = m.contextWindow.takeIf { it > 0 },
-    cost = buildList {
-        if (m.inputCostPerM > 0.0) add(String.format(Locale.US, "%.2f", m.inputCostPerM))
-        if (m.outputCostPerM > 0.0) add(String.format(Locale.US, "%.2f", m.outputCostPerM))
-    }.takeIf { it.isNotEmpty() }?.joinToString("/"),
+    cost = if (m.inputCostPerM > 0.0 || m.outputCostPerM > 0.0) {
+        buildList {
+            if (m.inputCostPerM > 0.0) add(String.format(Locale.US, "%.2f", m.inputCostPerM))
+            if (m.outputCostPerM > 0.0) add(String.format(Locale.US, "%.2f", m.outputCostPerM))
+        }.joinToString("/")
+    } else {
+        // A model that advertises no price is free, not "unknown": draw the word
+        // so the blank cost slot never reads as a bug or a fetched-nothing state.
+        "free"
+    },
     tag = "model-option-${m.id}",
 )
 
@@ -126,7 +132,9 @@ internal fun ModelRow(
                 color = if (selected) colors.fg else colors.dim,
                 fontFamily = LumenFonts.value,
                 fontSize = LumenType.bodyLarge,
-                maxLines = 1,
+                // Let a long display name wrap rather than clip to "DeepSeek V4.1
+                // Fl…": the row grows a line instead of hiding the model.
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
             val sub = data.providerLabel
