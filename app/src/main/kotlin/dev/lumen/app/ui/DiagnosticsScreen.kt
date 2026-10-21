@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -191,7 +191,7 @@ fun DiagnosticsScreen(
                     .padding(horizontal = 12.dp, vertical = 10.dp)
                     .testTag("diag-log"),
             ) {
-                itemsIndexed(diag) { _, line ->
+                items(diag, key = { line -> "${line.at}:${line.text}" }) { line ->
                     Row(
                         Modifier
                             .fillMaxWidth()
