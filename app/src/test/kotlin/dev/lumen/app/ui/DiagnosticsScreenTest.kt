@@ -66,7 +66,7 @@ class DiagnosticsScreenTest {
         compose.setContent {
             DiagnosticsScreen(
                 colors = LumenColors.Light,
-                diag = listOf(DiagLine(1_700_000_000_000, "run start: hello"), DiagLine(1_700_000_001_000, "tool: bash")),
+                diag = listOf(DiagLine(1, 1_700_000_000_000, "run start: hello"), DiagLine(2, 1_700_000_001_000, "tool: bash")),
                 linux = LinuxEnvironmentState(),
                 onInstallDebian = {},
                 onRefreshLinux = {},

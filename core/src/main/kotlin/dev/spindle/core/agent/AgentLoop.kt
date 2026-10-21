@@ -242,7 +242,7 @@ class AgentLoop(
                 if (decision.action != OverflowAction.NONE) {
                     history = store.messages(sessionId)
                 }
-                budgetCheck(budget, sessionId, budgetWarning, history)
+                budgetCheck(budget, sessionId, budgetWarning, history, decision.estimatedTokens)
 
                 val wire = Wire.toWire(history)
                 val specs = if (model.supportsTools) active.specs else emptyList()
@@ -631,7 +631,30 @@ class AgentLoop(
         sessionId: SessionId,
         warning: BudgetWarningState,
         history: List<Message>,
+        estimatedInputTokens: Int,
     ) {
+        // Input-token ceiling. Null or non-positive means unlimited, so a run
+        // that never sets it is byte-for-byte unchanged. Mirrors the cost path
+        // below: warn once, then stop the run with the same terminal throw.
+        budget.maxInputTokens?.takeIf { it > 0 }?.let { maxInput ->
+            if (estimatedInputTokens >= maxInput) {
+                if (!warning.warned) {
+                    bus.emit(
+                        AgentEvent.BudgetWarning(
+                            sessionId,
+                            estimatedInputTokens.toDouble(),
+                            maxInput.toDouble(),
+                            estimatedInputTokens.toDouble() / maxInput.toDouble(),
+                        ),
+                    )
+                    warning.warned = true
+                }
+                throw IllegalStateException(
+                    "session input token budget exceeded: $estimatedInputTokens >= $maxInput",
+                )
+            }
+        }
+
         val max = budget.maxCostUsd ?: return
         val spent = history.sumOf { it.usage.costUsd }
         val fraction = if (max > 0.0) spent / max else if (spent > 0.0) 1.0 else 0.0
@@ -945,7 +968,7 @@ class AgentLoop(
 
     private fun approvalPattern(input: JsonObject): String? {
         (input["command"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }?.let { command ->
-            return command.trim().split(Regex("\\s+")).firstOrNull()
+            return command.trim().split(WHITESPACE).firstOrNull()
         }
         (input["path"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }?.let { return it }
         return null

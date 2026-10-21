@@ -864,9 +864,9 @@ class ScreenshotTest {
     """.trimIndent()
 
     private val diagLines = listOf(
-        DiagLine(1_700_000_000_000, "run start: make the timeline a spine"),
-        DiagLine(1_700_000_001_200, "tool: read TimelineLayout.kt"),
-        DiagLine(1_700_000_004_400, "run end: ok"),
+        DiagLine(1, 1_700_000_000_000, "run start: make the timeline a spine"),
+        DiagLine(2, 1_700_000_001_200, "tool: read TimelineLayout.kt"),
+        DiagLine(3, 1_700_000_004_400, "run end: ok"),
     )
 
     /** Files: populated, an open editor, empty and loading, in both themes. */

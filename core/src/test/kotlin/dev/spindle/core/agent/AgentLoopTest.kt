@@ -501,6 +501,42 @@ class AgentLoopTest {
     }
 
     @Test
+    fun `over-input-token-budget emits a warning at or above 1_0 then throws`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(ProviderEvent.TextDelta("unused"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(emptyList()),
+            store = store,
+            bus = bus,
+        )
+        newSession(store, "ses_over_tokens")
+
+        val events = mutableListOf<AgentEvent>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            bus.events.collect { events += it }
+        }
+        val error = assertFailsWith<IllegalStateException> {
+            loop.prompt(
+                SessionId("ses_over_tokens"),
+                "go",
+                "fake/fake-1",
+                budget = ContextBudget(maxInputTokens = 1),
+            )
+        }
+        job.cancel()
+
+        assertTrue(error.message!!.contains("input token budget exceeded"))
+        val warnings = events.filterIsInstance<AgentEvent.BudgetWarning>()
+        assertEquals(1, warnings.size)
+        assertTrue(warnings.single().fraction >= 1.0)
+        assertEquals(SessionState.ERROR, store.session(SessionId("ses_over_tokens"))!!.state)
+    }
+
+    @Test
     fun `session state is RUNNING during a prompt and IDLE after it`() = runTest {
         val provider = ScriptedProvider(
             listOf(

@@ -56,4 +56,12 @@ class ApprovalRulesTest {
         assertTrue(ApprovalRules.matches("", ""))
         assertFalse(ApprovalRules.matches("", "x"))
     }
+
+    @Test
+    fun `repeated matches for the same pattern stay consistent`() {
+        repeat(3) {
+            assertTrue(ApprovalRules.matches("src/**/*.kt", "src/a/b/Main.kt"))
+            assertFalse(ApprovalRules.matches("src/**/*.kt", "src/a/b/Main.java"))
+        }
+    }
 }

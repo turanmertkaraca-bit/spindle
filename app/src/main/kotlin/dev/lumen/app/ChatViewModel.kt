@@ -86,6 +86,7 @@ import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.attribute.BasicFileAttributes
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /** One row on the home screen. */
 data class SessionRow(
@@ -194,8 +195,8 @@ data class StorageReport(
     val scanning: Boolean,
 )
 
-/** One timestamped diagnostics line. [at] is epoch milliseconds. */
-data class DiagLine(val at: Long, val text: String)
+/** One timestamped diagnostics line. [at] is epoch milliseconds. [seq] is a process-unique id. */
+data class DiagLine(val seq: Long, val at: Long, val text: String)
 
 /** Alpine/Debian readiness plus the in-flight install state for the UI. */
 data class LinuxEnvironmentState(
@@ -933,6 +934,7 @@ class ChatViewModel(
     /** Diagnostics are appended from several threads, so the ring is guarded. */
     private val diagLines = ArrayDeque<DiagLine>()
     private val diagLock = Any()
+    private val diagSeq = AtomicLong(0L)
 
     init {
         RunControl.stopHandler = { stop() }
@@ -965,7 +967,7 @@ class ChatViewModel(
     /** Append one diagnostics line (name/timing only — never tool arguments). */
     private fun diag(text: String) {
         val snapshot = synchronized(diagLock) {
-            diagLines.addLast(DiagLine(System.currentTimeMillis(), text))
+            diagLines.addLast(DiagLine(diagSeq.incrementAndGet(), System.currentTimeMillis(), text))
             while (diagLines.size > MAX_DIAG_LINES) diagLines.removeFirst()
             diagLines.toList()
         }

@@ -26,6 +26,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -63,6 +64,7 @@ fun TerminalScreen(
 ) {
     val renderer = remember { TerminalRenderState() }
     val output = remember(lines) { renderer.render(lines) }
+    val chunks = remember(output) { textChunks(output, TERMINAL_CHUNK_CHARS) }
     val scroll = rememberScrollState()
 
     // The "reader at bottom" idea, shared with the chat timeline: only follow
@@ -115,7 +117,7 @@ fun TerminalScreen(
                         .padding(horizontal = LumenSpacing.page, vertical = 8.dp),
                 ) {
                     Column(Modifier.fillMaxWidth().testTag("terminal-output")) {
-                        for (chunk in textChunks(output, TERMINAL_CHUNK_CHARS)) {
+                        for (chunk in chunks) {
                             Text(
                                 chunk,
                                 color = colors.fg,
@@ -174,7 +176,7 @@ private fun InputRow(
     onInterrupt: () -> Unit,
     onRestart: (() -> Unit)?,
 ) {
-    var draft by remember { mutableStateOf("") }
+    var draft by rememberSaveable { mutableStateOf("") }
     // The field stays usable after the shell exits, so the user is never locked
     // out; when it is not running the primary action restarts the shell instead.
     val canSend = draft.isNotBlank()

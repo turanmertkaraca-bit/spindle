@@ -34,8 +34,9 @@ import androidx.compose.ui.unit.sp
 import dev.lumen.app.DiagLine
 import dev.lumen.app.LinuxEnvironmentState
 import kotlinx.coroutines.delay
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 private val Mono = FontFamily.Monospace
@@ -191,7 +192,7 @@ fun DiagnosticsScreen(
                     .padding(horizontal = 12.dp, vertical = 10.dp)
                     .testTag("diag-log"),
             ) {
-                items(diag, key = { line -> "${line.at}:${line.text}" }) { line ->
+                items(diag, key = { it.seq }) { line ->
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -240,6 +241,7 @@ private fun EnvRow(colors: LumenColors, label: String, value: String, ok: Boolea
     }
 }
 
-private fun stamp(at: Long): String = TIMESTAMP.format(Date(at))
+private fun stamp(at: Long): String = TIMESTAMP.format(Instant.ofEpochMilli(at))
 
-private val TIMESTAMP = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+private val TIMESTAMP: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("HH:mm:ss.SSS", Locale.US).withZone(ZoneId.systemDefault())

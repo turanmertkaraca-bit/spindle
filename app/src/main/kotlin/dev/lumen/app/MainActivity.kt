@@ -234,15 +234,18 @@ class MainActivity : ComponentActivity() {
 
             // Pull the live catalogue once on start; the embedded snapshot is
             // already seeded in state so the UI is never empty offline.
-            LaunchedEffect(Unit) { viewModel.refreshModels() }
+            LaunchedEffect(Unit) { if (!booted) { viewModel.refreshModels() } }
             // Keep the launcher icon in step with the chosen palette (the icon
             // tracks the theme, never a separate picker).
             LaunchedEffect(state.palette) { syncLauncherAlias(state.palette) }
             // Boot housekeeping once per launch; idempotent and never fatal.
             // The staged progress keeps the boot screen honest on a slow start.
+            // Guarded on `booted` so a configuration change does not re-run it.
             LaunchedEffect(Unit) {
-                bootMessage = viewModel.runStartupMaintenance { bootMessage = it }
-                booted = true
+                if (!booted) {
+                    bootMessage = viewModel.runStartupMaintenance { bootMessage = it }
+                    booted = true
+                }
             }
 
             // A completion-notification tap asks us to open one session. The id
