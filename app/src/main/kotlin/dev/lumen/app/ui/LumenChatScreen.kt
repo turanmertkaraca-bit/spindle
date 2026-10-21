@@ -72,6 +72,7 @@ import androidx.compose.material3.Text
 import dev.lumen.app.RevertUndo
 import kotlin.math.roundToInt
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -199,6 +200,7 @@ private fun LumenColors.danger(): Color = if (dark) Color(0xFFF87171) else Color
  * pastel so it reads calm rather than neon. Contrast was checked against the
  * base (foreground >16:1, spectrum >9:1 dark / >5:1 light).
  */
+@Immutable
 data class LumenColors(
     val bg: Color,
     val surface: Color,
