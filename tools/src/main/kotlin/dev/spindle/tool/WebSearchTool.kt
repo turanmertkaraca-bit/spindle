@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URI
@@ -147,6 +148,14 @@ class WebSearchTool(
 private const val HTML_URL = "https://html.duckduckgo.com/html/"
 private const val LITE_URL = "https://lite.duckduckgo.com/lite/"
 
+/**
+ * A single shared OkHttp client for every search. Building one per call would
+ * leak a connection pool and its dispatcher/thread pool on each invocation.
+ * Lazily created so import alone is free, and reusing it keeps connections warm
+ * across searches.
+ */
+private val searchHttpClient: OkHttpClient by lazy { defaultHttpClient(followRedirects = true) }
+
 /** A real browser UA; DuckDuckGo bot-walls the default/curl-style agents. */
 private const val BROWSER_USER_AGENT =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -162,7 +171,7 @@ private const val BROWSER_USER_AGENT =
  */
 internal suspend fun fetchSearchHtml(uri: URI): String = withContext(Dispatchers.IO) {
     val form = uri.rawQuery.orEmpty()
-    val client = defaultHttpClient(followRedirects = true)
+    val client = searchHttpClient
     val errors = mutableListOf<String>()
 
     fun read(response: okhttp3.Response, what: String): String? {

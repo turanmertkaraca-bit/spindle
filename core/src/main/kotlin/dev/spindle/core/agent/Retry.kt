@@ -3,6 +3,18 @@ package dev.spindle.core.agent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
+/** The 400/401/403/404 family; a match marks the failure terminal. */
+private val STATUS_4XX = Regex("\\b40[0134]\\b")
+
+/** HTTP 429: too many requests. */
+private val STATUS_429 = Regex("\\b429\\b")
+
+/** Any HTTP 5xx status embedded in an adapter Failure message. */
+private val STATUS_5XX = Regex("\\b5\\d\\d\\b")
+
+/** The bare word "eof": a truncated/aborted stream. */
+private val WORD_EOF = Regex("\\beof\\b")
+
 /** Classifies a provider/network failure as retryable or terminal. */
 object Retry {
     fun isRetryable(message: String): Boolean = isRetryable(null, null, message)
@@ -31,15 +43,15 @@ object Retry {
         // Explicit non-retryable signals win over the retryable markers: a 500
         // buried in "invalid api key (500)" or a 512 in "context length 512
         // exceeded" must not be retried.
-        if (Regex("\\b40[0134]\\b").containsMatchIn(m)) return false
+        if (STATUS_4XX.containsMatchIn(m)) return false
         if ("invalid api key" in m) return false
         if ("unauthorized" in m) return false
         if ("context length" in m) return false
         if ("content filter" in m) return false
         return when {
             // HTTP-ish status markers the adapters embed in Failure messages.
-            Regex("\\b429\\b").containsMatchIn(m) -> true
-            Regex("\\b5\\d\\d\\b").containsMatchIn(m) -> true
+            STATUS_429.containsMatchIn(m) -> true
+            STATUS_5XX.containsMatchIn(m) -> true
             "timeout" in m -> true
             "timed out" in m -> true
             "connection reset" in m -> true
@@ -47,7 +59,7 @@ object Retry {
             "temporarily unavailable" in m -> true
             "overloaded" in m -> true
             "rate limit" in m -> true
-            Regex("\\beof\\b").containsMatchIn(m) -> true
+            WORD_EOF.containsMatchIn(m) -> true
             else -> false
         }
     }
@@ -81,7 +93,7 @@ object Retry {
             "i/o error" in m -> true
             "timeout" in m -> true
             "timed out" in m -> true
-            Regex("\\beof\\b").containsMatchIn(m) -> true
+            WORD_EOF.containsMatchIn(m) -> true
             else -> false
         }
     }

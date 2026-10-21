@@ -71,6 +71,9 @@ class GrepTool : Tool {
         // once per match. The walk visits a file's matches contiguously, so no
         // re-sorting is needed.
         val matches = ArrayList<GrepMatch>()
+        // One mutable view reused for every scanned line: resetting it avoids
+        // allocating (and boxing the access counter) per line.
+        val boundedLine = BoundedLine()
         var truncated = false
         var visited = 0
         try {
@@ -107,7 +110,7 @@ class GrepTool : Tool {
                             while (true) {
                                 val line = reader.readLine() ?: break
                                 lineNumber++
-                                if (containsMatch(regex, line)) {
+                                if (containsMatch(regex, line, boundedLine)) {
                                     matches.add(
                                         GrepMatch(normalized.displayPath(cwd), lineNumber, capLine(line)),
                                     )
@@ -174,28 +177,45 @@ class GrepTool : Tool {
         if (line.length <= Limits.GREP_MAX_LINE_CHARS) line
         else line.substring(0, Limits.GREP_MAX_LINE_CHARS) + "…"
 
-    /**
-     * Run [regex] against [line] with a hard budget on the number of character
-     * accesses. Catastrophic backtracking does exponential `charAt` work, so the
-     * budget aborts it quickly while leaving linear/near-linear patterns
-     * untouched. This is the pure-JDK equivalent of a regex timeout and cannot
-     * hang the tool.
-     */
-    private fun containsMatch(regex: Regex, line: String): Boolean {
-        val budget = Limits.GREP_MATCH_BUDGET_BASE + Limits.GREP_MATCH_BUDGET_PER_CHAR * line.length
-        var accesses = 0L
-        val bounded = object : CharSequence {
-            override val length: Int get() = line.length
-            override fun get(index: Int): Char {
-                if (++accesses > budget) throw RegexBudgetExceeded()
-                return line[index]
-            }
+/**
+ * Run [regex] against [line] with a hard budget on the number of character
+ * accesses. Catastrophic backtracking does exponential `charAt` work, so the
+ * budget aborts it quickly while leaving linear/near-linear patterns
+ * untouched. This is the pure-JDK equivalent of a regex timeout and cannot
+ * hang the tool. [bounded] is reset in place so no per-line wrapper is
+ * allocated.
+ */
+private fun containsMatch(regex: Regex, line: String, bounded: BoundedLine): Boolean {
+    bounded.reset(line)
+    return regex.containsMatchIn(bounded)
+}
 
-            override fun subSequence(startIndex: Int, endIndex: Int): CharSequence =
-                line.subSequence(startIndex, endIndex)
-        }
-        return regex.containsMatchIn(bounded)
+/**
+ * A [CharSequence] over the current line that throws [RegexBudgetExceeded] once
+ * more than the per-line budget of [get] accesses is made. Mutable and reused
+ * so scanning a file does not allocate one wrapper per line.
+ */
+private class BoundedLine : CharSequence {
+    private var line: CharSequence = ""
+    private var budget = 0L
+    private var accesses = 0L
+
+    fun reset(source: CharSequence) {
+        line = source
+        budget = Limits.GREP_MATCH_BUDGET_BASE + Limits.GREP_MATCH_BUDGET_PER_CHAR * source.length
+        accesses = 0L
     }
 
-    private class RegexBudgetExceeded : RuntimeException()
+    override val length: Int get() = line.length
+
+    override fun get(index: Int): Char {
+        if (++accesses > budget) throw RegexBudgetExceeded()
+        return line[index]
+    }
+
+    override fun subSequence(startIndex: Int, endIndex: Int): CharSequence =
+        line.subSequence(startIndex, endIndex)
+}
+
+private class RegexBudgetExceeded : RuntimeException()
 }

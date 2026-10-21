@@ -34,6 +34,10 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 import okio.Buffer
+import okio.BufferedSource
+import okio.Source
+import okio.Timeout
+import okio.buffer
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.test.AfterTest
@@ -859,6 +863,41 @@ class OpenAiProviderTest {
         // é is two UTF-8 bytes: the limit is measured in bytes, not chars.
         assertFailsWith<IOException> { Buffer().writeUtf8("ééé\n").readBoundedUtf8Line(4) }
     }
+
+    @Test
+    fun `bounded line reader scans a large line delivered in tiny chunks once`() {
+        val line = "x".repeat(65_536)
+        val source = chunkedSource((line + "\nshort\n").toByteArray(), chunk = 1)
+
+        assertEquals(line, source.readBoundedUtf8Line())
+        assertEquals("short", source.readBoundedUtf8Line())
+        assertNull(source.readBoundedUtf8Line())
+    }
+
+    @Test
+    fun `bounded line reader returns a large unterminated eof line delivered in tiny chunks`() {
+        val line = "y".repeat(65_536)
+        val source = chunkedSource(line.toByteArray(), chunk = 1)
+
+        assertEquals(line, source.readBoundedUtf8Line())
+        assertNull(source.readBoundedUtf8Line())
+    }
+
+    private fun chunkedSource(data: ByteArray, chunk: Int): BufferedSource = object : Source {
+        private var pos = 0
+
+        override fun read(sink: Buffer, byteCount: Long): Long {
+            if (pos >= data.size) return -1L
+            val n = minOf(chunk.toLong(), byteCount, (data.size - pos).toLong()).toInt()
+            sink.write(data, pos, n)
+            pos += n
+            return n.toLong()
+        }
+
+        override fun timeout(): Timeout = Timeout.NONE
+
+        override fun close() {}
+    }.buffer()
 
     @Test
     fun `oversized sse line fails the turn instead of buffering without bound`() = runTest {

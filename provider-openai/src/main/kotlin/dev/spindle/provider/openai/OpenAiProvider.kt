@@ -78,22 +78,37 @@ internal const val MAX_SSE_LINE_BYTES: Long = 16L * 1024 * 1024
  * final unterminated line at EOF (and null once the stream is exhausted).
  */
 internal fun BufferedSource.readBoundedUtf8Line(maxBytes: Long = MAX_SSE_LINE_BYTES): String? {
+    // Only newly-buffered bytes are scanned each iteration: a long line arriving
+    // in many small chunks would otherwise be rescanned from position 0 on every
+    // read, costing O(n^2) for one line. Nothing is consumed before the newline
+    // is found, so a running offset stays valid across `request` calls.
+    var scanned = 0L
     while (true) {
-        val newline = indexOf('\n'.code.toByte())
+        val newline = buffer.indexOf('\n'.code.toByte(), scanned)
         if (newline != -1L) {
             if (newline > maxBytes) throw IOException("SSE line exceeds $maxBytes bytes")
             return readUtf8Line()
         }
-        // No newline buffered: if the buffered bytes already exceed the cap the
-        // current (unterminated) line is over the limit — fail before reading more.
+        // No newline in the scanned region: if the buffered bytes already exceed
+        // the cap the current (unterminated) line is over the limit — fail before
+        // reading more.
         if (buffer.size > maxBytes) throw IOException("SSE line exceeds $maxBytes bytes")
+        val buffered = buffer.size
         // Force an actual read by asking for one byte beyond what is buffered:
         // request(1) would report success forever while bytes sit unconsumed and
         // contain no newline. A false result here means a true end-of-stream.
-        if (!request(buffer.size + 1)) {
-            if (buffer.size == 0L) return null
+        if (!request(buffered + 1)) {
+            if (buffered == 0L) return null
+            // A failed request can still buffer a final partial chunk, so scan
+            // the bytes since the last miss before concluding there is no newline.
+            val last = buffer.indexOf('\n'.code.toByte(), scanned)
+            if (last != -1L) {
+                if (last > maxBytes) throw IOException("SSE line exceeds $maxBytes bytes")
+                return readUtf8Line()
+            }
             return readUtf8()
         }
+        scanned = buffered
     }
 }
 
