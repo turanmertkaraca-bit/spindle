@@ -35,6 +35,7 @@ import dev.spindle.core.tool.ToolOutcome
 import dev.spindle.core.tool.ToolProgress
 import dev.spindle.core.tool.ToolRegistry
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -742,12 +743,18 @@ class AgentLoop(
                 policyApproved = policyApproved,
                 subagentRunner = { spec -> runSubagent(sessionId, spec, agent) },
             )
-            // The loop is the single owner of the per-tool deadline: `0` means
-            // the tool manages its own timeout, so never double-wrap it.
-            if (tool.timeoutMs <= 0L) {
-                tool.run(input, ctx)
-            } else {
-                withTimeout(tool.timeoutMs) { tool.run(input, ctx) }
+            // Tool bodies do synchronous blocking I/O (java.nio.file,
+            // Process.waitFor); run them off the agent dispatcher so a repo-wide
+            // grep or a long bash cannot occupy an agent worker. The whole
+            // deadline-wrapped block runs on IO so the timer measures real time.
+            withContext(Dispatchers.IO) {
+                // The loop is the single owner of the per-tool deadline: `0` means
+                // the tool manages its own timeout, so never double-wrap it.
+                if (tool.timeoutMs <= 0L) {
+                    tool.run(input, ctx)
+                } else {
+                    withTimeout(tool.timeoutMs) { tool.run(input, ctx) }
+                }
             }
         } catch (e: TimeoutCancellationException) {
             // A genuine parent cancellation (user Stop) is also a
@@ -849,9 +856,11 @@ class AgentLoop(
         if (maxToolOutputChars <= 0 || text.length <= maxToolOutputChars) return text to null
         val relative = spillRelativePath(tool, callId)
         val written = try {
-            val target = Path.of(cwd).resolve(relative)
-            target.parent?.let { Files.createDirectories(it) }
-            Files.writeString(target, text, StandardCharsets.UTF_8)
+            withContext(Dispatchers.IO) {
+                val target = Path.of(cwd).resolve(relative)
+                target.parent?.let { Files.createDirectories(it) }
+                Files.writeString(target, text, StandardCharsets.UTF_8)
+            }
             true
         } catch (e: CancellationException) {
             throw e

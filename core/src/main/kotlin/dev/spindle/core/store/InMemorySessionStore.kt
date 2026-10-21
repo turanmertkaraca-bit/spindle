@@ -17,12 +17,14 @@ class InMemorySessionStore : SessionStore, SessionSearch {
     private val mutex = Mutex()
     private val sessions = LinkedHashMap<SessionId, Session>()
     private val messages = HashMap<SessionId, MutableList<Message>>()
+    private val messageIndex = HashMap<SessionId, HashMap<MessageId, Int>>()
     private val todos = HashMap<SessionId, List<TodoItem>>()
 
     override suspend fun createSession(session: Session) {
         mutex.withLock {
             sessions[session.id] = session
             messages.getOrPut(session.id) { mutableListOf() }
+            messageIndex.getOrPut(session.id) { HashMap() }
         }
     }
 
@@ -52,7 +54,12 @@ class InMemorySessionStore : SessionStore, SessionSearch {
     }
 
     override suspend fun deleteSession(id: SessionId) {
-        mutex.withLock { sessions.remove(id); messages.remove(id); todos.remove(id) }
+        mutex.withLock {
+            sessions.remove(id)
+            messages.remove(id)
+            messageIndex.remove(id)
+            todos.remove(id)
+        }
     }
 
     override suspend fun forkSession(
@@ -65,7 +72,8 @@ class InMemorySessionStore : SessionStore, SessionSearch {
         val upTo = if (atMessageId == null) {
             sourceMessages.toList()
         } else {
-            val index = sourceMessages.indexOfFirst { it.id == atMessageId }
+            val index = messageIndex[sourceId]?.get(atMessageId)
+                ?: sourceMessages.indexOfFirst { it.id == atMessageId }
             if (index < 0) return@withLock null
             sourceMessages.subList(0, index + 1).toList()
         }
@@ -78,46 +86,70 @@ class InMemorySessionStore : SessionStore, SessionSearch {
             archived = false,
         )
         sessions[newId] = fork
-        messages[newId] = upTo.map { it.forkedInto(newId) }.toMutableList()
+        val forkedMessages = upTo.map { it.forkedInto(newId) }.toMutableList()
+        messages[newId] = forkedMessages
+        messageIndex[newId] = HashMap<MessageId, Int>().apply {
+            forkedMessages.forEachIndexed { i, message -> put(message.id, i) }
+        }
         todos[newId] = emptyList()
         fork
     }
 
     override suspend fun rewind(sessionId: SessionId, toMessageId: MessageId): Int = mutex.withLock {
         val list = messages[sessionId] ?: return@withLock 0
-        val index = list.indexOfFirst { it.id == toMessageId }
-        if (index < 0) return@withLock 0
-        val removed = list.size - index - 1
-        while (list.size > index + 1) list.removeAt(list.size - 1)
+        val index = messageIndex[sessionId] ?: return@withLock 0
+        val i = index[toMessageId] ?: return@withLock 0
+        val removed = list.size - i - 1
+        var size = list.size
+        while (size > i + 1) {
+            val dropped = list.removeAt(size - 1)
+            if (index[dropped.id] == size - 1) index.remove(dropped.id)
+            size--
+        }
         removed
     }
 
     override suspend fun rewindFrom(sessionId: SessionId, fromMessageId: MessageId): Int = mutex.withLock {
         val list = messages[sessionId] ?: return@withLock 0
-        val index = list.indexOfFirst { it.id == fromMessageId }
-        if (index < 0) return@withLock 0
-        val removed = list.size - index
-        while (list.size > index) list.removeAt(list.size - 1)
+        val index = messageIndex[sessionId] ?: return@withLock 0
+        val i = index[fromMessageId] ?: return@withLock 0
+        val removed = list.size - i
+        var size = list.size
+        while (size > i) {
+            val dropped = list.removeAt(size - 1)
+            if (index[dropped.id] == size - 1) index.remove(dropped.id)
+            size--
+        }
         removed
     }
 
     override suspend fun appendMessage(message: Message) {
-        mutex.withLock { messages.getOrPut(message.sessionId) { mutableListOf() }.add(message) }
+        mutex.withLock {
+            val list = messages.getOrPut(message.sessionId) { mutableListOf() }
+            val index = messageIndex.getOrPut(message.sessionId) { HashMap() }
+            list.add(message)
+            index.putIfAbsent(message.id, list.size - 1)
+        }
     }
 
     override suspend fun updateMessage(message: Message) {
         mutex.withLock {
             val list = messages.getOrPut(message.sessionId) { mutableListOf() }
-            val i = list.indexOfFirst { it.id == message.id }
-            if (i >= 0) list[i] = message else list.add(message)
+            val index = messageIndex.getOrPut(message.sessionId) { HashMap() }
+            val i = index[message.id]
+            if (i != null) {
+                list[i] = message
+            } else {
+                list.add(message)
+                index[message.id] = list.size - 1
+            }
         }
     }
 
     override suspend fun updatePart(sessionId: SessionId, messageId: MessageId, part: Part) {
         mutex.withLock {
             val list = messages[sessionId] ?: return@withLock
-            val i = list.indexOfFirst { it.id == messageId }
-            if (i < 0) return@withLock
+            val i = messageIndex[sessionId]?.get(messageId) ?: return@withLock
             val message = list[i]
             val j = message.parts.indexOfFirst { it.id == part.id }
             val parts = if (j >= 0) {
@@ -130,7 +162,8 @@ class InMemorySessionStore : SessionStore, SessionSearch {
     }
 
     override suspend fun message(sessionId: SessionId, id: MessageId): Message? = mutex.withLock {
-        messages[sessionId]?.firstOrNull { it.id == id }
+        val i = messageIndex[sessionId]?.get(id) ?: return@withLock null
+        messages[sessionId]?.getOrNull(i)
     }
 
     override suspend fun messages(sessionId: SessionId): List<Message> = mutex.withLock {
@@ -151,7 +184,12 @@ class InMemorySessionStore : SessionStore, SessionSearch {
 
     override suspend fun prune(keepSessions: Int): Int = mutex.withLock {
         val drop = sessions.values.sortedByDescending { it.updatedAt }.drop(keepSessions.coerceAtLeast(0))
-        drop.forEach { sessions.remove(it.id); messages.remove(it.id); todos.remove(it.id) }
+        drop.forEach {
+            sessions.remove(it.id)
+            messages.remove(it.id)
+            messageIndex.remove(it.id)
+            todos.remove(it.id)
+        }
         drop.size
     }
 
