@@ -1432,4 +1432,82 @@ class AgentLoopTest {
         )
         assertEquals(SessionState.IDLE, store.session(SessionId("ses_doom_alt"))!!.state)
     }
+
+    @Test
+    fun `a truncated turn is auto-continued and a normal turn is not`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.TextDelta("part one "),
+                ProviderEvent.Finished(FinishReason.LENGTH),
+            ),
+            listOf(
+                ProviderEvent.TextDelta("part two"),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+            listOf(ProviderEvent.TextDelta("unused"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(emptyList()),
+            store = store,
+            bus = bus,
+        )
+        newSession(store, "ses_continue")
+
+        val result = loop.prompt(SessionId("ses_continue"), "go", "fake/fake-1")
+
+        assertEquals(2, provider.requests.size, "a LENGTH turn must be continued")
+        assertEquals("part two", result.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+        val allText = store.messages(SessionId("ses_continue"))
+            .filter { it.role == Role.ASSISTANT }
+            .flatMap { it.parts }
+            .filterIsInstance<Part.Text>()
+            .joinToString("") { it.text }
+        assertEquals("part one part two", allText)
+        val continued = provider.requests[1].messages
+        assertTrue(
+            continued.any { it.role == "user" && it.text == AgentLoop.CONTINUE_INSTRUCTION },
+            "the continuation instruction must be sent as a user turn: $continued",
+        )
+
+        val normal = ScriptedProvider(
+            listOf(ProviderEvent.TextDelta("done"), ProviderEvent.Finished(FinishReason.STOP)),
+            listOf(ProviderEvent.TextDelta("unused"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store2 = store()
+        val loop2 = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(normal)),
+            tools = ToolRegistry(emptyList()),
+            store = store2,
+            bus = EventBus(),
+        )
+        newSession(store2, "ses_normal")
+        loop2.prompt(SessionId("ses_normal"), "go", "fake/fake-1")
+        assertEquals(1, normal.requests.size, "a STOP turn must not be continued")
+    }
+
+    @Test
+    fun `auto-continuation is bounded to three retries`() = runTest {
+        fun truncated() = listOf(
+            ProviderEvent.TextDelta("more "),
+            ProviderEvent.Finished(FinishReason.LENGTH),
+        )
+        val provider = ScriptedProvider(
+            truncated(), truncated(), truncated(), truncated(), truncated(),
+        )
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(emptyList()),
+            store = store,
+            bus = EventBus(),
+        )
+        newSession(store, "ses_continue_bound")
+
+        loop.prompt(SessionId("ses_continue_bound"), "go", "fake/fake-1")
+
+        assertEquals(4, provider.requests.size, "initial turn plus at most three continuations")
+    }
 }

@@ -1,6 +1,7 @@
 package dev.spindle.core.agent
 
 import dev.spindle.core.model.Ids
+import dev.spindle.core.model.Message
 import dev.spindle.core.model.Part
 import dev.spindle.core.model.PartId
 import dev.spindle.core.model.Role
@@ -22,8 +23,17 @@ import kotlinx.coroutines.flow.collect
  * require.
  */
 object Compaction {
-    /** How many trailing messages are always preserved verbatim. */
+    /**
+     * Legacy fixed recent-message window, kept for callers that still reference
+     * it. The retained tail is now sized by the token budget
+     * ([ContextBudget.compactKeepTokens]) because a fixed count treats a turn of
+     * one-line prompts and a turn of huge tool output identically.
+     */
     const val KEEP_RECENT = 6
+
+    /** Never fold the conversation below this many trailing messages. */
+    const val MIN_KEEP_RECENT = 2
+
     private const val TRIM_TOOL_OUTPUT = 2_000
     private const val TRIM_TEXT = 4_000
     private const val TRIM_TOOL_DIFF = 4_000
@@ -31,9 +41,14 @@ object Compaction {
     /** Inline base64 larger than this is dropped from an old message's File part. */
     private const val TRIM_FILE_BASE64 = 4_000
 
-    suspend fun trim(store: SessionStore, sessionId: SessionId, bus: EventBus? = null): Int {
+    suspend fun trim(
+        store: SessionStore,
+        sessionId: SessionId,
+        bus: EventBus? = null,
+        keepTokens: Int = ContextBudget.DEFAULT_COMPACT_KEEP_TOKENS,
+    ): Int {
         val messages = store.messages(sessionId)
-        val keepFrom = (messages.size - KEEP_RECENT).coerceAtLeast(0)
+        val keepFrom = (messages.size - retainedCount(messages, keepTokens)).coerceAtLeast(0)
         var changed = 0
         for (i in 0 until keepFrom) {
             val m = messages[i]
@@ -84,11 +99,58 @@ object Compaction {
     }
 
     /**
+     * How many trailing messages fit in [keepTokens], measured with the shared
+     * [TokenEstimator] (wire characters plus a fixed per-message overhead).
+     * Always at least [MIN_KEEP_RECENT]: a turn whose own content exceeds the
+     * budget is still kept verbatim rather than folded down to a lone summary.
+     */
+    fun retainedCount(messages: List<Message>, keepTokens: Int): Int {
+        val recent = ArrayList<Int>()
+        for (i in messages.indices.reversed()) {
+            recent.add(0, messageChars(messages[i]))
+            if (recent.size > MIN_KEEP_RECENT &&
+                TokenEstimator.estimateFromCharCounts(0, recent, 0) > keepTokens
+            ) {
+                recent.removeAt(0)
+                break
+            }
+        }
+        return recent.size
+    }
+
+    /**
+     * Characters actually sent to the provider for [m]; reasoning is persisted
+     * for the UI but never sent, so it is not counted.
+     */
+    private fun messageChars(m: Message): Int = m.parts.sumOf { p ->
+        when (p) {
+            is Part.Text -> p.text.length
+            is Part.Reasoning -> 0
+            is Part.Tool -> p.call.argumentsJson.length + (p.result?.output?.length ?: 0)
+            else -> 16
+        }
+    }
+
+    /**
+     * Keep a tool reply with the turn that carried its tool call. The token
+     * window can land the retained boundary exactly on a bare tool result;
+     * folding the assistant call while keeping the result would orphan it, so
+     * the boundary walks back to include the call.
+     */
+    private fun alignKeepFrom(messages: List<Message>, keepFrom: Int): Int {
+        var start = keepFrom
+        while (start in 1 until messages.size && messages[start].role == Role.TOOL) start--
+        return start
+    }
+
+    /**
      * Fold the head of the session into a single summary at the head of the
-     * conversation, leaving the recent tail verbatim. Returns true when a
-     * compaction actually happened. A single summarization request is made
-     * against the cheapest available model; failures fall back to a deterministic
-     * extract without calling the provider.
+     * conversation, leaving a token-budgeted recent tail verbatim. Returns true
+     * when a compaction actually happened. The tail is sized by [keepTokens]
+     * with the shared [TokenEstimator] (never fewer than [MIN_KEEP_RECENT]
+     * messages). A single summarization request is made against the caller's
+     * model — for the agent loop that is the session's own model; failures fall
+     * back to a deterministic extract without calling the provider.
      */
     suspend fun compact(
         store: SessionStore,
@@ -96,21 +158,26 @@ object Compaction {
         modelRef: String,
         providers: ProviderRegistry,
         bus: EventBus,
+        keepTokens: Int = ContextBudget.DEFAULT_COMPACT_KEEP_TOKENS,
     ): Boolean {
         val messages = store.messages(sessionId)
-        if (messages.size <= KEEP_RECENT + 2) return false
+        val keepCount = retainedCount(messages, keepTokens)
+        // Nothing beyond the retained tail means there is no head to fold.
+        if (messages.size <= keepCount) return false
 
         // Compaction may only consume messages strictly before the current
         // turn's first user message; the current user prompt (and any user
         // message that belongs to it, e.g. a separate attachments message) and
         // everything after it are never folded. Without this boundary a long
-        // single-prompt run folds its own instruction once more than
-        // [KEEP_RECENT] model turns accumulate after it — which is reachable
-        // now that overflow is ratio-driven and re-compacts on later turns.
+        // single-prompt run folds its own instruction once enough turns
+        // accumulate after it — which is reachable now that overflow is
+        // ratio-driven and re-compacts on later turns.
         val lastUser = messages.indexOfLast { it.role == Role.USER }
         var turnStart = lastUser
         while (turnStart > 0 && messages[turnStart - 1].role == Role.USER) turnStart--
-        val keepFrom = messages.size - KEEP_RECENT
+        // The token budget can land the retained boundary inside a tool reply;
+        // align it so a retained result is never severed from its call.
+        val keepFrom = alignKeepFrom(messages, (messages.size - keepCount).coerceAtLeast(0))
         // Never fold the current turn's user message(s). When the only user
         // message sits at index 0 there is no earlier turn boundary, so fold the
         // old assistant/tool turns from index 1 and keep the instruction at index

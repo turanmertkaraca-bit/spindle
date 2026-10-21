@@ -77,6 +77,7 @@ class CompactionTest {
             modelRef = "fake/fake-1",
             providers = SimpleProviderRegistry(listOf(provider)),
             bus = EventBus(),
+            keepTokens = 1,
         )
 
         assertTrue(changed, "compaction must engage for a long single-prompt run")
@@ -117,6 +118,7 @@ class CompactionTest {
             modelRef = "fake/fake-1",
             providers = SimpleProviderRegistry(listOf(provider)),
             bus = EventBus(),
+            keepTokens = 1,
         )
 
         assertTrue(changed)
@@ -129,8 +131,9 @@ class CompactionTest {
         assertTrue(firstText.startsWith(AgentLoop.COMPACT_MARKER))
         assertTrue(firstText.contains("SUMMARY"))
 
-        val tail = after.takeLast(Compaction.KEEP_RECENT)
-        assertEquals(originals.takeLast(Compaction.KEEP_RECENT), tail)
+        val keepCount = Compaction.retainedCount(originals, 1)
+        val tail = after.takeLast(keepCount)
+        assertEquals(originals.takeLast(keepCount), tail)
 
         val currentUser = after.last()
         assertEquals(Role.USER, currentUser.role)
@@ -157,16 +160,16 @@ class CompactionTest {
 
         val first = Compaction.KEEP_RECENT + 3
         (0 until first).forEach { store.appendMessage(append(it)) }
-        assertTrue(Compaction.compact(store, sid, "fake/fake-1", registry, EventBus()))
+        assertTrue(Compaction.compact(store, sid, "fake/fake-1", registry, EventBus(), keepTokens = 1))
         assertEquals(1, provider.calls)
 
         // Nothing new since the first compaction: no second summarization call.
-        assertFalse(Compaction.compact(store, sid, "fake/fake-1", registry, EventBus()))
+        assertFalse(Compaction.compact(store, sid, "fake/fake-1", registry, EventBus(), keepTokens = 1))
         assertEquals(1, provider.calls)
 
         // New turns push fresh material into the head, so it compacts again.
         (first until first + Compaction.KEEP_RECENT + 3).forEach { store.appendMessage(append(it)) }
-        assertTrue(Compaction.compact(store, sid, "fake/fake-1", registry, EventBus()))
+        assertTrue(Compaction.compact(store, sid, "fake/fake-1", registry, EventBus(), keepTokens = 1))
         assertEquals(2, provider.calls)
     }
 
@@ -215,7 +218,7 @@ class CompactionTest {
             )
         }
 
-        assertTrue(Compaction.compact(store, sid, "fake/fake-1", registry, EventBus()))
+        assertTrue(Compaction.compact(store, sid, "fake/fake-1", registry, EventBus(), keepTokens = 1))
         assertEquals(1, provider.calls, "prior history should have been summarized once")
 
         val after = store.messages(sid)
@@ -268,12 +271,101 @@ class CompactionTest {
             )
         }
 
-        Compaction.trim(store, sid)
+        Compaction.trim(store, sid, keepTokens = 1)
 
         val media = store.messages(sid).first { it.id == MessageId("media") }
         val tool = media.parts.filterIsInstance<Part.Tool>().single()
         assertTrue(tool.result!!.diff!!.length < hugeDiff.length, "the diff must be clipped")
         val file = media.parts.filterIsInstance<Part.File>().single()
         assertNull(file.dataBase64, "an old inline image must be dropped from history")
+    }
+
+    @Test
+    fun `recent window is sized by tokens not a fixed message count`() = runTest {
+        val store = InMemorySessionStore()
+        val sid = SessionId("ses_token_window")
+        store.createSession(
+            Session(id = sid, cwd = System.getProperty("user.dir"), createdAt = 0, updatedAt = 0),
+        )
+        // Every turn carries a sizeable body, so a small token budget keeps far
+        // fewer messages than the legacy fixed window and a large budget more.
+        val total = 20
+        (0 until total).forEach { i ->
+            store.appendMessage(
+                Message(
+                    id = MessageId("m$i"),
+                    sessionId = sid,
+                    role = if (i % 2 == 0) Role.USER else Role.ASSISTANT,
+                    parts = listOf(Part.Text(PartId("p$i"), "x".repeat(400))),
+                    createdAt = i.toLong(),
+                ),
+            )
+        }
+
+        val messages = store.messages(sid)
+        assertTrue(
+            Compaction.retainedCount(messages, 50) < Compaction.KEEP_RECENT,
+            "a small token budget must retain fewer messages than the legacy fixed window",
+        )
+        assertTrue(
+            Compaction.retainedCount(messages, 10_000) > Compaction.KEEP_RECENT,
+            "a large token budget must retain more messages than the legacy fixed window",
+        )
+        assertEquals(
+            Compaction.MIN_KEEP_RECENT,
+            Compaction.retainedCount(messages, 0),
+            "the retained window never drops below the floor",
+        )
+    }
+
+    @Test
+    fun `compaction keeps a tool call with its result at the retained boundary`() = runTest {
+        val store = InMemorySessionStore()
+        val sid = SessionId("ses_tool_boundary")
+        store.createSession(
+            Session(id = sid, cwd = System.getProperty("user.dir"), createdAt = 0, updatedAt = 0),
+        )
+        suspend fun append(id: String, role: Role, text: String, at: Long) {
+            store.appendMessage(
+                Message(
+                    id = MessageId(id),
+                    sessionId = sid,
+                    role = role,
+                    parts = listOf(Part.Text(PartId("p_$id"), text)),
+                    createdAt = at,
+                ),
+            )
+        }
+        // a1 is the assistant turn that carried a tool call; t1 is its reply.
+        append("u1", Role.USER, "t".repeat(400), 0)
+        append("a1", Role.ASSISTANT, "t".repeat(400), 1)
+        append("t1", Role.TOOL, "t".repeat(400), 2)
+        append("u2", Role.USER, "u2", 3)
+        append("a2", Role.ASSISTANT, "a2", 4)
+        append("u3", Role.USER, "u3", 5)
+        append("a3", Role.ASSISTANT, "a3", 6)
+        append("a4", Role.ASSISTANT, "a4", 7)
+        append("a5", Role.ASSISTANT, "a5", 8)
+        append("a6", Role.ASSISTANT, "a6", 9)
+
+        val provider = SummaryProvider()
+        assertTrue(
+            Compaction.compact(
+                store = store,
+                sessionId = sid,
+                modelRef = "fake/fake-1",
+                providers = SimpleProviderRegistry(listOf(provider)),
+                bus = EventBus(),
+                keepTokens = 150,
+            ),
+        )
+
+        val after = store.messages(sid)
+        // Without boundary alignment the retained tail would begin at t1, a bare
+        // tool reply whose call turn a1 was folded into the summary. Both survive.
+        assertEquals(MessageId("a1"), after[1].id)
+        assertEquals(Role.ASSISTANT, after[1].role)
+        assertEquals(MessageId("t1"), after[2].id)
+        assertEquals(Role.TOOL, after[2].role)
     }
 }

@@ -195,6 +195,7 @@ class AgentLoop(
             var step = 0
             var compacted = false
             var overflowRetries = 0
+            var continuations = 0
             // Doom-loop guard: count how often each tool signature appears in a
             // sliding window of the most recent calls, so an alternating
             // A/B/A/B loop is caught as well as a consecutive A/A/A one.
@@ -441,7 +442,26 @@ class AgentLoop(
                 val sessionUsage = history.fold(Usage()) { acc, m -> acc + m.usage } + finalized.usage
                 bus.emit(AgentEvent.UsageUpdated(sessionId, sessionUsage))
 
-                if (toolCalls.isEmpty()) break
+                if (toolCalls.isEmpty()) {
+                    // A response cut off by the output-token limit would otherwise
+                    // end the run with a silently truncated answer. Ask the model to
+                    // resume, bounded so a model that keeps hitting the limit cannot
+                    // loop forever.
+                    if (finish == FinishReason.LENGTH && continuations < MAX_CONTINUATIONS) {
+                        continuations++
+                        store.appendMessage(
+                            Message(
+                                id = MessageId(Ids.new("msg")),
+                                sessionId = sessionId,
+                                role = Role.USER,
+                                parts = listOf(Part.Text(PartId(Ids.new("prt")), CONTINUE_INSTRUCTION)),
+                                createdAt = clock(),
+                            ),
+                        )
+                        continue
+                    }
+                    break
+                }
                 if (agent.maxSteps != null && step >= agent.maxSteps) {
                     for (part in finalized.parts.filterIsInstance<Part.Tool>()) {
                         updatePart(
@@ -1105,6 +1125,14 @@ class AgentLoop(
             "File access is limited to the current working directory and its " +
                 "subdirectories. If you need the user to see or use a specific file, " +
                 "ensure it is placed within this accessible directory."
+
+        /** Most auto-continuations of an output-token-truncated turn per run. */
+        const val MAX_CONTINUATIONS = 3
+
+        /** Sent as a user turn to resume a response cut off by the output-token limit. */
+        const val CONTINUE_INSTRUCTION =
+            "Your previous response was cut off by the output token limit. " +
+                "Continue exactly where you stopped, without repeating any text you already produced."
         const val MAX_RULES_CHARS = 8_192
         const val MAX_METADATA_VALUE_CHARS = 8_192
         const val DURATION_KEY = "durationMs"

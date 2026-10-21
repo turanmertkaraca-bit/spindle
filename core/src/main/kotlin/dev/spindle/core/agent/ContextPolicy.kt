@@ -8,6 +8,15 @@ data class ContextBudget(
     val maxCostUsd: Double? = null,
     /** Fraction of [maxCostUsd] at which a one-shot warning is emitted. */
     val warnAtFraction: Double = 0.8,
+    /**
+     * Tokens of the most recent history [Compaction] keeps verbatim when it
+     * folds the head into a summary. A fixed message count is too coarse when
+     * turns mix one-line prompts with huge tool output; opencode v2 retains
+     * roughly this many recent tokens. [Compaction.MIN_KEEP_RECENT] messages
+     * are always kept regardless. Defaulted so existing callers compile
+     * unchanged.
+     */
+    val compactKeepTokens: Int = DEFAULT_COMPACT_KEEP_TOKENS,
 ) {
     /**
      * User-tunable fraction of the model's context window at which automatic
@@ -16,6 +25,11 @@ data class ContextBudget(
      * stays stable for callers.
      */
     var compactAtFraction: Double? = null
+
+    companion object {
+        /** opencode v2 keeps ~15k recent tokens verbatim after a compaction. */
+        const val DEFAULT_COMPACT_KEEP_TOKENS = 15_000
+    }
 }
 
 enum class OverflowAction { NONE, TRIM, COMPACT }

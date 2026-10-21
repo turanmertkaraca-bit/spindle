@@ -3404,6 +3404,7 @@ class ChatViewModel(
                     sid, text, keys.model, _state.value.agentMode,
                     budget = ContextBudget(
                         maxCostUsd = _state.value.maxCostUsd.takeIf { it > 0 },
+                        compactKeepTokens = ContextBudget.DEFAULT_COMPACT_KEEP_TOKENS,
                     ).apply { compactAtFraction = _state.value.autoCompactPercent / 100.0 },
                     rules = if (keys.terseReplies) TERSE_RULES else null,
                 )
