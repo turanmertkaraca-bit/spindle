@@ -123,6 +123,20 @@ fun StorageScreen(
                 fontWeight = FontWeight.Medium,
             )
         }
+        val cleared = storage?.lastCleared
+        val freed = storage?.lastFreed ?: 0L
+        if (cleared != null && !scanning) {
+            Spacer(Modifier.height(LumenSpacing.sm))
+            Text(
+                if (freed > 0) "freed ${humanBytes(freed)} \u00b7 $cleared" else "nothing left to reclaim \u00b7 $cleared",
+                color = if (freed > 0) colors.water else colors.dim,
+                fontFamily = Mono,
+                fontSize = LumenType.caption,
+                modifier = Modifier
+                    .padding(horizontal = 4.dp)
+                    .testTag("storage-cleared"),
+            )
+        }
         Spacer(Modifier.height(LumenSpacing.lg))
 
         val categories = storage?.categories.orEmpty()

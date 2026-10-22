@@ -41,6 +41,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import dev.lumen.app.data.ProjectStore
 import dev.lumen.app.platform.RunService
 import dev.lumen.app.ui.BootScreen
 import dev.lumen.app.ui.CanvasScreen
@@ -53,6 +54,7 @@ import dev.lumen.app.ui.LumenChatScreen
 import dev.lumen.app.ui.LumenColors
 import dev.lumen.app.ui.ModelPickerScreen
 import dev.lumen.app.ui.OnboardingScreen
+import dev.lumen.app.ui.ProjectsScreen
 import dev.lumen.app.ui.SettingsScreen
 import dev.lumen.app.ui.StorageScreen
 import dev.lumen.app.ui.TerminalScreen
@@ -65,8 +67,12 @@ import java.nio.charset.StandardCharsets
 
 class MainActivity : ComponentActivity() {
 
+    /** One project folder per project; the active one is the agent's workspace. */
+    private val projects by lazy { ProjectStore(applicationContext) }
+
     private val viewModel: ChatViewModel by viewModels {
-        ChatViewModel.Factory(applicationContext, File(filesDir, "workspace").apply { mkdirs() })
+        val store = projects
+        ChatViewModel.Factory(applicationContext, store.ensure().dir, store)
     }
 
     /**
@@ -117,6 +123,8 @@ class MainActivity : ComponentActivity() {
             // The route to return to when leaving the full model picker.
             var modelsReturn by rememberSaveable { mutableStateOf("settings") }
             var settingsReturn by rememberSaveable { mutableStateOf("home") }
+            // The route to return to when leaving the project picker.
+            var projectsReturn by rememberSaveable { mutableStateOf("home") }
             var keyReturn by rememberSaveable { mutableStateOf("settings") }
             // The dedicated in-chat model picker sheet; never a route on its own.
             var modelPicker by rememberSaveable { mutableStateOf(false) }
@@ -275,6 +283,7 @@ class MainActivity : ComponentActivity() {
                         route = terminalReturn
                     }
                     route == "storage" || route == "diagnostics" -> route = "settings"
+                    route == "projects" -> route = projectsReturn
                     route == "github" -> {
                         viewModel.refreshGithubLogin()
                         viewModel.refreshGitActivity()
@@ -505,6 +514,10 @@ class MainActivity : ComponentActivity() {
                         onOpenCanvas = openCanvas,
                         modifier = modifier,
                         onDraftChange = viewModel::updateEditorDraft,
+                        projectName = state.projectName,
+                        workspacePath = viewModel.workspacePath,
+                        onOpenExternally = viewModel::openFileExternally,
+                        onRefresh = { viewModel.openFiles(state.files?.dir) },
                     )
                 }
                 route == "terminal" -> {
@@ -534,6 +547,7 @@ class MainActivity : ComponentActivity() {
                         html = state.canvas.orEmpty(),
                         colors = colors,
                         sourceName = state.canvasPath?.substringAfterLast('/') ?: "page",
+                        baseUrl = state.canvasBaseUrl,
                         onBack = {
                             viewModel.closeCanvas()
                             route = canvasReturn
@@ -565,6 +579,23 @@ class MainActivity : ComponentActivity() {
                         onClear = viewModel::clearDiagnostics,
                         onBack = { route = "settings" },
                         modifier = modifier,
+                    )
+                }
+                route == "projects" -> {
+                    LaunchedEffect(Unit) { viewModel.refreshProjects() }
+                    ProjectsScreen(
+                        colors = colors,
+                        projects = state.projects,
+                        onSwitch = viewModel::switchProject,
+                        onCreate = viewModel::createProject,
+                        onDelete = viewModel::deleteProject,
+                        onOpenFiles = {
+                            filesReturn = "projects"
+                            route = "files"
+                        },
+                        onBack = { route = projectsReturn },
+                        modifier = modifier,
+                        error = state.error,
                     )
                 }
                 route == "settings" -> SettingsScreen(
@@ -602,6 +633,11 @@ class MainActivity : ComponentActivity() {
                     onAutoCompactPercent = viewModel::setAutoCompactPercent,
                     agentMode = state.agentMode,
                     onAgentMode = viewModel::setAgentMode,
+                    onProjects = {
+                        projectsReturn = "settings"
+                        route = "projects"
+                    },
+                    projectName = state.projectName,
                     onStorage = { route = "storage" },
                     onDiagnostics = { route = "diagnostics" },
                     onGitHub = { route = "github" },
@@ -684,6 +720,11 @@ class MainActivity : ComponentActivity() {
                         terminalReturn = "home"
                         route = "terminal"
                     },
+                    onProjects = {
+                        projectsReturn = "home"
+                        route = "projects"
+                    },
+                    projectName = state.projectName,
                     provider = state.provider,
                     model = state.model,
                     maxCostUsd = state.maxCostUsd,

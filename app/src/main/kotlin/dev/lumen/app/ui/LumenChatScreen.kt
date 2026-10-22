@@ -725,7 +725,12 @@ fun LumenChatScreen(
                             LazyColumn(
                                 state = listState,
                                 flingBehavior = flingBehavior,
-                                contentPadding = PaddingValues(start = 8.dp, end = 12.dp, top = 12.dp, bottom = 14.dp),
+                                contentPadding = PaddingValues(
+                                    start = LumenSpacing.gutter,
+                                    end = LumenSpacing.gutter,
+                                    top = 12.dp,
+                                    bottom = 14.dp,
+                                ),
                                 modifier = Modifier.fillMaxSize().testTag("timeline"),
                             ) {
                                 itemsIndexed(display, key = { _, s -> s.id }, contentType = { _, s -> s.kind }) { index, step ->
@@ -2043,6 +2048,9 @@ private fun ThinkSection(think: String, colors: LumenColors, startOpen: Boolean 
             .clickable { open = !open }
             .padding(vertical = 3.dp)
             .testTag("think-toggle"),
+        // Centre the one-line header inside its 40dp touch target; top-aligning
+        // it left a visibly dead strip under the label in a collapsed card.
+        verticalArrangement = Arrangement.Center,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(if (open) "\u25be" else "\u25b8", color = colors.dim, fontFamily = Mono, fontSize = 10.sp)

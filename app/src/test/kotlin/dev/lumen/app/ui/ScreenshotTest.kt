@@ -10,6 +10,7 @@ import dev.lumen.app.EditorState
 import dev.lumen.app.FileEntry
 import dev.lumen.app.FilesState
 import dev.lumen.app.LinuxEnvironmentState
+import dev.lumen.app.ProjectRow
 import dev.lumen.app.StorageCategory
 import dev.lumen.app.StorageReport
 import dev.lumen.app.data.KeyStore
@@ -396,6 +397,35 @@ class ScreenshotTest {
             ),
             input = "", busy = false, error = null,
             colors = LumenColors.Light, ambient = false, onToggleTheme = {},
+        )
+    }
+
+    @Test fun projects_dark() = shoot("projects_dark.png") {
+        ProjectsScreen(
+            colors = LumenColors.Dark,
+            projects = listOf(
+                ProjectRow("playground", "playground", active = true),
+                ProjectRow("client-site", "client site", active = false),
+                ProjectRow("scratch", "scratch", active = false),
+            ),
+            onSwitch = {},
+            onCreate = {},
+            onDelete = {},
+            onBack = {},
+        )
+    }
+
+    @Test fun projects_light() = shoot("projects_light.png") {
+        ProjectsScreen(
+            colors = LumenColors.Light,
+            projects = listOf(
+                ProjectRow("playground", "playground", active = true),
+                ProjectRow("client-site", "client site", active = false),
+            ),
+            onSwitch = {},
+            onCreate = {},
+            onDelete = {},
+            onBack = {},
         )
     }
 

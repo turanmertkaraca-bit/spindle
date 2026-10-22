@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import dev.lumen.app.data.AndroidSessionStore
 import dev.lumen.app.data.KeyStore
 import dev.lumen.app.data.ModelCatalogue
+import dev.lumen.app.data.Project
+import dev.lumen.app.data.ProjectStore
 import dev.lumen.app.data.ProviderCatalogue
 import dev.lumen.app.data.SessionArchive
 import dev.lumen.app.platform.AndroidEnvironment
@@ -135,6 +137,13 @@ data class Backlink(
     val touched: Boolean,
 )
 
+/** One project folder in the picker. [active] marks the one the agent works in. */
+data class ProjectRow(
+    val id: String,
+    val name: String,
+    val active: Boolean,
+)
+
 /** One row in the project file browser. [path] is workspace-relative, `/`-joined. */
 data class FileEntry(
     val name: String,
@@ -193,6 +202,10 @@ data class StorageReport(
     val total: Long,
     val categories: List<StorageCategory>,
     val scanning: Boolean,
+    /** Bytes actually removed by the most recent clear (0 before one runs). */
+    val lastFreed: Long = 0,
+    /** The area the last clear targeted, or null when nothing has been cleared. */
+    val lastCleared: String? = null,
 )
 
 /** One timestamped diagnostics line. [at] is epoch milliseconds. [seq] is a process-unique id. */
@@ -288,6 +301,10 @@ data class ChatState(
     val todos: List<TodoItem> = emptyList(),
     /** The file currently shown in the peek sheet, or null when closed. */
     val peek: FilePeek? = null,
+    /** The active project folder; its name is shown on Files, Home and Settings. */
+    val projectId: String = "",
+    val projectName: String = "",
+    val projects: List<ProjectRow> = emptyList(),
     /** The project file browser's current folder, or null until opened. */
     val files: FilesState? = null,
     /** The file open in the files editor, or null when closed. */
@@ -310,6 +327,8 @@ data class ChatState(
     val canvas: String? = null,
     /** Workspace-relative name of the page in the canvas, for the top bar. */
     val canvasPath: String? = null,
+    /** `file://` base of the page's folder, so relative css/js/img load locally. */
+    val canvasBaseUrl: String? = null,
     /** Images queued to send with the next prompt. */
     val attachments: List<PendingImage> = emptyList(),
     /** A soft, non-fatal notice shown above the composer (e.g. no vision). */
@@ -375,7 +394,7 @@ data class RevertUndo(
  * render what it says.
  */
 class ChatViewModel(
-    private val workspace: Path,
+    workspace: Path,
     private val keys: KeyStore,
     private val store: SessionStore,
     private val snapshots: SnapshotStore? = null,
@@ -419,8 +438,20 @@ class ChatViewModel(
      * Platform actions that leave the app (install an APK, hand a file to an
      * external viewer). Null on headless hosts, where those taps are no-ops.
      */
-    private val actions: WorkspaceActions? = null,
+    actions: WorkspaceActions? = null,
+    /** Project folders; when supplied the active project owns [workspace]. */
+    private val projectStore: ProjectStore? = null,
 ) : ViewModel() {
+
+    /**
+     * The active project's root. Every tool, the shell, the watcher and the
+     * Files view read this, and it changes only through [switchTo], so an agent
+     * working in one project cannot reach a sibling project's files.
+     */
+    private var workspace: Path = projectStore?.activeOrNull()?.dir?.toPath() ?: workspace
+
+    /** Workspace-bound system actions (APK install / external viewer). */
+    private var actions: WorkspaceActions? = actions
 
     private val bus: EventBus = eventBus
 
@@ -530,17 +561,21 @@ class ChatViewModel(
     private var searchJob: Job? = null
 
     /** The one interactive shell behind the terminal screen. */
-    private val terminal = AndroidTerminal(workspace.toFile(), shell)
+    private var terminal = AndroidTerminal(workspace.toFile(), shell)
 
     /** Reads the LOCAL workspace repo for the GitHub activity view. */
-    private val git: GitRunner by lazy { GitRunner(shell ?: HostShellExecutor(), workspace) }
+    private var gitRunner: GitRunner? = null
+    private val git: GitRunner
+        get() = gitRunner ?: GitRunner(shell ?: HostShellExecutor(), workspace).also { gitRunner = it }
 
     /**
      * Polls the workspace during a run so files changed by a script the agent
      * ran (not through the app's edit tools) still land in the Changes view.
      * Best-effort: a sandbox without a context runs without it.
      */
-    private val watcher: WorkspaceWatcher? = context?.let {
+    private var watcher: WorkspaceWatcher? = makeWatcher()
+
+    private fun makeWatcher(): WorkspaceWatcher? = context?.let {
         WorkspaceWatcher(workspace.toFile(), runScope ?: viewModelScope) { changed -> absorbIndirect(changed) }
             .apply {
                 onTruncated = { truncated ->
@@ -856,13 +891,9 @@ class ChatViewModel(
      */
     private suspend fun cleanStartupCaches(): Long = withContext(io) {
         var freed = 0L
-        val deadline = System.currentTimeMillis() + SCAN_BUDGET_MS
 
         val spill = workspace.resolve(SPILL_DIR).toFile()
-        spill.listFiles()?.forEach { child ->
-            freed += sizeOf(child, deadline)
-            deleteTree(child)
-        }
+        spill.listFiles()?.forEach { child -> freed += clearContents(child) }
 
         context?.let { ctx ->
             val dirs = buildList {
@@ -943,6 +974,7 @@ class ChatViewModel(
         viewModelScope.launch { reconcileOrphanRuns() }
         refreshLinuxEnvironment()
         syncRunningSessions()
+        refreshProjects()
     }
 
     /**
@@ -993,13 +1025,14 @@ class ChatViewModel(
         _state.value = _state.value.copy(
             storage = (_state.value.storage ?: StorageReport(0, emptyList(), true)).copy(scanning = true),
         )
-        viewModelScope.launch(io) { publishStorage(measureStorage(scanDeadline()), generation) }
+        viewModelScope.launch(io) { publishStorage(measureStorage(), generation) }
     }
 
     /**
-     * Remove ONLY regenerable caches: the app cache dir, the Alpine apk/tmp
-     * caches and the Debian apt/tmp/cache dirs. Project source, the lumen.db
-     * stores, snapshots and keys are never touched. Re-scans afterwards.
+     * Remove ONLY regenerable caches: the app cache, log files, the Alpine apk
+     * and tmp caches, and the Debian apt/tmp/cache/npm dirs. Project source, the
+     * lumen.db stores, snapshots and keys are never touched. Re-scans afterwards
+     * and reports the bytes actually freed, so a clear is never a silent no-op.
      */
     fun clearCache() {
         val generation = ++storageGeneration
@@ -1007,8 +1040,8 @@ class ChatViewModel(
             storage = (_state.value.storage ?: StorageReport(0, emptyList(), true)).copy(scanning = true),
         )
         viewModelScope.launch(io) {
-            runCatching { safeCacheTargets().forEach { deleteTree(it) } }
-            publishStorage(measureStorage(scanDeadline()), generation)
+            val freed = safeCacheTargets().sumOf { clearContents(it) }
+            publishStorage(measureStorage(), generation, freed, "all caches")
         }
     }
 
@@ -1020,48 +1053,93 @@ class ChatViewModel(
             storage = (_state.value.storage ?: StorageReport(0, emptyList(), true)).copy(scanning = true),
         )
         viewModelScope.launch(io) {
-            runCatching { targets.forEach { deleteTree(it) } }
-            publishStorage(measureStorage(scanDeadline()), generation)
+            val freed = targets.sumOf { clearContents(it) }
+            publishStorage(measureStorage(), generation, freed, name)
         }
     }
 
-    private fun publishStorage(report: StorageReport, generation: Int) {
+    private fun publishStorage(report: StorageReport, generation: Int, freed: Long = 0, label: String? = null) {
         if (generation != storageGeneration) return
-        _state.value = _state.value.copy(storage = report.copy(scanning = false))
+        _state.value = _state.value.copy(
+            storage = report.copy(scanning = false, lastFreed = freed, lastCleared = label),
+        )
+        if (label != null) diag("cleared $label: freed ${freed / 1024} KiB")
     }
 
-    private fun scanDeadline(): Long = System.currentTimeMillis() + SCAN_BUDGET_MS
-
-    /** Walk the real trees and label them. Pure; call off the main thread. */
-    private fun measureStorage(deadline: Long): StorageReport {
+    /**
+     * Walk the real trees and label them. Pure; call off the main thread.
+     *
+     * The small clearable caches are measured FIRST against the shared budget,
+     * so a multi-gigabyte rootfs can never consume the whole scan and leave the
+     * clear rows reading zero. The rootfs rows are then measured as "what is
+     * kept" (the tree minus its cache subtrees), which is why clearing a cache
+     * row visibly shrinks the numbers instead of leaving a huge unchanging row.
+     */
+    private fun measureStorage(): StorageReport {
+        val deadline = System.currentTimeMillis() + SCAN_BUDGET_MS
         val categories = ArrayList<StorageCategory>()
+
+        val logs = context?.let { sizeOfLogs(it, deadline) } ?: 0L
+        val appCache = context?.let { sizeOf(it.cacheDir, deadline) } ?: 0L
+        val alpineCaches = environment?.let { env ->
+            val dirs = alpineCacheDirs(env)
+            dirs.sumOf { sizeOf(it, deadline) } to dirs
+        }
+        val debianCaches = debian?.let { deb ->
+            val dirs = debianCacheDirs(deb)
+            dirs.sumOf { sizeOf(it, deadline) } to dirs
+        }
+
         categories += StorageCategory(STORAGE_WORKSPACE, sizeOf(workspace.toFile(), deadline), false)
-        environment?.let { categories += StorageCategory(STORAGE_ALPINE, sizeOf(it.rootfs, deadline), true) }
-        debian?.let { categories += StorageCategory(STORAGE_DEBIAN, sizeOf(it.rootfs, deadline), true) }
+        environment?.let { env ->
+            val caches = alpineCaches?.first ?: 0L
+            val total = sizeOf(env.rootfs, deadline)
+            categories += StorageCategory(STORAGE_ALPINE, (total - caches).coerceAtLeast(0L), false)
+            categories += StorageCategory(STORAGE_ALPINE_CACHE, caches, true)
+        }
+        debian?.let { deb ->
+            val caches = debianCaches?.first ?: 0L
+            val total = sizeOf(deb.rootfs, deadline)
+            categories += StorageCategory(STORAGE_DEBIAN, (total - caches).coerceAtLeast(0L), false)
+            categories += StorageCategory(STORAGE_DEBIAN_CACHE, caches, true)
+        }
         environment?.let { categories += StorageCategory(STORAGE_WRAPPERS, sizeOf(it.wrappersDir, deadline), false) }
         context?.let { ctx ->
             categories += StorageCategory(STORAGE_STORES, storeBytes(ctx), false)
-            categories += StorageCategory(STORAGE_LOGS, sizeOfLogs(ctx, deadline), true)
-            categories += StorageCategory(STORAGE_CACHE, sizeOf(ctx.cacheDir, deadline), true)
+            categories += StorageCategory(STORAGE_LOGS, logs, true)
+            categories += StorageCategory(STORAGE_CACHE, appCache, true)
         }
         return StorageReport(categories.sumOf { it.bytes }, categories, false)
+    }
+
+    /** Regenerable Alpine dirs; their contents are cleared, the dirs stay. */
+    private fun alpineCacheDirs(env: AndroidEnvironment): List<File> =
+        listOf(File(env.rootfs, "var/cache/apk"), File(env.rootfs, "tmp"))
+
+    /** Regenerable Debian dirs; their contents are cleared, the dirs stay. */
+    private fun debianCacheDirs(deb: DebianEnvironment): List<File> {
+        val root = deb.rootfs
+        return listOf(
+            File(root, "var/cache/apt/archives"),
+            File(root, "var/lib/apt/lists"),
+            File(root, "tmp"),
+            File(root, "root/.cache"),
+            File(root, "root/.npm"),
+            deb.tmpDir,
+        )
     }
 
     /** The safe targets behind the "all caches" clear. */
     private fun safeCacheTargets(): List<File> = buildList {
         context?.cacheDir?.let { add(it) }
-        environment?.let {
-            add(File(it.rootfs, "var/cache/apk"))
-            add(File(it.rootfs, "tmp"))
-        }
-        debian?.let {
-            val root = it.rootfs
-            add(File(root, "var/cache/apt/archives"))
-            add(File(root, "var/lib/apt/lists"))
-            add(File(root, "tmp"))
-            add(File(root, "root/.cache"))
-            add(File(root, "root/.npm"))
-            add(it.tmpDir)
+        environment?.let { addAll(alpineCacheDirs(it)) }
+        debian?.let { addAll(debianCacheDirs(it)) }
+        context?.let { ctx ->
+            ctx.filesDir.listFiles()
+                ?.filter { it.isFile && it.name.endsWith(".log") }
+                ?.forEach { add(it) }
+            val logsDir = File(ctx.filesDir, "logs")
+            if (logsDir.isDirectory) add(logsDir)
         }
     }
 
@@ -1077,20 +1155,8 @@ class ChatViewModel(
                 if (logsDir.isDirectory) add(logsDir)
             }
         }
-        STORAGE_ALPINE -> environment?.let {
-            listOf(File(it.rootfs, "var/cache/apk"), File(it.rootfs, "tmp"))
-        }
-        STORAGE_DEBIAN -> debian?.let {
-            val root = it.rootfs
-            listOf(
-                File(root, "var/cache/apt/archives"),
-                File(root, "var/lib/apt/lists"),
-                File(root, "tmp"),
-                File(root, "root/.cache"),
-                File(root, "root/.npm"),
-                it.tmpDir,
-            )
-        }
+        STORAGE_ALPINE_CACHE -> environment?.let { alpineCacheDirs(it) }
+        STORAGE_DEBIAN_CACHE -> debian?.let { debianCacheDirs(it) }
         else -> null
     }
 
@@ -1113,8 +1179,7 @@ class ChatViewModel(
     }
 
     /** Bounded, symlink-skipping recursive size. Never throws. */
-    private fun sizeOf(f: File, deadline: Long): Long =
-        sizeOf(f, 0, deadline, HashSet())
+    private fun sizeOf(f: File, deadline: Long): Long = sizeOf(f, 0, deadline, HashSet())
 
     private fun sizeOf(f: File, depth: Int, deadline: Long, seen: MutableSet<String>): Long {
         if (depth > MAX_SCAN_DEPTH || System.currentTimeMillis() > deadline) return 0
@@ -1134,17 +1199,25 @@ class ChatViewModel(
         }
     }
 
-    /** Recursive delete that never follows symlinks. Never throws. */
-    private fun deleteTree(f: File) {
-        try {
-            if (Files.isSymbolicLink(f.toPath())) {
-                f.delete()
-                return
+    /**
+     * Delete a file, or every child of a directory while keeping the directory
+     * itself (proot and Android both expect their temp/cache dirs to exist).
+     * Never follows symlinks, never throws; returns the bytes actually freed.
+     */
+    private fun clearContents(file: File): Long = try {
+        when {
+            Files.isSymbolicLink(file.toPath()) -> {
+                val size = file.length()
+                if (file.delete()) size else 0L
             }
-            if (f.isDirectory) f.listFiles()?.forEach { deleteTree(it) }
-            f.delete()
-        } catch (ignored: Throwable) {
+            file.isDirectory -> file.listFiles()?.sumOf { clearContents(it) } ?: 0L
+            else -> {
+                val size = file.length()
+                if (file.delete()) size else 0L
+            }
         }
+    } catch (t: Throwable) {
+        0L
     }
 
     // ---- linux environment ----
@@ -1525,6 +1598,104 @@ class ChatViewModel(
         _state.value = _state.value.copy(agentMode = value)
     }
 
+    // ---- projects ----
+
+    /** Re-read the project folders and the active one for the picker. */
+    fun refreshProjects() {
+        val store = projectStore ?: return
+        val all = runCatching { store.list() }.getOrDefault(emptyList())
+        val active = runCatching { store.activeOrNull() }.getOrNull()
+        _state.value = _state.value.copy(
+            projects = all.map { ProjectRow(it.id, it.name, active?.id == it.id) },
+            projectId = active?.id.orEmpty(),
+            projectName = active?.name ?: workspace.fileName?.toString().orEmpty(),
+        )
+    }
+
+    /** Create a project folder and make it the workspace the agent works in. */
+    fun createProject(name: String) {
+        val store = projectStore ?: return
+        val project = runCatching { store.create(name) }.getOrNull()
+        if (project == null) {
+            _state.value = _state.value.copy(error = "cannot create project")
+            return
+        }
+        runCatching { store.setActive(project.id) }
+        switchTo(project)
+        diag("project created: ${project.name}")
+    }
+
+    /** Switch the active project; the open chat closes so the next run starts clean. */
+    fun switchProject(id: String) {
+        val store = projectStore ?: return
+        val project = runCatching { store.setActive(id) }.getOrNull() ?: return
+        if (project.dir.toPath() == workspace) {
+            refreshProjects()
+            return
+        }
+        switchTo(project)
+        diag("project \u2192 ${project.name}")
+    }
+
+    /** Delete one project folder. The last remaining project is kept. */
+    fun deleteProject(id: String) {
+        val store = projectStore ?: return
+        val all = runCatching { store.list() }.getOrDefault(emptyList())
+        if (all.size <= 1) {
+            _state.value = _state.value.copy(error = "keep at least one project")
+            return
+        }
+        val target = all.firstOrNull { it.id == id } ?: return
+        val activeId = _state.value.projectId.ifEmpty { store.activeOrNull()?.id.orEmpty() }
+        if (target.id == activeId) {
+            val next = all.first { it.id != target.id }
+            runCatching { store.setActive(next.id) }
+            switchTo(next)
+        }
+        val deleted = runCatching { store.delete(target.id) }.getOrDefault(false)
+        if (deleted) {
+            diag("project deleted: ${target.name}")
+        } else {
+            _state.value = _state.value.copy(error = "cannot delete ${target.name}")
+        }
+        refreshProjects()
+    }
+
+    /**
+     * Point every workspace-bound helper at [project], stop any live run and
+     * reset the file surfaces. Everything that resolves a path reads
+     * [workspace], so this is the single switch that changes the isolation
+     * boundary.
+     */
+    private fun switchTo(project: Project) {
+        stop()
+        workspace = project.dir.toPath()
+        workspaceTruncated = false
+        completionIndex = null
+        completionIndexAt = 0L
+        closeChat()
+        runCatching { terminal.shutdown() }
+        terminal = AndroidTerminal(workspace.toFile(), shell)
+        runCatching { watcher?.stop() }
+        watcher = makeWatcher()
+        gitRunner = null
+        if (context != null) actions = WorkspaceActions(context, workspace.toFile())
+        _state.value = _state.value.copy(
+            files = null,
+            editor = null,
+            canvas = null,
+            canvasPath = null,
+            canvasBaseUrl = null,
+            terminal = TerminalState(),
+            projectId = project.id,
+            projectName = project.name,
+            error = null,
+            storage = null,
+        )
+        bumpFileRevision()
+        refreshProjects()
+    }
+
     // ---- sessions ----
 
     fun newChat() {
@@ -1556,6 +1727,7 @@ class ChatViewModel(
                 attachments = emptyList(),
                 canvas = null,
                 canvasPath = null,
+                canvasBaseUrl = null,
                 usage = Usage(),
                 changes = RunChanges.EMPTY,
                 lastRevert = null,
@@ -1628,6 +1800,7 @@ class ChatViewModel(
             attachments = emptyList(),
             canvas = null,
             canvasPath = null,
+            canvasBaseUrl = null,
             usage = Usage(),
             changes = RunChanges.EMPTY,
             todos = emptyList(),
@@ -2202,6 +2375,7 @@ class ChatViewModel(
             _state.value = _state.value.copy(
                 canvas = html,
                 canvasPath = relativeToWorkspace(target),
+                canvasBaseUrl = target.parent?.toUri()?.toString(),
                 error = null,
             )
         } catch (t: Throwable) {
@@ -2211,7 +2385,7 @@ class ChatViewModel(
 
     /** Dismiss the canvas. */
     fun closeCanvas() {
-        _state.value = _state.value.copy(canvas = null, canvasPath = null)
+        _state.value = _state.value.copy(canvas = null, canvasPath = null, canvasBaseUrl = null)
     }
 
     // ---- image attachments (vision) ----
@@ -3330,11 +3504,18 @@ class ChatViewModel(
         // tests without one fall back to the ViewModel scope.
         val scope = runScope ?: viewModelScope
         runJob = scope.launch {
-            // Title a fresh chat from its first message.
+            // Title a fresh chat from its first message and pin the stored cwd
+            // to the active project. A session opened from another project must
+            // never run its tools against that project's files.
             runCatching {
                 val s = store.session(sid)
-                if (s != null && (s.title == "new chat" || s.title.isBlank())) {
-                    store.updateSession(s.copy(title = oneLine(text, 48), updatedAt = System.currentTimeMillis()))
+                if (s != null) {
+                    var next = s
+                    if (next.title == "new chat" || next.title.isBlank()) {
+                        next = next.copy(title = oneLine(text, 48))
+                    }
+                    if (next.cwd != workspace.toString()) next = next.copy(cwd = workspace.toString())
+                    if (next != s) store.updateSession(next.copy(updatedAt = System.currentTimeMillis()))
                 }
             }
             // Carry the queued images on a dedicated user message; Wire expands
@@ -3581,14 +3762,16 @@ class ChatViewModel(
         /** The Debian maintenance "nothing to reclaim" status, filtered from the summary. */
         private const val ENVIRONMENT_READY = "environment ready"
 
-        /** Storage scan budget, shared across every measured tree. */
+        /** Storage scan budget, shared by every measured tree; caches go first. */
         private const val SCAN_BUDGET_MS = 20_000L
         private const val MAX_SCAN_DEPTH = 40
         private const val MAX_SCAN_NODES = 200_000
 
         const val STORAGE_WORKSPACE = "project workspace"
         const val STORAGE_ALPINE = "alpine rootfs"
+        const val STORAGE_ALPINE_CACHE = "alpine caches"
         const val STORAGE_DEBIAN = "debian rootfs"
+        const val STORAGE_DEBIAN_CACHE = "debian caches"
         const val STORAGE_WRAPPERS = "command wrappers"
         const val STORAGE_STORES = "session store (lumen.db)"
         const val STORAGE_LOGS = "logs"
@@ -3607,9 +3790,13 @@ class ChatViewModel(
          */
         internal const val DELTA_COALESCE_MS = 40L
 
-        fun Factory(context: Context, workspace: java.io.File): androidx.lifecycle.ViewModelProvider.Factory {
+        fun Factory(
+            context: Context,
+            workspace: java.io.File,
+            projects: ProjectStore? = null,
+        ): androidx.lifecycle.ViewModelProvider.Factory {
             val app = context.applicationContext as? LumenApp ?: error("LumenApp must own ChatViewModel")
-            return Factory(app.container, app.applicationScope, app.events, app.runningSessions, workspace)
+            return Factory(app.container, app.applicationScope, app.events, app.runningSessions, workspace, projects)
         }
 
         /**
@@ -3624,6 +3811,7 @@ class ChatViewModel(
             events: EventBus,
             runningSessions: MutableSet<String>,
             workspace: java.io.File,
+            projects: ProjectStore? = null,
         ): androidx.lifecycle.ViewModelProvider.Factory =
             object : androidx.lifecycle.ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
@@ -3640,7 +3828,8 @@ class ChatViewModel(
                     catalogue = container.catalogue,
                     eventBus = events,
                     runningSessions = runningSessions,
-                    actions = WorkspaceActions(container.context, File(container.context.filesDir, "workspace")),
+                    actions = WorkspaceActions(container.context, workspace),
+                    projectStore = projects,
                 ) as T
             }
     }

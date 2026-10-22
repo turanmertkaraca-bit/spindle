@@ -8,6 +8,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.dp
 import dev.lumen.app.EditorState
 import dev.lumen.app.FileEntry
@@ -18,10 +19,12 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 /**
  * The files cockpit renders a folder listing and routes taps: a folder enters,
- * the editor shows a capped file and disables Save when truncated.
+ * an HTML page previews in the canvas, the editor shows a capped file and
+ * disables Save when truncated, and an unsaved draft asks before discarding.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -35,6 +38,7 @@ class FilesScreenTest {
     private val entries = listOf(
         FileEntry(name = "src", path = "src", isDir = true, size = 0, modified = 0),
         FileEntry(name = "readme.txt", path = "readme.txt", isDir = false, size = 12, modified = 0),
+        FileEntry(name = "page.html", path = "page.html", isDir = false, size = 20, modified = 0),
     )
 
     @Composable
@@ -42,6 +46,8 @@ class FilesScreenTest {
         files: FilesState?,
         editor: EditorState? = null,
         onEnter: (FileEntry) -> Unit = {},
+        onOpenCanvas: (String) -> Unit = {},
+        onCloseEditor: () -> Unit = {},
     ) {
         FilesScreen(
             colors = LumenColors.Dark,
@@ -51,12 +57,13 @@ class FilesScreenTest {
             onUp = {},
             onEnter = onEnter,
             onSaveFile = { _, _ -> },
-            onCloseEditor = {},
+            onCloseEditor = onCloseEditor,
             onCreateFile = { _, _ -> },
             onCreateDir = { _, _ -> },
             onRename = { _, _ -> },
             onDelete = { _, _ -> },
             onBack = {},
+            onOpenCanvas = onOpenCanvas,
             modifier = viewport,
         )
     }
@@ -80,6 +87,66 @@ class FilesScreenTest {
 
         compose.onNodeWithTag("files-empty").assertIsDisplayed()
         compose.onNodeWithText("This folder is empty").assertIsDisplayed()
+    }
+
+    @Test
+    fun `search filters the folder and the clear action restores it`() {
+        compose.setContent { screen(FilesState(dir = "", entries = entries)) }
+
+        compose.onNodeWithTag("files-search").performTextInput("read")
+        compose.waitForIdle()
+        compose.onNodeWithTag("entry-readme.txt").assertIsDisplayed()
+        compose.onNodeWithTag("entry-src").assertDoesNotExist()
+
+        compose.onNodeWithTag("files-search-clear").performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag("entry-src").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a search with no hits shows the no-matches state`() {
+        compose.setContent { screen(FilesState(dir = "", entries = entries)) }
+
+        compose.onNodeWithTag("files-search").performTextInput("zzz")
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("files-no-matches").assertIsDisplayed()
+    }
+
+    @Test
+    fun `tapping an html file opens the preview, not the editor`() {
+        var previewed: String? = null
+        var entered: FileEntry? = null
+        compose.setContent {
+            screen(
+                FilesState(dir = "", entries = entries),
+                onEnter = { entered = it },
+                onOpenCanvas = { previewed = it },
+            )
+        }
+
+        compose.onNodeWithTag("entry-page.html").performClick()
+        compose.waitForIdle()
+
+        assertEquals("page.html", previewed)
+        assertNull(entered)
+    }
+
+    @Test
+    fun `an html file in the editor offers a View action`() {
+        var previewed: String? = null
+        compose.setContent {
+            screen(
+                FilesState(dir = "", entries = entries),
+                editor = EditorState(path = "page.html", lines = listOf("<html></html>")),
+                onOpenCanvas = { previewed = it },
+            )
+        }
+
+        compose.onNodeWithTag("editor-view").assertIsDisplayed().performClick()
+        compose.waitForIdle()
+
+        assertEquals("page.html", previewed)
     }
 
     @Test
@@ -123,5 +190,29 @@ class FilesScreenTest {
         }
 
         compose.onNodeWithTag("editor-highlight").assertDoesNotExist()
+    }
+
+    @Test
+    fun `closing a dirty editor asks before discarding`() {
+        var closed = false
+        compose.setContent {
+            screen(
+                FilesState(dir = "", entries = entries),
+                editor = EditorState(
+                    path = "readme.txt",
+                    lines = listOf("alpha"),
+                    draft = "alpha edited",
+                    dirty = true,
+                ),
+                onCloseEditor = { closed = true },
+            )
+        }
+
+        compose.onNodeWithTag("editor-cancel").performClick()
+        compose.onNodeWithText("Discard changes?").assertIsDisplayed()
+        compose.onNodeWithTag("discard-yes").performClick()
+        compose.waitForIdle()
+
+        assertEquals(true, closed)
     }
 }

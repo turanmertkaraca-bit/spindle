@@ -2,12 +2,13 @@
 
 Native Android agent app on the `spindle` engine. Repo
 `turanmertkaraca-bit/spindle`, branch `main`, package `dev.lumen.app`.
-Latest code HEAD = `65e8cee`, version **0.2.7** (`versionCode 12`); this docs
-refresh for the 0.2.7 wave lands on top of `65e8cee`. CI
+Latest code HEAD = `c8f1ed6`, version **0.2.8** (`versionCode 13`); the 0.2.8
+wave (project isolation, storage clearing, Files rework) lands on top of
+`c8f1ed6`. CI
 (`.github/workflows/ci.yml`) runs both jobs (`jvm backend` + `android app
 (robolectric)`) — always re-verify CI by sha with the `ci.sh` poll in §4 before
 trusting a build. Releases **v0.2.0**–**v0.2.6** are published, each with a
-`lumen-<ver>-debug.apk` asset; **v0.2.7** is the current version. The debug APK
+`lumen-<ver>-debug.apk` asset; **v0.2.8** is the current version. The debug APK
 is signed with the committed `debug.keystore` so it installs over the previous
 build. A fresh debug APK is staged on device at
 `/storage/emulated/0/Download/lumen-debug.apk`.
@@ -196,6 +197,29 @@ The 0.2.x waves landed since the last handoff; all are CI-green.
     thread (many `:app` tests call them synchronously). Full stretchtext
     (cc-stretch) was assessed: it needs the model to author the levels and, per
     its own README, does **not** save tokens — only long-body windowing exists.
+- **0.2.8**: project isolation, storage clearing, and the Files rework.
+  - **Projects**: new `data/ProjectStore.kt` keeps one folder per project under
+    `filesDir/projects/<slug>` (legacy `filesDir/workspace` migrates into
+    `projects/playground`); the active project scopes the agent tool cwd, the
+    terminal, the file watcher, the git runner, the Files view, the storage row,
+    and the truncation spill dir, and a run re-pins its session cwd on every
+    send. `ProjectsScreen` creates / switches / deletes (confirmed, recursive,
+    last project protected); Home ⋯ → Projects and Settings → system → project.
+  - **Storage clearing**: clearable areas are measured as their own rows
+    (`app cache`, `logs`, `alpine caches`, `debian caches`, stale app-cache
+    entries) instead of the whole rootfs, so a clear visibly moves the number;
+    clearing empties directories in place (proot/apt need them to exist),
+    returns the real freed bytes, and surfaces failures instead of swallowing
+    them.
+  - **Files rework**: one 18dp page gutter, project-aware breadcrumb, search,
+    item/size columns, uniform 52dp rows with a per-row menu (Edit / Preview
+    page / Open externally / Rename / Delete), editor meta line, HTML **View**
+    action, and a discard-changes guard. The inline `View` button that made one
+    row taller is gone.
+  - **Canvas**: local HTML loads with its own folder as the base URL so relative
+    CSS/JS/images resolve; remote network loads stay blocked on purpose.
+  - **Spacing**: Files header/rows got the missing page inset (4dp → 18dp) and
+    the collapsed thinking row no longer reserves dead space above its header.
 
 ## 2. What's left (honest open gaps)
 

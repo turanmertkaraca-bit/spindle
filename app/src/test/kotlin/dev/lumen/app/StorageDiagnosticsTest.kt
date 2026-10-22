@@ -85,6 +85,47 @@ class StorageDiagnosticsTest {
         assertEquals("project source", source.readText())
         assertTrue(database.isFile, "the session store must survive a cache clear")
         assertFalse(cached.exists(), "the app cache should have been reclaimed")
+        assertTrue(context.cacheDir.isDirectory, "the cache dir itself is kept, not removed")
+
+        val report = assertNotNull(vm.state.value.storage)
+        assertTrue(report.lastFreed > 0, "a clear must report the bytes it freed")
+        assertEquals("all caches", report.lastCleared)
+        assertEquals(
+            0L,
+            report.categories.first { it.name == ChatViewModel.STORAGE_CACHE }.bytes,
+            "the cleared category must measure as empty",
+        )
+    }
+
+    @Test
+    fun `clearing debian caches empties only the regenerable dirs and reports freed bytes`() {
+        val archives = File(context.filesDir, "debian/rootfs/var/cache/apt/archives").apply { mkdirs() }
+        val packageFile = File(archives, "pkg.deb").apply { writeText("x".repeat(4096)) }
+        val bash = File(context.filesDir, "debian/rootfs/bin/bash").apply {
+            parentFile?.mkdirs()
+            writeText("#!/bin/sh\n")
+        }
+
+        vm.scanStorage()
+        val before = assertNotNull(vm.state.value.storage)
+        val cacheBefore = before.categories
+            .first { it.name == ChatViewModel.STORAGE_DEBIAN_CACHE }.bytes
+        assertTrue(cacheBefore >= packageFile.length(), "the cache row must measure the archive")
+
+        vm.clearStorageCategory(ChatViewModel.STORAGE_DEBIAN_CACHE)
+
+        assertFalse(packageFile.exists())
+        assertTrue(archives.isDirectory, "apt's cache dir is kept")
+        assertTrue(bash.isFile, "the rest of the rootfs is untouched")
+
+        val after = assertNotNull(vm.state.value.storage)
+        assertTrue(after.lastFreed >= 4096, "the freed bytes are reported")
+        assertEquals(ChatViewModel.STORAGE_DEBIAN_CACHE, after.lastCleared)
+        assertEquals(
+            0L,
+            after.categories.first { it.name == ChatViewModel.STORAGE_DEBIAN_CACHE }.bytes,
+            "the cache row drops to zero after a clear",
+        )
     }
 
     @Test

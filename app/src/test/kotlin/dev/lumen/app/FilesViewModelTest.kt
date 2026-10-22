@@ -179,4 +179,20 @@ class FilesViewModelTest {
         assertTrue(editor.truncated)
         assertEquals(ChatViewModel.MAX_PEEK_LINES, editor.lines.size)
     }
+
+    @Test
+    fun `openCanvas exposes a file base url for the page's own folder`() {
+        write("site/index.html", "<html><body>hi</body></html>")
+        write("site/app.css", "body{color:red}")
+
+        vm.openCanvas("site/index.html")
+
+        assertEquals("<html><body>hi</body></html>", vm.state.value.canvas)
+        val base = assertNotNull(vm.state.value.canvasBaseUrl)
+        assertTrue(base.startsWith("file:"), "the base must be a file url")
+        assertTrue(base.endsWith("/site/"), "the base must be the page's folder")
+
+        vm.closeCanvas()
+        assertNull(vm.state.value.canvasBaseUrl)
+    }
 }

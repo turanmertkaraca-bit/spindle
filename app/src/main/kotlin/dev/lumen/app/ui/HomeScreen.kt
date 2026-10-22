@@ -254,6 +254,10 @@ fun HomeScreen(
     onFiles: (() -> Unit)? = null,
     /** Open the interactive shell, when supplied. */
     onTerminal: (() -> Unit)? = null,
+    /** Open the project folders picker, when supplied. */
+    onProjects: (() -> Unit)? = null,
+    /** Name of the active project folder, shown in the header menu row. */
+    projectName: String = "",
     /** Full-text hits; non-null while a search is active. */
     search: List<SearchHit>? = null,
     /** Current search text. */
@@ -329,6 +333,10 @@ fun HomeScreen(
     // Secondary destinations tuck into one quiet menu so the header stays calm.
     val menuItems = buildList {
         add(TopMenuAction("Settings", "settings", onSettings))
+        if (onProjects != null) {
+            val label = if (projectName.isBlank()) "Projects" else "Projects \u00b7 $projectName"
+            add(TopMenuAction(label, "home-projects", onProjects))
+        }
         if (onImport != null) add(TopMenuAction("Import session", "home-import", onImport))
     }
 

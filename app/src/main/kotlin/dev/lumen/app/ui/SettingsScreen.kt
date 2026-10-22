@@ -88,6 +88,10 @@ fun SettingsScreen(
     /** Auto-compaction threshold percentage (50..95) of the model window. */
     autoCompactPercent: Int = 80,
     onAutoCompactPercent: (Int) -> Unit = {},
+    /** Open the project folders picker, when supplied. */
+    onProjects: (() -> Unit)? = null,
+    /** Name of the active project folder, shown in the system card. */
+    projectName: String = "",
     /** Open the storage manager. */
     onStorage: () -> Unit = {},
     /** Open the diagnostics screen (Linux environment + event log). */
@@ -338,6 +342,16 @@ fun SettingsScreen(
         LumenSectionHeader(colors, "system")
         Spacer(Modifier.height(LumenSpacing.sm))
         SettingsCard(colors) {
+            if (onProjects != null) {
+                NavRow(
+                    colors = colors,
+                    label = "project",
+                    value = projectName.ifBlank { "playground" },
+                    tag = "settings-projects",
+                    onClick = onProjects,
+                )
+                RowDivider(colors)
+            }
             NavRow(colors, "storage", "space \u00b7 caches", "settings-storage", onStorage)
             RowDivider(colors)
             NavRow(colors, "diagnostics", "environment \u00b7 log", "settings-diagnostics", onDiagnostics)

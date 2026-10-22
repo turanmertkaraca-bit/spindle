@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -12,10 +13,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -42,7 +43,6 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -66,9 +66,13 @@ private val Mono = FontFamily.Monospace
 private enum class NewKind { File, Folder }
 
 /**
- * The project file cockpit: a breadcrumbed browser plus an in-place editor, all
- * scoped to the session workspace. Pure hoisted state — the caller wires every
- * action to [dev.lumen.app.ChatViewModel].
+ * The project file cockpit: a breadcrumbed, searchable browser plus an in-place
+ * editor, all scoped to the active project folder. Pure hoisted state — the
+ * caller wires every action to [dev.lumen.app.ChatViewModel].
+ *
+ * Every horizontal edge uses [LumenSpacing.page] (the top bar's own 4dp inset is
+ * compensated), so the header, breadcrumb, rows and editor body line up instead
+ * of stepping in by a different amount per section.
  */
 @Composable
 fun FilesScreen(
@@ -89,15 +93,25 @@ fun FilesScreen(
     onOpenCanvas: (String) -> Unit = {},
     modifier: Modifier = Modifier,
     onDraftChange: (String) -> Unit = {},
+    /** Shown as the breadcrumb root so the user knows which project they see. */
+    projectName: String = "project",
+    /** Absolute project root; used only to locate the truncated-output spill dir. */
+    workspacePath: String = "",
+    /** Hand an image (or other opaque file) to an external viewer. */
+    onOpenExternally: (String) -> Unit = {},
+    /** Re-list the current folder on demand. */
+    onRefresh: (() -> Unit)? = null,
 ) {
     val dir = files?.dir.orEmpty()
-    val context = LocalContext.current
-    val spillRoot = remember(context) { File(context.filesDir, "workspace/.spindle/truncated") }
+    val spillRoot = remember(workspacePath) {
+        if (workspacePath.isBlank()) null else File(workspacePath, ".spindle/truncated")
+    }
 
     var newKind by remember { mutableStateOf<NewKind?>(null) }
     var renameTarget by remember { mutableStateOf<FileEntry?>(null) }
     var deleteTarget by remember { mutableStateOf<FileEntry?>(null) }
     var pendingSave by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var query by remember(files?.dir) { mutableStateOf("") }
 
     // The editor is the detail half when a file is open, or null when none is.
     val openEditor = editor
@@ -115,6 +129,7 @@ fun FilesScreen(
                     }
                 },
                 onDraftChange = onDraftChange,
+                onOpenCanvas = onOpenCanvas,
             )
         }
     } else {
@@ -122,9 +137,6 @@ fun FilesScreen(
     }
 
     Box(modifier.fillMaxSize().background(colors.bg).imePadding()) {
-        // On wide screens the selected file's editor renders beside the browser;
-        // on phones the same editor stacks over it, exactly as before. The list
-        // stays composed underneath in both cases, so its scroll position lives on.
         AdaptiveTwoPane(
             list = {
                 Column(Modifier.fillMaxSize()) {
@@ -133,7 +145,17 @@ fun FilesScreen(
                         title = "Files",
                         onBack = onBack,
                         backTag = "files-back",
+                        modifier = Modifier.padding(horizontal = LumenSpacing.page - 4.dp),
                         actions = {
+                            if (onRefresh != null) {
+                                LumenBarAction(
+                                    colors = colors,
+                                    label = "\u21bb",
+                                    tag = "files-refresh",
+                                    onClick = onRefresh,
+                                    contentDescription = "refresh",
+                                )
+                            }
                             if (dir.isNotEmpty()) {
                                 LumenBarAction(colors, "Up", "files-up", onUp)
                             }
@@ -151,28 +173,57 @@ fun FilesScreen(
                         },
                     )
 
-                    Breadcrumb(colors, dir, onOpenDir)
+                    Breadcrumb(colors, projectName, dir, onOpenDir)
 
                     val listing = files
                     if (listing == null) {
                         CenteredHint(colors, "Loading files\u2026")
                     } else {
+                        val shown = remember(listing.entries, query) {
+                            val needle = query.trim()
+                            if (needle.isEmpty()) {
+                                listing.entries
+                            } else {
+                                listing.entries.filter { it.name.contains(needle, ignoreCase = true) }
+                            }
+                        }
+                        val folders = shown.count { it.isDir }
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = LumenSpacing.page, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                if (shown.isEmpty()) "empty" else "${shown.size} ${if (shown.size == 1) "item" else "items"} \u00b7 $folders ${if (folders == 1) "folder" else "folders"}",
+                                color = colors.dim,
+                                fontFamily = Mono,
+                                fontSize = LumenType.micro,
+                                letterSpacing = 0.4.sp,
+                                modifier = Modifier.weight(1f).testTag("files-count"),
+                            )
+                        }
+                        SearchField(
+                            colors = colors,
+                            query = query,
+                            onQuery = { query = it },
+                        )
+
                         val listingError = listing.error
                         if (listingError != null && listing.entries.isEmpty()) {
                             CenteredHint(colors, listingError, error = true)
-                        } else if (listing.entries.isEmpty()) {
+                        } else if (shown.isEmpty()) {
                             CenteredHint(
-                                colors,
-                                "This folder is empty",
-                                detail = "Use New to add a file or folder",
-                                tag = "files-empty",
+                                colors = colors,
+                                text = if (query.isBlank()) "This folder is empty" else "No matches",
+                                detail = if (query.isBlank()) "Use New to add a file or folder" else "Nothing here matches \u201c$query\u201d",
+                                tag = if (query.isBlank()) "files-empty" else "files-no-matches",
                             )
                         } else {
-                            val spillCount = remember(listing.dir, listing.entries) {
-                                if (listing.dir.isEmpty()) {
-                                    runCatching {
-                                        spillRoot.listFiles()?.count { it.isFile } ?: 0
-                                    }.getOrDefault(0)
+                            val spillCount = remember(listing.dir, listing.entries, spillRoot) {
+                                if (listing.dir.isEmpty() && spillRoot != null) {
+                                    runCatching { spillRoot.listFiles()?.count { it.isFile } ?: 0 }
+                                        .getOrDefault(0)
                                 } else {
                                     0
                                 }
@@ -182,7 +233,13 @@ fun FilesScreen(
                                     .fillMaxWidth()
                                     .weight(1f)
                                     .testTag("files-list"),
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
+                                contentPadding = PaddingValues(
+                                    start = LumenSpacing.page,
+                                    end = LumenSpacing.page,
+                                    top = 4.dp,
+                                    bottom = 14.dp,
+                                ),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
                                 if (listingError != null) {
                                     item(key = "__error") {
@@ -192,7 +249,7 @@ fun FilesScreen(
                                             fontFamily = Mono,
                                             fontSize = LumenType.caption,
                                             modifier = Modifier
-                                                .padding(horizontal = 6.dp, vertical = 4.dp)
+                                                .padding(horizontal = 2.dp, vertical = 4.dp)
                                                 .testTag("files-error"),
                                         )
                                     }
@@ -200,17 +257,17 @@ fun FilesScreen(
                                 if (listing.truncated) {
                                     item(key = "__truncated") {
                                         Text(
-                                            "\u2026 showing the first ${listing.entries.size} entries \u2014 workspace has more",
+                                            "\u2026 showing the first ${listing.entries.size} entries \u2014 project has more",
                                             color = colors.dim,
                                             fontFamily = Mono,
                                             fontSize = LumenType.caption,
                                             modifier = Modifier
-                                                .padding(horizontal = 6.dp, vertical = 4.dp)
+                                                .padding(horizontal = 2.dp, vertical = 4.dp)
                                                 .testTag("files-truncated"),
                                         )
                                     }
                                 }
-                                if (spillCount > 0) {
+                                if (spillCount > 0 && query.isBlank()) {
                                     item(key = "__spill") {
                                         Text(
                                             "\u2026 $spillCount saved output ${if (spillCount == 1) "file" else "files"} \u00b7 .spindle/truncated",
@@ -219,15 +276,17 @@ fun FilesScreen(
                                             fontSize = LumenType.caption,
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .heightIn(min = 40.dp)
-                                                .clip(LumenShapes.small)
+                                                .heightIn(min = 44.dp)
+                                                .clip(LumenShapes.row)
+                                                .background(colors.surface)
+                                                .border(1.dp, colors.outline, LumenShapes.row)
                                                 .clickable { onOpenDir(".spindle/truncated") }
-                                                .padding(horizontal = 6.dp, vertical = 10.dp)
+                                                .padding(horizontal = 14.dp, vertical = 12.dp)
                                                 .testTag("files-spill"),
                                         )
                                     }
                                 }
-                                items(listing.entries, key = { it.path }) { entry ->
+                                items(shown, key = { it.path }) { entry ->
                                     EntryRow(
                                         colors = colors,
                                         entry = entry,
@@ -235,6 +294,7 @@ fun FilesScreen(
                                         onRename = { renameTarget = it },
                                         onDelete = { deleteTarget = it },
                                         onOpenCanvas = onOpenCanvas,
+                                        onOpenExternally = onOpenExternally,
                                     )
                                 }
                             }
@@ -309,7 +369,12 @@ fun FilesScreen(
 }
 
 @Composable
-private fun Breadcrumb(colors: LumenColors, dir: String, onOpenDir: (String) -> Unit) {
+private fun Breadcrumb(
+    colors: LumenColors,
+    projectName: String,
+    dir: String,
+    onOpenDir: (String) -> Unit,
+) {
     val segments = dir.split('/').filter { it.isNotEmpty() }
     Row(
         Modifier
@@ -319,7 +384,7 @@ private fun Breadcrumb(colors: LumenColors, dir: String, onOpenDir: (String) -> 
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            "workspace",
+            projectName.ifBlank { "project" },
             color = if (segments.isEmpty()) colors.fg else colors.water,
             fontFamily = Mono,
             fontSize = LumenType.body,
@@ -360,6 +425,61 @@ private fun Breadcrumb(colors: LumenColors, dir: String, onOpenDir: (String) -> 
 }
 
 @Composable
+private fun SearchField(colors: LumenColors, query: String, onQuery: (String) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = LumenSpacing.page, vertical = 4.dp)
+            .clip(LumenShapes.inset)
+            .background(colors.surface)
+            .border(1.dp, colors.outline, LumenShapes.inset)
+            .padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp)
+            .heightIn(min = 42.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("\u2315", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.weight(1f)) {
+            if (query.isEmpty()) {
+                Text(
+                    "filter this folder",
+                    color = colors.faint,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
+                )
+            }
+            BasicTextField(
+                value = query,
+                onValueChange = onQuery,
+                singleLine = true,
+                textStyle = LocalTextStyle.current.copy(
+                    color = colors.fg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
+                ),
+                cursorBrush = SolidColor(colors.water),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 9.dp)
+                    .testTag("files-search"),
+            )
+        }
+        if (query.isNotEmpty()) {
+            Box(
+                Modifier
+                    .sizeIn(minWidth = 36.dp, minHeight = 36.dp)
+                    .clip(LumenShapes.small)
+                    .clickable { onQuery("") }
+                    .testTag("files-search-clear"),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("\u00d7", color = colors.dim, fontFamily = Mono, fontSize = 15.sp)
+            }
+        }
+    }
+}
+
+@Composable
 private fun EntryRow(
     colors: LumenColors,
     entry: FileEntry,
@@ -367,68 +487,66 @@ private fun EntryRow(
     onRename: (FileEntry) -> Unit,
     onDelete: (FileEntry) -> Unit,
     onOpenCanvas: (String) -> Unit = {},
+    onOpenExternally: (String) -> Unit = {},
 ) {
     var menu by remember { mutableStateOf(false) }
+    val tap: () -> Unit = when {
+        entry.isDir -> ({ onEnter(entry) })
+        isHtml(entry.name) -> ({ onOpenCanvas(entry.path) })
+        isImage(entry.name) -> ({ onOpenExternally(entry.path) })
+        else -> ({ onEnter(entry) })
+    }
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 0.dp, vertical = 3.dp)
+            .heightIn(min = 52.dp)
             .clip(LumenShapes.row)
             .background(colors.surface)
             .border(1.dp, colors.outline, LumenShapes.row)
-            .clickable { onEnter(entry) }
-            .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp)
+            .clickable(onClick = tap)
+            .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)
             .testTag("entry-${entry.path}"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            if (entry.isDir) "\u25b8" else "\u00b7",
-            color = if (entry.isDir) colors.water else colors.faint,
-            fontFamily = Mono,
-            fontSize = LumenType.bodyLarge,
-            modifier = Modifier.width(18.dp),
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(
-            entry.name,
-            color = colors.fg,
-            fontFamily = Mono,
-            fontSize = LumenType.bodyLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        if (!entry.isDir) {
-            Spacer(Modifier.width(8.dp))
+        Box(
+            Modifier
+                .sizeIn(minWidth = 30.dp, minHeight = 30.dp)
+                .clip(LumenShapes.glyph)
+                .background(if (entry.isDir) colors.water.copy(alpha = 0.16f) else colors.bg)
+                .border(1.dp, colors.outline, LumenShapes.glyph),
+            contentAlignment = Alignment.Center,
+        ) {
             Text(
-                humanSize(entry.size),
+                if (entry.isDir) "\u25b8" else fileGlyph(entry.name),
+                color = if (entry.isDir) colors.water else colors.dim,
+                fontFamily = Mono,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                entry.name,
+                color = colors.fg,
+                fontFamily = Mono,
+                fontSize = LumenType.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(1.dp))
+            Text(
+                if (entry.isDir) "folder" else humanSize(entry.size),
                 color = colors.dim,
                 fontFamily = Mono,
                 fontSize = LumenType.micro,
+                letterSpacing = 0.3.sp,
             )
-            if (isHtml(entry.name)) {
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "\u25b6 View",
-                    color = colors.water,
-                    fontFamily = Mono,
-                    fontSize = LumenType.micro,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier
-                        .heightIn(min = 40.dp)
-                        .clip(LumenShapes.small)
-                        .background(colors.surface)
-                        .border(1.dp, colors.outline, LumenShapes.small)
-                        .clickable { onOpenCanvas(entry.path) }
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                        .testTag("view-${entry.path}"),
-                )
-            }
         }
         Box {
             Box(
                 modifier = Modifier
-                    .sizeIn(minWidth = 40.dp, minHeight = 40.dp)
+                    .sizeIn(minWidth = LumenSize.touchMin, minHeight = LumenSize.touchMin)
                     .semantics { contentDescription = "file actions" }
                     .clip(LumenShapes.small)
                     .clickable { menu = true }
@@ -448,39 +566,68 @@ private fun EntryRow(
                 onDismissRequest = { menu = false },
                 containerColor = colors.surface,
             ) {
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            "Rename",
-                            color = colors.fg,
-                            fontFamily = Mono,
-                            fontSize = LumenType.body,
-                        )
-                    },
-                    onClick = { menu = false; onRename(entry) },
-                    modifier = Modifier.testTag("rename-${entry.path}"),
-                )
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            "Delete",
-                            color = alertOn(colors),
-                            fontFamily = Mono,
-                            fontSize = LumenType.body,
-                        )
-                    },
-                    onClick = { menu = false; onDelete(entry) },
-                    modifier = Modifier.testTag("delete-${entry.path}"),
-                )
+                if (entry.isDir) {
+                    MenuItem(colors, "Open", "open-${entry.path}") {
+                        menu = false
+                        onEnter(entry)
+                    }
+                } else {
+                    MenuItem(colors, "Edit", "edit-${entry.path}") {
+                        menu = false
+                        onEnter(entry)
+                    }
+                    if (isHtml(entry.name)) {
+                        MenuItem(colors, "Preview page", "preview-${entry.path}") {
+                            menu = false
+                            onOpenCanvas(entry.path)
+                        }
+                    }
+                    if (isImage(entry.name)) {
+                        MenuItem(colors, "Open externally", "external-${entry.path}") {
+                            menu = false
+                            onOpenExternally(entry.path)
+                        }
+                    }
+                }
+                MenuItem(colors, "Rename", "rename-${entry.path}") {
+                    menu = false
+                    onRename(entry)
+                }
+                MenuItem(colors, "Delete", "delete-${entry.path}", destructive = true) {
+                    menu = false
+                    onDelete(entry)
+                }
             }
         }
     }
 }
 
+@Composable
+private fun MenuItem(
+    colors: LumenColors,
+    label: String,
+    tag: String,
+    destructive: Boolean = false,
+    onClick: () -> Unit,
+) {
+    DropdownMenuItem(
+        text = {
+            Text(
+                label,
+                color = if (destructive) alertOn(colors) else colors.fg,
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+            )
+        },
+        onClick = onClick,
+        modifier = Modifier.testTag(tag),
+    )
+}
+
 /**
  * The full-screen editor: monospace body, Save and Cancel. A file truncated at
  * the line cap notes it and disables Save so a partial read can never overwrite
- * the whole file.
+ * the whole file. An unsaved draft asks before it is discarded.
  */
 @Composable
 private fun EditorOverlay(
@@ -489,6 +636,7 @@ private fun EditorOverlay(
     onCancel: () -> Unit,
     onSave: (String, Boolean) -> Unit,
     onDraftChange: (String) -> Unit,
+    onOpenCanvas: (String) -> Unit = {},
 ) {
     val binary = editor.readOnly
     val failed = editor.error != null && !binary
@@ -501,6 +649,7 @@ private fun EditorOverlay(
     var baseline by remember(revision) { mutableStateOf(source) }
     var lastDraft by remember(editor.path) { mutableStateOf(editor.draft) }
     var wasDirty by remember(editor.path) { mutableStateOf(editor.dirty) }
+    var discardAsk by remember(editor.path) { mutableStateOf(false) }
     val draft = localDraft ?: source
     val dirty = editor.dirty || localDirty || draft != baseline
 
@@ -546,8 +695,17 @@ private fun EditorOverlay(
             title = editor.path,
             titleTag = "editor-path",
             titleSize = 13.sp,
+            modifier = Modifier.padding(horizontal = LumenSpacing.page - 4.dp),
             actions = {
-                LumenBarAction(colors, "Cancel", "editor-cancel", onCancel)
+                if (isHtml(editor.path)) {
+                    LumenBarAction(colors, "View", "editor-view", { onOpenCanvas(editor.path) })
+                }
+                LumenBarAction(
+                    colors = colors,
+                    label = "Cancel",
+                    tag = "editor-cancel",
+                    onClick = { if (dirty) discardAsk = true else onCancel() },
+                )
                 val canSave = !binary && !editor.truncated && !failed && dirty
                 LumenBarAction(
                     colors = colors,
@@ -564,6 +722,23 @@ private fun EditorOverlay(
             },
         )
 
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = LumenSpacing.page, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "${editor.lines.size}${if (editor.truncated) "+" else ""} lines \u00b7 ${draft.length} chars" +
+                    if (dirty) " \u00b7 edited" else "",
+                color = if (dirty) colors.water else colors.dim,
+                fontFamily = Mono,
+                fontSize = LumenType.micro,
+                letterSpacing = 0.4.sp,
+                modifier = Modifier.weight(1f).testTag("editor-meta"),
+            )
+        }
+
         // A quiet, testable confirmation that something pointed us at a line
         // range. Absent for a freshly created or untouched file.
         highlight?.let { h ->
@@ -576,7 +751,7 @@ private fun EditorOverlay(
                 fontSize = LumenType.micro,
                 letterSpacing = 0.4.sp,
                 modifier = Modifier
-                    .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 8.dp)
+                    .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 6.dp)
                     .clip(LumenShapes.small)
                     .background(colors.water.copy(alpha = 0.12f))
                     .border(1.dp, colors.outline, LumenShapes.small)
@@ -603,7 +778,7 @@ private fun EditorOverlay(
                 fontSize = LumenType.micro,
                 letterSpacing = 0.4.sp,
                 modifier = Modifier
-                    .padding(start = LumenSpacing.page, end = LumenSpacing.page, bottom = 6.dp)
+                    .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 6.dp)
                     .testTag("editor-binary"),
             )
         }
@@ -615,7 +790,7 @@ private fun EditorOverlay(
                 fontSize = LumenType.micro,
                 letterSpacing = 0.4.sp,
                 modifier = Modifier
-                    .padding(start = LumenSpacing.page, end = LumenSpacing.page, bottom = 6.dp)
+                    .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 6.dp)
                     .testTag("editor-truncated"),
             )
         }
@@ -662,6 +837,23 @@ private fun EditorOverlay(
                     .testTag("editor-body"),
             )
         }
+    }
+
+    if (discardAsk) {
+        ConfirmDialog(
+            colors = colors,
+            title = "Discard changes?",
+            message = "This file has edits that were not saved.",
+            confirm = "Discard",
+            destructive = true,
+            yesTag = "discard-yes",
+            noTag = "discard-no",
+            onDismiss = { discardAsk = false },
+            onConfirm = {
+                discardAsk = false
+                onCancel()
+            },
+        )
     }
 }
 
@@ -738,6 +930,8 @@ private fun ConfirmDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
     destructive: Boolean = false,
+    yesTag: String = "confirm-yes",
+    noTag: String = "confirm-no",
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -757,7 +951,7 @@ private fun ConfirmDialog(
                     .clip(LumenShapes.small)
                     .clickable { onConfirm() }
                     .padding(horizontal = 8.dp, vertical = 6.dp)
-                    .testTag("confirm-yes"),
+                    .testTag(yesTag),
             )
         },
         dismissButton = {
@@ -770,7 +964,7 @@ private fun ConfirmDialog(
                     .clip(LumenShapes.small)
                     .clickable { onDismiss() }
                     .padding(horizontal = 8.dp, vertical = 6.dp)
-                    .testTag("confirm-no"),
+                    .testTag(noTag),
             )
         },
     )
@@ -801,11 +995,26 @@ private fun ColumnScope.CenteredHint(
 }
 
 private fun humanSize(bytes: Long): String = when {
-    bytes < 1024 -> "${bytes}B"
-    bytes < 1024 * 1024 -> "${bytes / 1024}K"
-    else -> "${bytes / (1024 * 1024)}M"
+    bytes < 1024 -> "${bytes} B"
+    bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+    bytes < 1024 * 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
+    else -> String.format(java.util.Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
 }
 
-/** True for a self-contained page the canvas can render. */
+/** A one-glyph hint of the file kind, so rows scan without reading names. */
+private fun fileGlyph(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+    "html", "htm" -> "\u25c9"
+    "png", "jpg", "jpeg", "webp", "gif", "bmp" -> "\u25a3"
+    "md", "txt" -> "\u2261"
+    "kt", "java", "py", "js", "ts", "sh" -> "\u2039\u203a"
+    "json", "yml", "yaml", "toml" -> "{}"
+    else -> "\u00b7"
+}
+
 private fun isHtml(name: String): Boolean =
     name.endsWith(".html", ignoreCase = true) || name.endsWith(".htm", ignoreCase = true)
+
+private fun isImage(name: String): Boolean = when (name.substringAfterLast('.', "").lowercase()) {
+    "png", "jpg", "jpeg", "webp", "gif", "bmp" -> true
+    else -> false
+}

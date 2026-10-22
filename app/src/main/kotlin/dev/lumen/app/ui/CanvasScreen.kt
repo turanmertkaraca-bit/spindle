@@ -65,6 +65,8 @@ fun CanvasScreen(
     html: String,
     colors: LumenColors,
     sourceName: String = "page",
+    /** `file://` base of the page's folder so relative assets resolve locally. */
+    baseUrl: String? = null,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     onReload: (() -> Unit)? = null,
@@ -121,8 +123,10 @@ fun CanvasScreen(
                     label = "Reload",
                     tag = "canvas-reload",
                     onClick = {
-                        val handler = onReload
-                        if (handler != null) handler() else requested += 1
+                        onReload?.invoke()
+                        // Always rebuild: re-reading the file may produce the same
+                        // HTML while a sibling css/js asset changed on disk.
+                        requested += 1
                     },
                 )
             },
@@ -170,9 +174,14 @@ fun CanvasScreen(
                             setBackgroundColor(colors.bg.toArgb())
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
-                            settings.allowFileAccess = false
+                            // A page's own relative css/js/img must load: the base
+                            // URL is its folder. File access stays limited to
+                            // file:// URLs (never universal), and remote network
+                            // loads remain blocked, so the page cannot reach the
+                            // network or another origin.
+                            settings.allowFileAccess = baseUrl != null
                             settings.allowContentAccess = false
-                            settings.allowFileAccessFromFileURLs = false
+                            settings.allowFileAccessFromFileURLs = baseUrl != null
                             settings.allowUniversalAccessFromFileURLs = false
                             settings.blockNetworkLoads = true
                             settings.mediaPlaybackRequiresUserGesture = true
@@ -198,7 +207,7 @@ fun CanvasScreen(
                                     }
                                 }
                             }
-                            loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+                            loadDataWithBaseURL(baseUrl, html, "text/html", "utf-8", null)
                             webView = this
                         }
                     },
