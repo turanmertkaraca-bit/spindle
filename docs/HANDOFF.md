@@ -41,9 +41,11 @@ build. A fresh debug APK is staged on device at
   to green by sha → fetch the screenshot artifact and **look** → iterate. Never
   land a red commit on `main`.
 - Release flow: bump `versionCode`/`versionName` in `app/build.gradle.kts` → CI
-  green → download the `lumen-debug-apk` artifact → `git tag` / push → create a
-  GitHub Release via the API and upload the APK asset → refresh
-  `/storage/emulated/0/Download/lumen-debug.apk`.
+  green on `main` → push tag `v<ver>` (or run the **release** workflow with the
+  version). `.github/workflows/release.yml` builds the debug APK, asserts the
+  package id, `versionName` and the debug signing certificate, and publishes
+  `lumen-<ver>-debug.apk` on the GitHub Release → refresh
+  `/storage/emulated/0/Download/lumen-debug.apk` from that asset.
 
 ## 1. What's done (in force)
 
