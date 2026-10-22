@@ -44,3 +44,6 @@ fixtures/live/
 
 # Agent tool-output spill files
 .spindle/
+
+# local release artifacts (published by CI)
+dist/
