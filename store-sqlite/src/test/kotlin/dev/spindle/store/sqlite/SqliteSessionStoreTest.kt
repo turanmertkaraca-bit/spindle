@@ -542,4 +542,98 @@ class SqliteSessionStoreTest {
         assertTrue(negative.sessions(limit = 100).isEmpty())
         assertEquals(0, negative.prune(keepSessions = -1))
     }
+
+    private fun projectSession(id: String, project: String?, updatedAt: Long = 100L) = Session(
+        id = SessionId(id),
+        title = "Session $id",
+        cwd = "/work/$id",
+        createdAt = updatedAt,
+        updatedAt = updatedAt,
+        projectId = project,
+    )
+
+    @Test
+    fun sessionsAreListedPerProjectAndUnfiledOnesStayVisible(@TempDir tmpDir: Path) = runTest {
+        val s = SqliteSessionStore.open(tmpDir.resolve("projects.db"))
+        store = s
+        s.createSession(projectSession("a", "alpha", 300L))
+        s.createSession(projectSession("b", "beta", 200L))
+        s.createSession(projectSession("c", "alpha", 100L))
+        // A row written before the column existed reads as unfiled, not lost.
+        s.createSession(projectSession("legacy", null, 50L))
+
+        val alpha = s.sessionsInProject("alpha")
+        assertEquals(listOf("a", "c"), alpha.map { it.id.value })
+        assertEquals("alpha", alpha.first().projectId)
+
+        assertEquals(listOf("b"), s.sessionsInProject("beta").map { it.id.value })
+
+        // The unfiled inbox must catch pre-project rows so nothing becomes
+        // unreachable from the UI.
+        assertEquals(listOf("legacy"), s.sessionsInProject(null).map { it.id.value })
+        assertEquals(listOf("legacy"), s.sessionsInProject("").map { it.id.value })
+    }
+
+    @Test
+    fun moveSessionRefilesWithoutTouchingHistory(@TempDir tmpDir: Path) = runTest {
+        val s = SqliteSessionStore.open(tmpDir.resolve("move.db"))
+        store = s
+        val session = projectSession("ses_move", "alpha")
+        s.createSession(session)
+        val message = Message(
+            id = MessageId("msg_move"),
+            sessionId = session.id,
+            role = Role.USER,
+            parts = listOf(text("part_move", "keep me")),
+            createdAt = 10L,
+        )
+        s.appendMessage(message)
+
+        assertEquals(1, s.moveSession(session.id, "beta"))
+
+        val moved = s.session(session.id)
+        assertNotNull(moved)
+        assertEquals("beta", moved!!.projectId)
+        // The point of a metadata-only move: history survives intact.
+        val messages = s.messages(session.id)
+        assertEquals(1, messages.size)
+        assertEquals("keep me", (messages.first().parts.first() as Part.Text).text)
+        assertTrue(s.sessionsInProject("alpha").isEmpty())
+        assertEquals(listOf("ses_move"), s.sessionsInProject("beta").map { it.id.value })
+    }
+
+    @Test
+    fun moveSessionCascadesToChildSubtreeAndIgnoresUnknownIds(@TempDir tmpDir: Path) = runTest {
+        val s = SqliteSessionStore.open(tmpDir.resolve("move-subtree.db"))
+        store = s
+        val root = projectSession("root", "alpha")
+        s.createSession(root)
+        // A subagent child and a grandchild, so this exercises the recursive walk
+        // rather than a single level.
+        s.createSession(projectSession("child", "alpha").copy(parentId = SessionId("root")))
+        s.createSession(projectSession("grandchild", "alpha").copy(parentId = SessionId("child")))
+
+        assertEquals(3, s.moveSession(root.id, "beta"))
+        assertEquals("beta", s.session(SessionId("child"))!!.projectId)
+        assertEquals("beta", s.session(SessionId("grandchild"))!!.projectId)
+
+        // Moving just the root leaves the subtree where it was.
+        assertEquals(1, s.moveSession(root.id, "alpha", includeChildren = false))
+        assertEquals("beta", s.session(SessionId("child"))!!.projectId)
+
+        // An unknown session is a no-op, not an error.
+        assertEquals(0, s.moveSession(SessionId("nope"), "beta"))
+    }
+
+    @Test
+    fun movingToUnfiledClearsTheProject(@TempDir tmpDir: Path) = runTest {
+        val s = SqliteSessionStore.open(tmpDir.resolve("move-null.db"))
+        store = s
+        val session = projectSession("ses_unfile", "alpha")
+        s.createSession(session)
+
+        assertEquals(1, s.moveSession(session.id, null))
+        assertNull(s.session(session.id)!!.projectId)
+        assertEquals(listOf("ses_unfile"), s.sessionsInProject(null).map { it.id.value })
+    }
 }
