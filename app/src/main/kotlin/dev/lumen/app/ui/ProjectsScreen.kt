@@ -224,81 +224,80 @@ private fun ProjectRowCard(
     onDelete: () -> Unit,
     onOpenSession: ((String) -> Unit)? = null,
 ) {
-    Row(
+    Column(
         Modifier
             .fillMaxWidth()
             .clip(LumenShapes.row)
             .background(colors.surface)
             .border(1.dp, if (project.active) colors.water else colors.outline, LumenShapes.row)
-            // Always enabled, but a tap on the already-active row does nothing.
-            // A disabled clickable here would swallow pointer events before the
-            // resume line beneath it could handle them, so the row stays live and
-            // the active case is a no-op instead.
-            .clickable(onClick = { if (!project.active) onSwitch() })
-            .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp)
             .testTag("project-row-${project.id}"),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                project.name,
-                color = colors.fg,
-                fontFamily = Mono,
-                fontSize = LumenType.bodyLarge,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                projectSubtitle(project),
-                color = if (project.active) colors.water else colors.dim,
-                fontFamily = Mono,
-                fontSize = LumenType.micro,
-                letterSpacing = 0.4.sp,
-                modifier = if (project.active) Modifier.testTag("project-active") else Modifier,
-            )
-            // The newest session in this project, so resuming is one tap instead
-            // of switch-then-hunt. Only shown when the dashboard was given a
-            // resume handler and the project actually has a session.
-            val last = project.lastSession
-            if (last != null && onOpenSession != null) {
-                Spacer(Modifier.height(4.dp))
-                // The resume row sits inside the row's clickable area, so its own
-                // click handler must consume the event before the row's does.
-                // Compose dispatches to the innermost clickable first, so nesting
-                // this Text's clickable inside the row's is enough to make resume
-                // win over "switch to this project".
+        // The switch target covers only the title block. Resume and delete are
+        // siblings rather than children, so their taps cannot be swallowed by the
+        // row's own clickable: a disabled parent clickable takes pointer events
+        // before a nested child ever sees them, which is what broke resume.
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable(enabled = !project.active, onClick = onSwitch)
+                .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    project.name,
+                    color = colors.fg,
+                    fontFamily = Mono,
+                    fontSize = LumenType.bodyLarge,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    projectSubtitle(project),
+                    color = if (project.active) colors.water else colors.dim,
+                    fontFamily = Mono,
+                    fontSize = LumenType.micro,
+                    letterSpacing = 0.4.sp,
+                    modifier = if (project.active) Modifier.testTag("project-active") else Modifier,
+                )
+            }
+            if (canDelete) {
                 Box(
                     Modifier
+                        .sizeIn(minWidth = LumenSize.touchMin, minHeight = LumenSize.touchMin)
                         .clip(LumenShapes.small)
-                        .clickable { onOpenSession(last.id) }
-                        .padding(vertical = 2.dp)
-                        .testTag("project-resume-${project.id}"),
+                        .clickable(onClick = onDelete)
+                        .semantics { contentDescription = "delete project" }
+                        .padding(horizontal = 10.dp)
+                        .testTag("project-delete-${project.id}"),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        "resume \u00b7 " + last.title,
-                        color = colors.dim,
-                        fontFamily = Mono,
-                        fontSize = LumenType.micro,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Text("\u00d7", color = alertOn(colors), fontFamily = Mono, fontSize = 18.sp)
                 }
             }
         }
-        if (canDelete) {
+        // Resume sits below the title row, outside its clickable area, so a tap
+        // here always opens the session instead of switching projects.
+        val last = project.lastSession
+        if (last != null && onOpenSession != null) {
             Box(
                 Modifier
-                    .sizeIn(minWidth = LumenSize.touchMin, minHeight = LumenSize.touchMin)
+                    .fillMaxWidth()
                     .clip(LumenShapes.small)
-                    .clickable(onClick = onDelete)
-                    .semantics { contentDescription = "delete project" }
-                    .padding(horizontal = 10.dp)
-                    .testTag("project-delete-${project.id}"),
-                contentAlignment = Alignment.Center,
+                    .clickable { onOpenSession(last.id) }
+                    .padding(start = 14.dp, end = 14.dp, bottom = 10.dp)
+                    .testTag("project-resume-${project.id}"),
             ) {
-                Text("\u00d7", color = alertOn(colors), fontFamily = Mono, fontSize = 18.sp)
+                Text(
+                    "resume \u00b7 " + last.title,
+                    color = colors.dim,
+                    fontFamily = Mono,
+                    fontSize = LumenType.micro,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }
