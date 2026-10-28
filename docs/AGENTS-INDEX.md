@@ -5,8 +5,8 @@ updated at the end of every work run. If you are an agent picking this up:
 read §1, then jump to the section matching your task. Do not trust a section
 whose "verified" stamp predates the current HEAD without re-checking it.
 
-- **Last updated:** run B, HEAD `b2d1736`
-- **Verified against:** HEAD `b2d1736` (CI green on `40311da`, see §7)
+- **Last updated:** run E, HEAD `d9e880a`
+- **Verified against:** HEAD `d9e880a` (CI green on this sha — both jobs)
 - **Maintainer rule:** append a changelog line in §9 whenever you change
   anything in here. Never delete a finding; mark it fixed with the commit sha.
 
@@ -123,22 +123,32 @@ and returned empty output on this device. Analysis was done by direct reading
 instead. Findings are folded into §4–§6.
 
 ### Run B — bugs and stability (in progress)
+*Complete and CI green.*
 - `40311da` — migration 6 guarded against a missing `sessions` table; version
-  assertions updated to 6; new column and index asserted. *CI green.*
+  assertions updated to 6; new column and index asserted.
 - `b2d1736` — wake lock bounded to five minutes with re-arm on progress;
   `RunService.update()` gated on liveness so a late frame cannot resurrect the
-  service. *Awaiting CI.*
+  service.
 
 ### Run C — resource policy and proot comfort
-Not started. Plan in §5.
+*Complete and CI green (`2160f75`).* `ResourcePolicy` added: concurrency
+semaphore, `nice` wrapping, battery/thermal pause reasons. Admission is enforced
+in `AndroidShellExecutor` for both the proot and fallback shell paths, and in
+`openPty` for interactive sessions. Guest comfort added: `LANG`/`LC_ALL`, `TZ`,
+and a generated `/etc/hosts` bind.
 
 ### Run D — project management
-Data foundation landed in `e374a68` + `c1ac636` (`Session.projectId`, both
-stores, migrations 4 and 6, subtree moves). **UI not started** — `ProjectsScreen`
-still lists folders only and the model carries no project association to the UI.
+*Complete and CI green.*
+- `e374a68` + `c1ac636` — data foundation: `Session.projectId`, both stores,
+  migrations 4 and 6, recursive subtree moves.
+- `d69063a`, `0902111`, `befaee7`, `0683ddd`, `551f6d9`, `52ecc83` — the
+  dashboard: per-project session counts, a one-tap resume, and the interaction
+  fixes needed to make the resume tap work.
 
 ### Run E — model browser UI
-Not started. Inventory in §6.
+*Complete and CI green (`e8d5184`, verified in the `d9e880a` run).* Search,
+sort by name/context/cost, and a starred filter. The filter logic is a pure
+function (`filterAndSortModels`) with unit tests that need no Compose harness.
 
 ---
 
@@ -154,18 +164,21 @@ Severity: **P0** crashes/data loss, **P1** broken or misleading behaviour,
 | F1 | P1 | Migration 6 would `ALTER TABLE sessions` on a database that has no `sessions` table, aborting the whole upgrade | `40311da` |
 | F2 | P1 | Run wake lock acquired with no timeout; a stalled run could hold the CPU awake indefinitely | `b2d1736` |
 | F3 | P1 | `RunService.update()` used `startForegroundService` per progress tick, resurrecting a dead service and leaving a phantom notification | `b2d1736` |
+| F4 | P1 | No CPU/priority control at all; a guest build could starve the UI | `2160f75` |
+| F5 | P1 | No concurrency cap on guest processes | `2160f75` |
+| F6 | P1 | Resume tap on the project dashboard never fired: the clickable lived on a container whose child Text carried the tap | `551f6d9` |
+| F7 | P2 | `RetryResetTest` was flaky — asserted synchronously against an async rebuild; failed in CI and passed on an identical rerun | `d9e880a` |
 
 ### Open
 
 | # | Severity | Finding | Where |
 |---|---|---|---|
-| O1 | P1 | **No CPU/priority control at all.** No `nice`, `taskset`, `setpriority`, cgroup or thread priority anywhere in the platform layer. A guest build can starve the UI thread's device | `platform/` (grep for `taskset\|nice \|cgroup\|renice` returns nothing) |
-| O2 | P1 | **No concurrency cap.** Nothing limits how many proot/shell processes run at once; no semaphore or `limitedParallelism` guards the sandbox | `platform/AndroidShellExecutor.kt` |
 | O3 | P2 | `ChatViewModel` ~4k lines: run lifecycle, streaming buffers, event application and storage in one class | `ChatViewModel.kt` |
 | O4 | P2 | Deep link to a session that no longer exists lands silently on Home with no explanation | `MainActivity.kt` |
 | O5 | P2 | README status line says `0.2.2 (versionCode 7)` while the tree is at 0.2.8+ | `README.md` |
-| O6 | P2 | `ProjectsScreen` has no project model behind it — folders only, no per-project session listing | `ui/ProjectsScreen.kt`, `data/ProjectStore.kt` |
-| O7 | P2 | Model browser has no search, filters, sort or grouping | `ui/ModelPickerScreen.kt` |
+| O8 | P2 | The thermal/battery pause reason is computed but nothing calls it yet — `ResourcePolicy.pauseReason` needs wiring into the run loop | `platform/ResourcePolicy.kt` |
+| O9 | P2 | The concurrency cap is per-command; a single long tool call still holds one slot for its whole duration | `platform/AndroidShellExecutor.kt` |
+| O10 | P3 | Model browser sorts but does not group by provider within favourites/recents | `ui/ModelPickerScreen.kt` |
 
 ---
 
@@ -278,3 +291,7 @@ git -c credential.helper='!f() { echo "username=x-access-token"; echo "password=
 | A | Created this file; folded direct-reading analysis into §4–§6 |
 | B | `40311da` migration guard; `b2d1736` wake lock + update gating |
 | D | `e374a68` project column and moves; `c1ac636` store tests |
+| C | `2160f75` ResourcePolicy: concurrency, nice, thermal pause; proot comfort flags |
+| D | `d69063a` dashboard counts + resume; interaction fixes through `551f6d9` |
+| E | `e8d5184` model search/sort/starred filter |
+| B | `d9e880a` de-flaked RetryResetTest |
