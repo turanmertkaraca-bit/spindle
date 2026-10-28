@@ -131,7 +131,7 @@ class ProjectsScreenTest {
         compose.onNodeWithTag("project-resume-playground").performClick()
         compose.waitForIdle()
 
-        assertEquals("session-abc", opened, "resume should open the newest session")
+        assertEquals("resume should open the newest session", "session-abc", opened)
     }
 
     @Test
