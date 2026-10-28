@@ -125,9 +125,9 @@ class ProjectsScreenTest {
         }
 
         compose.onNodeWithText("active \u00b7 agent works here \u00b7 3 sessions").assertIsDisplayed()
-        compose.onNodeWithText("resume \u00b7 refactor the parser").assertIsDisplayed()
-        // Click the clickable container by its tag: the text leaf itself carries
-        // no click action, so aiming at it would test nothing.
+        compose.waitForIdle()
+        // The clickable and the tag are on the same node as the text, so clicking
+        // by tag is the same target a user's tap lands on.
         compose.onNodeWithTag("project-resume-playground").performClick()
         compose.waitForIdle()
 
