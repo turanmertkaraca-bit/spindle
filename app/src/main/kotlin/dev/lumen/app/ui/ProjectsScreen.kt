@@ -282,13 +282,17 @@ private fun ProjectRowCard(
         // here always opens the session instead of switching projects.
         val last = project.lastSession
         if (last != null && onOpenSession != null) {
-            Box(
+            Row(
                 Modifier
                     .fillMaxWidth()
-                    .clip(LumenShapes.small)
+                    .heightIn(min = LumenSize.touchMin)
+                    // clickable before padding: modifier order decides the hit
+                    // area, and putting padding first would leave only the inner
+                    // text clickable instead of the whole row.
                     .clickable { onOpenSession(last.id) }
-                    .padding(start = 14.dp, end = 14.dp, bottom = 10.dp)
+                    .padding(start = 14.dp, end = 14.dp)
                     .testTag("project-resume-${project.id}"),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     "resume \u00b7 " + last.title,
@@ -297,7 +301,9 @@ private fun ProjectRowCard(
                     fontSize = LumenType.micro,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
+                Text("\u203a", color = colors.dim, fontFamily = Mono, fontSize = LumenType.micro)
             }
         }
     }
