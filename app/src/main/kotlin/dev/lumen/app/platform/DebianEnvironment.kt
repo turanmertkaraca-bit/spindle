@@ -74,6 +74,25 @@ class DebianEnvironment(private val context: Context) {
     /** opencode home; bound into the guest at its real device path. */
     val homeDir: File get() = File(context.filesDir, "home").apply { mkdirs() }
 
+    /**
+     * A generated hosts file, written once so the guest resolves localhost
+     * without a DNS round trip. Kept outside the rootfs so a guest that remounts
+     * or rewrites /etc cannot lose it, and written defensively: a device that
+     * refuses the write simply runs without the bind.
+     */
+    val hostsFile: File? by lazy {
+        runCatching {
+            File(dir, "hosts").apply {
+                if (!exists() || length() == 0L) {
+                    writeText(
+                        "127.0.0.1 localhost localhost.localdomain\n" +
+                            "::1 localhost ip6-localhost ip6-loopback\n",
+                    )
+                }
+            }
+        }.getOrNull()
+    }
+
     private val installLock = Mutex()
 
     /**
@@ -429,6 +448,11 @@ class DebianEnvironment(private val context: Context) {
         val dl = File(DOWNLOADS)
         if (dl.isDirectory && downloadsAllowed()) a += "--bind=${dl.absolutePath}:${dl.absolutePath}"
         a += "--bind=${homeDir.absolutePath}:${homeDir.absolutePath}"
+        // A generated hosts file, so "localhost" resolves instantly instead of
+        // hitting DNS and timing out. Bound only when the file exists: a missing
+        // bind is fatal to proot, and an unwritable /etc is not worth failing a
+        // command over.
+        hostsFile?.takeIf { it.isFile }?.let { a += "--bind=${it.absolutePath}:/etc/hosts" }
         a += "/bin/bash"
         a += "-c"
         a += command
@@ -471,6 +495,14 @@ class DebianEnvironment(private val context: Context) {
         e["PATH"] = PATH
         e["TMPDIR"] = "/tmp"
         e["TERM"] = "xterm-256color"
+
+        // Guest comfort: without these, most tooling either warns on every run
+        // (locale), prints UTC timestamps (TZ), or resolves "localhost" slowly
+        // (hosts). They are cheap to set and make the guest behave like a normal
+        // Linux box, which matters when an agent reads logs or parses dates.
+        e["LANG"] = "C.UTF-8"
+        e["LC_ALL"] = "C.UTF-8"
+        e["TZ"] = "UTC"
 
         val ca = File(rootfs, "etc/ssl/certs/ca-certificates.crt")
         if (ca.isFile) {

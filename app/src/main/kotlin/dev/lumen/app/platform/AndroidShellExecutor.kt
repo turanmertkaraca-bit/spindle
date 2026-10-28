@@ -66,6 +66,17 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         env: Map<String, String>,
         onChunk: ((String) -> Unit)?,
     ): ShellResult = withContext(Dispatchers.IO) {
+        // Admission control. The guest shares the host scheduler (proot is a
+        // ptrace shim, so no cgroup is available without root), which means the
+        // only reliable way to keep a compile from starving the UI is to cap how
+        // many guest processes exist at once. A slot is held for this command's
+        // lifetime only, so many short commands interleave instead of queueing
+        // behind one long one.
+        val slot = ResourcePolicy.acquire(timeoutMs = 120_000L)
+            ?: return@withContext ShellResult(
+                exitCode = -1,
+                output = "another agent command is still running; try again in a moment",
+            )
         try {
             // Debian wins whenever the user has installed it and its proot
             // probe passed. It is NEVER auto-downloaded here (default off), so
@@ -108,6 +119,8 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
             throw e
         } catch (t: Throwable) {
             ShellResult(exitCode = -1, output = "failed to launch shell: ${t.message}")
+        } finally {
+            ResourcePolicy.release(slot)
         }
     }
 
@@ -136,12 +149,18 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
      * cannot be started; the panel then shows "terminal unavailable".
      */
     override suspend fun openPty(command: String, cwd: Path): PtySession? = withContext(Dispatchers.IO) {
+        // Admission control: an interactive terminal is guest work too, so it
+        // takes a slot from the same gate as non-interactive commands. Held for
+        // the session's lifetime, released when the pty is closed.
+        val slot = ResourcePolicy.acquire(timeoutMs = 15_000L)
+        if (slot == null) return@withContext null
         try {
             // Prefer a real Debian login shell once the layer is active.
             if (debian.active()) {
                 val guest = command.takeIf { it.isNotBlank() } ?: "exec /bin/bash"
                 return@withContext ProcessPtySession(
                     startUnderSetsid(debian.guestProcess(guest, cwd.toFile().absolutePath)),
+                    onClose = { ResourcePolicy.release(slot) },
                 )
             }
             val ready = environment.ready()
@@ -163,8 +182,9 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
                 }
             }
 
-            ProcessPtySession(startUnderSetsid(builder))
+            ProcessPtySession(startUnderSetsid(builder), onClose = { ResourcePolicy.release(slot) })
         } catch (t: Throwable) {
+            ResourcePolicy.release(slot)
             null
         }
     }
@@ -187,6 +207,14 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
      * process is started unchanged. Argv order is otherwise preserved.
      */
     private fun startUnderSetsid(builder: ProcessBuilder): Process {
+        // Lower the guest's scheduling priority first so `nice` wraps the whole
+        // command tree, then make it a session leader so a process-group TERM
+        // still reaches everything. Order matters: prepending nice before setsid
+        // would lower only setsid, not the guest under it.
+        val nice = NICE
+        if (nice != null) {
+            runCatching { builder.command().addAll(0, listOf(nice, "-n", ResourcePolicy.DEFAULT_NICE.toString())) }
+        }
         if (SETSID != null) {
             runCatching { builder.command().add(0, SETSID) }
         }
@@ -327,7 +355,17 @@ private fun truncationMarker(dropped: Long): String = "\n…[output truncated $d
  * [output] completes when the process closes or [close] is called. Every entry
  * point is defensive — a dead process ends the flow, it never throws.
  */
-private class ProcessPtySession(private val process: Process) : PtySession {
+private class ProcessPtySession(
+    private val process: Process,
+    /**
+     * Runs exactly once when the pty is torn down, so an admission slot taken by
+     * the caller is always returned even if the close path throws.
+     */
+    private val onClose: (() -> Unit)? = null,
+) : PtySession {
+
+    /** Guards [onClose] so a double close cannot release a slot twice. */
+    private val closeOnce = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private val chunks = Channel<String>(Channel.UNLIMITED)
     private val reader = Thread(::pump)
@@ -379,11 +417,15 @@ private class ProcessPtySession(private val process: Process) : PtySession {
 
     override suspend fun close() {
         closed = true
-        runCatching { process.outputStream.close() }
-        val exited = runCatching { process.waitFor(500, TimeUnit.MILLISECONDS) }.getOrDefault(false)
-        if (!exited) killProcessTree(process)
-        runCatching { reader.join(1000) }
-        chunks.close()
+        try {
+            runCatching { process.outputStream.close() }
+            val exited = runCatching { process.waitFor(500, TimeUnit.MILLISECONDS) }.getOrDefault(false)
+            if (!exited) killProcessTree(process)
+            runCatching { reader.join(1000) }
+            chunks.close()
+        } finally {
+            if (closeOnce.compareAndSet(false, true)) runCatching { onClose?.invoke() }
+        }
     }
 }
 
@@ -430,4 +472,13 @@ private const val READER_JOIN_MS = 2000L
 private const val TERM_GRACE_MS = 1500L
 
 private val SETSID: String? = listOf("/system/bin/setsid", "/usr/bin/setsid")
+    .firstOrNull { runCatching { File(it).canExecute() }.getOrDefault(false) }
+
+/**
+ * The `nice` binary, when the device has one. Android's toybox provides it on
+ * most builds; where it is missing, guest work simply runs at normal priority
+ * instead of being lowered. Root-free: nice on a child the app already owns
+ * needs no privileges.
+ */
+private val NICE: String? = listOf("/system/bin/nice", "/usr/bin/nice")
     .firstOrNull { runCatching { File(it).canExecute() }.getOrDefault(false) }
