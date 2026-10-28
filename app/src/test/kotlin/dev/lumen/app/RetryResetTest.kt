@@ -19,6 +19,8 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import android.os.Looper
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.nio.file.Files
@@ -66,6 +68,9 @@ class RetryResetTest {
         bus.emit(AgentEvent.PartDelta(sid, "msg_1", partId, DeltaKind.TEXT, "stale "))
         bus.emit(AgentEvent.PartDelta(sid, "msg_1", partId, DeltaKind.TEXT, "attempt"))
         bus.emit(AgentEvent.StateChanged(sid, SessionState.RUNNING))
+        // Same async rebuild: wait for the streamed text to land rather than
+        // assuming it is already there when emit() returns.
+        awaitBody(vm, "stale attempt")
         assertTrue(
             vm.state.value.steps.any { it.body == "stale attempt" },
             "live deltas must reach the timeline before the reset",
@@ -81,7 +86,41 @@ class RetryResetTest {
         // The retried attempt rebuilds the same part from its own deltas.
         bus.emit(AgentEvent.PartDelta(sid, "msg_1", partId, DeltaKind.TEXT, "fresh"))
         bus.emit(AgentEvent.Error(sid, "streamed"))
-        val bodies = vm.state.value.steps.filter { it.id == partId.value }.map { it.body }
+        // requestRebuild reads the store on Dispatchers.Default, so the timeline
+        // lands asynchronously: asserting immediately races that pass. Waiting for
+        // the rebuilt row makes this deterministic instead of intermittently
+        // failing in CI (it passed on an identical rerun).
+        val bodies = awaitPartBody(vm, partId.value, "fresh")
         assertEquals(listOf("fresh"), bodies, "the retry's text must start clean")
+    }
+
+    /**
+     * Poll the ViewModel's timeline until [partId] renders [expected], or give up
+     * after [timeoutMs]. Rebuilds are launched onto Dispatchers.Default, so there
+     * is no frame callback to await on this path; polling the observed state is
+     * the honest way to wait without sleeping a fixed guess.
+     */
+    private fun awaitPartBody(vm: ChatViewModel, partId: String, expected: String): List<String> {
+        val deadline = System.currentTimeMillis() + 5_000L
+        var bodies: List<String>
+        do {
+            // Drain posted runnables so a rebuild launched onto the main looper
+            // gets its turn before the next poll.
+            shadowOf(Looper.getMainLooper()).idle()
+            bodies = vm.state.value.steps.filter { it.id == partId }.map { it.body }
+            if (bodies == listOf(expected)) return bodies
+            Thread.sleep(20)
+        } while (System.currentTimeMillis() < deadline)
+        return bodies
+    }
+
+    /** Wait until any timeline step renders [body], or the timeout expires. */
+    private fun awaitBody(vm: ChatViewModel, body: String) {
+        val deadline = System.currentTimeMillis() + 5_000L
+        while (System.currentTimeMillis() < deadline) {
+            shadowOf(Looper.getMainLooper()).idle()
+            if (vm.state.value.steps.any { it.body == body }) return
+            Thread.sleep(20)
+        }
     }
 }
