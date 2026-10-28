@@ -14,8 +14,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * The service must come up, post its foreground notification and create the
@@ -59,6 +61,34 @@ class RunServiceTest {
         controller.destroy()
 
         assertNotNull(context.getSystemService(NotificationManager::class.java))
+    }
+
+    /**
+     * A progress event can land just after a run ended. Updating then used to
+     * call startForegroundService and resurrect the service with nothing behind
+     * it, leaving a phantom "running" notification that only goes away when the
+     * user notices it. The guard is a liveness flag the service sets as it
+     * starts and stops.
+     */
+    @Test
+    fun `liveness flag gates progress updates`() {
+        RunService.markAlive(false)
+        assertFalse(RunService.isAlive(), "nothing is running before a start")
+
+        // A no-op update with nothing alive must not throw.
+        RunService.update(context, "still going")
+
+        val controller = Robolectric.buildService(RunService::class.java)
+        controller.create()
+        assertTrue(RunService.isAlive(), "onCreate marks the service alive")
+        controller.get().onStartCommand(startIntent(), 0, 1)
+
+        controller.destroy()
+        assertFalse(RunService.isAlive(), "onDestroy clears liveness")
+
+        // A late frame after teardown must be swallowed, not resurrect anything.
+        RunService.update(context, "late frame")
+        assertFalse(RunService.isAlive(), "a late update must not revive the service")
     }
 
     private fun startIntent(): Intent =

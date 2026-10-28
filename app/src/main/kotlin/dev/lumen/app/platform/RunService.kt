@@ -49,6 +49,7 @@ class RunService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        markAlive(true)
         ensureChannel()
     }
 
@@ -77,6 +78,7 @@ class RunService : Service() {
     }
 
     override fun onDestroy() {
+        markAlive(false)
         releaseWakeLock()
         super.onDestroy()
     }
@@ -97,11 +99,12 @@ class RunService : Service() {
             runCatching { stopSelf() }
             return
         }
-        acquireWakeLock()
+        refreshWakeLock()
     }
 
     @Suppress("DEPRECATION")
     private fun stopRun() {
+        markAlive(false)
         runCatching { stopForeground(true) }
         releaseWakeLock()
         runCatching { stopSelf() }
@@ -165,9 +168,27 @@ class RunService : Service() {
             val power = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
             val lock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_LOCK_TAG)
             lock.setReferenceCounted(false)
-            lock.acquire()
+            // Bounded, not indefinite: a guest command with no deadline
+            // (`Tool.timeoutMs <= 0`) or a provider stream that goes silent can
+            // leave a run holding the CPU awake for hours. The timeout makes the
+            // lock expire on its own so a stalled run cannot silently drain the
+            // battery; a live run re-asserts it on every progress update.
+            lock.acquire(WAKE_LOCK_TIMEOUT_MS)
             wakeLock = lock
         }
+    }
+
+    /**
+     * Re-arm the timed wake lock while the run is still making progress.
+     *
+     * [acquireWakeLock] only takes the lock once, so without this a long but
+     * healthy run would lose its lock when the timeout expires and stall in
+     * doze. Called from [show], i.e. on every progress notification.
+     */
+    private fun refreshWakeLock() {
+        val lock = wakeLock
+        if (lock != null && lock.isHeld) return
+        acquireWakeLock()
     }
 
     private fun releaseWakeLock() {
@@ -183,6 +204,14 @@ class RunService : Service() {
         private const val CHANNEL_NAME = "Agent runs"
         private const val NOTIFICATION_ID = 4711
         private const val WAKE_LOCK_TAG = "lumen:run"
+
+        /**
+         * How long one wake-lock grant lasts. Long enough that a busy run never
+         * loses the CPU mid-step, short enough that a stalled run stops draining
+         * the battery within a few minutes instead of holding the lock forever.
+         * Every progress notification re-arms it.
+         */
+        private const val WAKE_LOCK_TIMEOUT_MS = 5L * 60L * 1_000L
 
         /** Result channels are created on demand, one per outcome/sound. */
         private const val CHANNEL_ID_DONE = "lumen_run_done"
@@ -207,13 +236,39 @@ class RunService : Service() {
             ContextCompat.startForegroundService(context, intent)
         }
 
+        /**
+         * True while a run service instance is alive in this process.
+         *
+         * [update] is driven by agent `Progress` events, which can arrive just
+         * after a run ends (a late frame, or a stop racing the stream). Using
+         * `startForegroundService` there would spin the service back up with no
+         * run behind it and post a phantom "running" notification that only goes
+         * away when the user notices it. Tracking liveness lets [update] be a
+         * no-op when nothing is actually running.
+         */
+        @Volatile
+        private var alive: Boolean = false
+
+        /** Set by the service itself as it starts and stops. */
+        internal fun markAlive(running: Boolean) {
+            alive = running
+        }
+
+        /** Exposed for tests: whether update() would currently forward. */
+        internal fun isAlive(): Boolean = alive
+
         /** Replace the progress line while a run is in flight. */
         fun update(context: Context, text: String) {
+            // Only touch an already-running service: never resurrect one.
+            if (!alive) return
             val intent = Intent(context, RunService::class.java).apply {
                 action = ACTION_UPDATE
                 putExtra(EXTRA_TEXT, text)
             }
-            ContextCompat.startForegroundService(context, intent)
+            // A plain startService is enough to deliver a command to a live
+            // service and does not carry the "must call startForeground" duty
+            // that startForegroundService would impose.
+            runCatching { context.startService(intent) }
         }
 
         /**
