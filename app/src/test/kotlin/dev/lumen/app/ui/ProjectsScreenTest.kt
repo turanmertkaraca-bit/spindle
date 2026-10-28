@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import dev.lumen.app.ProjectRow
+import dev.lumen.app.ProjectSessionSummary
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -92,5 +93,80 @@ class ProjectsScreenTest {
 
         compose.onNodeWithTag("project-delete-playground").assertDoesNotExist()
         compose.onNodeWithText("One folder per project. The agent only sees the active folder.").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a project with sessions offers a one tap resume`() {
+        var opened: String? = null
+        val withSession = listOf(
+            ProjectRow(
+                id = "playground",
+                name = "playground",
+                active = true,
+                sessionCount = 3,
+                lastSession = ProjectSessionSummary(
+                    id = "session-abc",
+                    title = "refactor the parser",
+                    updatedAt = 1_700_000_000_000,
+                ),
+            ),
+        )
+        compose.setContent {
+            ProjectsScreen(
+                colors = LumenColors.Dark,
+                projects = withSession,
+                onSwitch = {},
+                onCreate = {},
+                onDelete = {},
+                onOpenSession = { opened = it },
+                onBack = {},
+                modifier = viewport,
+            )
+        }
+
+        compose.onNodeWithText("active \u00b7 agent works here \u00b7 3 sessions").assertIsDisplayed()
+        compose.onNodeWithTag("project-resume-playground").assertIsDisplayed().performClick()
+        compose.waitForIdle()
+
+        assertEquals("session-abc", opened, "resume should open the newest session")
+    }
+
+    @Test
+    fun `an empty project reports no sessions and offers no resume`() {
+        compose.setContent {
+            ProjectsScreen(
+                colors = LumenColors.Dark,
+                projects = listOf(ProjectRow("playground", "playground", active = true)),
+                onSwitch = {},
+                onCreate = {},
+                onDelete = {},
+                onOpenSession = {},
+                onBack = {},
+                modifier = viewport,
+            )
+        }
+
+        compose.onNodeWithText("active \u00b7 agent works here \u00b7 no sessions").assertIsDisplayed()
+        compose.onNodeWithTag("project-resume-playground").assertDoesNotExist()
+    }
+
+    @Test
+    fun `an inactive project invites a switch and counts its sessions`() {
+        compose.setContent {
+            ProjectsScreen(
+                colors = LumenColors.Dark,
+                projects = listOf(
+                    ProjectRow("playground", "playground", active = true),
+                    ProjectRow("beta", "beta", active = false, sessionCount = 1),
+                ),
+                onSwitch = {},
+                onCreate = {},
+                onDelete = {},
+                onBack = {},
+                modifier = viewport,
+            )
+        }
+
+        compose.onNodeWithText("1 session \u00b7 tap to switch").assertIsDisplayed()
     }
 }

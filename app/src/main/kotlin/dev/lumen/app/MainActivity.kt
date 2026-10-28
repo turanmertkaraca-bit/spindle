@@ -593,6 +593,13 @@ class MainActivity : ComponentActivity() {
                             filesReturn = "projects"
                             route = "files"
                         },
+                        // Resume the project's newest session straight into chat,
+                        // so the dashboard is a working surface rather than just
+                        // a folder picker.
+                        onOpenSession = { id ->
+                            viewModel.openSession(id)
+                            route = "chat"
+                        },
                         onBack = { route = projectsReturn },
                         modifier = modifier,
                         error = state.error,

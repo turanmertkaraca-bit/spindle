@@ -57,6 +57,11 @@ fun ProjectsScreen(
     onCreate: (String) -> Unit,
     onDelete: (String) -> Unit,
     onOpenFiles: (() -> Unit)? = null,
+    /**
+     * Resume a project's newest session. Optional so existing callers keep
+     * compiling; when absent the dashboard shows the count without a resume row.
+     */
+    onOpenSession: ((String) -> Unit)? = null,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     error: String? = null,
@@ -141,6 +146,7 @@ fun ProjectsScreen(
                         canDelete = projects.size > 1,
                         onSwitch = { onSwitch(project.id) },
                         onDelete = { deleting = project },
+                        onOpenSession = onOpenSession,
                     )
                 }
             }
@@ -216,6 +222,7 @@ private fun ProjectRowCard(
     canDelete: Boolean,
     onSwitch: () -> Unit,
     onDelete: () -> Unit,
+    onOpenSession: ((String) -> Unit)? = null,
 ) {
     Row(
         Modifier
@@ -240,13 +247,33 @@ private fun ProjectRowCard(
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                if (project.active) "active \u00b7 agent works here" else "tap to switch",
+                projectSubtitle(project),
                 color = if (project.active) colors.water else colors.dim,
                 fontFamily = Mono,
                 fontSize = LumenType.micro,
                 letterSpacing = 0.4.sp,
                 modifier = if (project.active) Modifier.testTag("project-active") else Modifier,
             )
+            // The newest session in this project, so resuming is one tap instead
+            // of switch-then-hunt. Only shown when the dashboard was given a
+            // resume handler and the project actually has a session.
+            val last = project.lastSession
+            if (last != null && onOpenSession != null) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "resume \u00b7 " + last.title,
+                    color = colors.dim,
+                    fontFamily = Mono,
+                    fontSize = LumenType.micro,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .clip(LumenShapes.small)
+                        .clickable { onOpenSession(last.id) }
+                        .padding(vertical = 2.dp)
+                        .testTag("project-resume-${project.id}"),
+                )
+            }
         }
         if (canDelete) {
             Box(
@@ -263,6 +290,19 @@ private fun ProjectRowCard(
             }
         }
     }
+}
+
+/**
+ * The secondary line under a project name. Keeps the active hint but adds the
+ * session count so a folder with history reads differently from an empty one.
+ */
+private fun projectSubtitle(project: ProjectRow): String {
+    val sessions = when (project.sessionCount) {
+        0 -> "no sessions"
+        1 -> "1 session"
+        else -> "${project.sessionCount} sessions"
+    }
+    return if (project.active) "active \u00b7 agent works here \u00b7 $sessions" else "$sessions \u00b7 tap to switch"
 }
 
 @Composable

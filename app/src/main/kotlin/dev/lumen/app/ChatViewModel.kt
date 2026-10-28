@@ -142,6 +142,32 @@ data class ProjectRow(
     val id: String,
     val name: String,
     val active: Boolean,
+    /**
+     * How many sessions are filed under this project. Drives the dashboard's
+     * "N sessions" line and lets an empty project look empty instead of merely
+     * unused. Zero for a folder with no session history.
+     */
+    val sessionCount: Int = 0,
+    /**
+     * The most recently touched session in this project, for the dashboard's
+     * resume affordance. Null when the project has no sessions yet, or when the
+     * listing could not be read (a stale folder, a store error) — in which case
+     * the UI offers "New session" rather than a broken resume link.
+     */
+    val lastSession: ProjectSessionSummary? = null,
+)
+
+/**
+ * The small amount of session metadata a project dashboard needs. Deliberately
+ * not a full Session: the dashboard lists projects, and pulling whole sessions
+ * (with their messages) just to render a title and a timestamp would read far
+ * more than it shows.
+ */
+data class ProjectSessionSummary(
+    val id: String,
+    val title: String,
+    val updatedAt: Long,
+    val running: Boolean = false,
 )
 
 /** One row in the project file browser. [path] is workspace-relative, `/`-joined. */
@@ -1605,12 +1631,65 @@ class ChatViewModel(
         val store = projectStore ?: return
         val all = runCatching { store.list() }.getOrDefault(emptyList())
         val active = runCatching { store.activeOrNull() }.getOrNull()
+        // Publish the folder list immediately so switching/creating a project
+        // feels instant, then fill in per-project session counts off the main
+        // thread. Counting sessions touches the database; doing it inline would
+        // block the frame that renders the screen.
         _state.value = _state.value.copy(
             projects = all.map { ProjectRow(it.id, it.name, active?.id == it.id) },
             projectId = active?.id.orEmpty(),
             projectName = active?.name ?: workspace.fileName?.toString().orEmpty(),
         )
+        viewModelScope.launch {
+            val counts = runCatching { projectSessionSummaries(all.map { it.id }) }
+                .getOrDefault(emptyMap())
+            if (counts.isEmpty()) return@launch
+            _state.value = _state.value.copy(
+                projects = _state.value.projects.map { row ->
+                    val summary = counts[row.id]
+                    if (summary == null) row else row.copy(
+                        sessionCount = summary.count,
+                        lastSession = summary.last,
+                    )
+                },
+            )
+        }
     }
+
+    /**
+     * Per-project session counts and the newest session in each, read once.
+     *
+     * One query per project would be N round trips to SQLite; this walks each
+     * project's sessions with the indexed lookup and keeps only the newest, so
+     * the dashboard's totals are cheap enough to refresh on every project change.
+     * A project whose sessions cannot be read is skipped rather than failing the
+     * whole refresh, so one stale folder cannot blank the screen.
+     */
+    private suspend fun projectSessionSummaries(
+        projectIds: List<String>,
+    ): Map<String, ProjectSummaryCounts> {
+        val sessionStore = store ?: return emptyMap()
+        val out = LinkedHashMap<String, ProjectSummaryCounts>()
+        for (projectId in projectIds) {
+            val sessions = runCatching { sessionStore.sessionsInProject(projectId, limit = 200) }
+                .getOrDefault(emptyList())
+            if (sessions.isEmpty()) continue
+            val newest = sessions.first()
+            out[projectId] = ProjectSummaryCounts(
+                count = sessions.size,
+                last = ProjectSessionSummary(
+                    id = newest.id.value,
+                    title = newest.title.ifBlank { "Untitled session" },
+                    updatedAt = newest.updatedAt,
+                    running = runningSessions?.contains(newest.id.value) == true,
+                ),
+            )
+        }
+        return out
+    }
+
+    /** A count plus the newest session for one project row. */
+    private data class ProjectSummaryCounts(val count: Int, val last: ProjectSessionSummary)
 
     /** Create a project folder and make it the workspace the agent works in. */
     fun createProject(name: String) {
