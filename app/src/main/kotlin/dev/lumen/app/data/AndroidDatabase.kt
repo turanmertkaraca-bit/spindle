@@ -118,6 +118,7 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
             Migration(3) { migrateSnapshotSequence(it) },
             Migration(4) { contentAddressedSnapshots(it) },
             Migration(5) { partsSessionIndex(it) },
+            Migration(6) { sessionsProjectColumn(it) },
         )
         val current = userVersion(db)
         for (migration in migrations) {
@@ -144,7 +145,7 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
             """CREATE TABLE IF NOT EXISTS sessions(
                  id TEXT PRIMARY KEY, title TEXT, cwd TEXT, created_at INTEGER,
                  updated_at INTEGER, model TEXT, provider_id TEXT, agent TEXT, parent_id TEXT,
-                 state TEXT, pinned INTEGER, archived INTEGER, tags TEXT)""",
+                 state TEXT, pinned INTEGER, archived INTEGER, tags TEXT, project_id TEXT)""",
         )
         // Only migrate after the CREATE above, so a first run cannot read
         // PRAGMA table_info on a table that does not exist yet.
@@ -196,6 +197,23 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
         add("pinned", "INTEGER")
         add("archived", "INTEGER")
         add("tags", "TEXT")
+        add("project_id", "TEXT")
+    }
+
+    /**
+     * Project association for sessions, added after migration 1's table already
+     * exists on installed databases. Nullable so existing rows read as "unfiled"
+     * rather than being silently assigned to some project; the index backs the
+     * per-project listing so it stays a range scan instead of a full table scan.
+     */
+    private fun sessionsProjectColumn(db: SQLiteDatabase) {
+        val existing = columnNames(db, "sessions")
+        if ("project_id" !in existing) {
+            db.execSQL("ALTER TABLE sessions ADD COLUMN project_id TEXT")
+        }
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id, updated_at)",
+        )
     }
 
     /**

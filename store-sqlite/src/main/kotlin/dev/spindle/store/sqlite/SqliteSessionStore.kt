@@ -170,11 +170,12 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
     private fun upsertSession(session: Session) {
         connection.prepareStatement(
             "INSERT INTO sessions(id, title, cwd, created_at, updated_at, model, provider_id, agent, parent_id, " +
-                "state, pinned, archived, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+                "state, pinned, archived, tags, project_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
                 "ON CONFLICT(id) DO UPDATE SET title=excluded.title, cwd=excluded.cwd, " +
                 "created_at=excluded.created_at, updated_at=excluded.updated_at, model=excluded.model, " +
                 "provider_id=excluded.provider_id, agent=excluded.agent, parent_id=excluded.parent_id, " +
-                "state=excluded.state, pinned=excluded.pinned, archived=excluded.archived, tags=excluded.tags",
+                "state=excluded.state, pinned=excluded.pinned, archived=excluded.archived, tags=excluded.tags, " +
+                "project_id=excluded.project_id",
         ).use { st ->
             st.setString(1, session.id.value)
             st.setString(2, session.title)
@@ -189,6 +190,7 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
             st.setInt(11, if (session.pinned) 1 else 0)
             st.setInt(12, if (session.archived) 1 else 0)
             st.setString(13, json.encodeToString(tagsSerializer, session.tags))
+            st.setString(14, session.projectId)
             st.executeUpdate()
         }
     }
@@ -215,6 +217,95 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
                 buildList { while (rs.next()) add(readSession(rs)) }
             }
         }
+    }
+
+    /**
+     * Sessions filed under one project. A null [projectId] selects the unfiled
+     * inbox, which also catches rows written before the column existed
+     * (`project_id IS NULL`) and empty-string placeholders, so no session is
+     * ever invisible from the UI.
+     */
+    override suspend fun sessionsInProject(
+        projectId: String?,
+        limit: Int,
+        includeChildren: Boolean,
+        includeArchived: Boolean,
+    ): List<Session> = mutex.withLock {
+        val where = buildList {
+            if (projectId.isNullOrBlank()) add("(project_id IS NULL OR project_id = '')")
+            else {
+                add("project_id = ?")
+                add("parent_id IS NULL")
+            }
+            if (!includeChildren) add("parent_id IS NULL")
+            if (!includeArchived) add("(archived IS NULL OR archived = 0)")
+        }
+        val sql = buildString {
+            append("SELECT * FROM sessions WHERE ").append(where.joinToString(" AND "))
+            append(" ORDER BY updated_at DESC LIMIT ?")
+        }
+        connection.prepareStatement(sql).use { st ->
+            var i = 1
+            if (!projectId.isNullOrBlank()) st.setString(i++, projectId)
+            st.setInt(i, limit)
+            st.executeQuery().use { rs ->
+                buildList { while (rs.next()) add(readSession(rs)) }
+            }
+        }
+    }
+
+    /**
+     * Move a session (and, by default, its child subtree) to [projectId]. This is
+     * a pure metadata update: messages, parts, todos and snapshots are untouched,
+     * so history survives the move. An unknown id returns 0.
+     */
+    override suspend fun moveSession(
+        id: SessionId,
+        projectId: String?,
+        includeChildren: Boolean,
+    ): Int = mutex.withLock {
+        inTransaction {
+            var moved = updateProject(id.value, projectId)
+            if (moved == 0) return@inTransaction 0
+            if (includeChildren) moved += moveSubtree(id.value, projectId)
+            moved
+        }
+    }
+
+    private fun updateProject(sessionId: String, projectId: String?): Int =
+        connection.prepareStatement("UPDATE sessions SET project_id = ? WHERE id = ?").use { st ->
+            st.setString(1, projectId)
+            st.setString(2, sessionId)
+            st.executeUpdate()
+        }
+
+    /**
+     * Re-file every descendant of [rootId] in one pass. The recursive CTE walks
+     * the `parent_id` subtree so a deep subagent chain moves with its root
+     * instead of being left pointing at a project its parent no longer belongs to.
+     */
+    private fun moveSubtree(rootId: String, projectId: String?): Int {
+        val ids = buildList {
+            connection.prepareStatement(
+                "WITH RECURSIVE sub(id) AS (" +
+                    "SELECT id FROM sessions WHERE parent_id = ? " +
+                    "UNION ALL SELECT s.id FROM sessions s JOIN sub ON s.parent_id = sub.id" +
+                    ") SELECT id FROM sub",
+            ).use { st ->
+                st.setString(1, rootId)
+                st.executeQuery().use { rs -> while (rs.next()) add(rs.getString(1)) }
+            }
+        }
+        if (ids.isEmpty()) return 0
+        var moved = 0
+        connection.prepareStatement("UPDATE sessions SET project_id = ? WHERE id = ?").use { st ->
+            for (childId in ids) {
+                st.setString(1, projectId)
+                st.setString(2, childId)
+                moved += st.executeUpdate()
+            }
+        }
+        return moved
     }
 
     override suspend fun deleteSession(id: SessionId) {
@@ -825,6 +916,7 @@ class SqliteSessionStore(private val path: Path) : SessionStore, SessionSearch, 
         tags = rs.getString("tags")?.let {
             runCatching { json.decodeFromString(tagsSerializer, it) }.getOrNull()
         } ?: emptyList(),
+        projectId = rs.getString("project_id")?.takeIf { it.isNotBlank() },
     )
 
     private fun readMessage(rs: ResultSet) = Message(
@@ -963,6 +1055,16 @@ private val MIGRATIONS = listOf(
         // without an index that is a full scan of the (large) parts table.
         connection.createStatement().use {
             it.execute("CREATE INDEX IF NOT EXISTS idx_parts_session ON parts(session_id)")
+        }
+    },
+    Migration(4) { connection ->
+        // Project association for sessions. Nullable so existing rows read as
+        // "unfiled" instead of being backfilled into an arbitrary project; the
+        // index keeps the per-project listing (the projects screen's only query)
+        // off a full table scan.
+        addColumnIfMissing(connection, "sessions", "project_id", "TEXT")
+        connection.createStatement().use {
+            it.execute("CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id, updated_at)")
         }
     },
 )

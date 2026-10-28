@@ -221,14 +221,15 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
     private fun writeSession(session: Session) {
         db.execSQL(
             """INSERT OR REPLACE INTO sessions
-               (id,title,cwd,created_at,updated_at,model,provider_id,agent,parent_id,state,pinned,archived,tags)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               (id,title,cwd,created_at,updated_at,model,provider_id,agent,parent_id,state,pinned,archived,tags,project_id)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             arrayOf(
                 session.id.value, session.title, session.cwd, session.createdAt,
                 session.updatedAt, session.model, session.providerId, session.agent,
                 session.parentId?.value, session.state.name,
                 if (session.pinned) 1 else 0, if (session.archived) 1 else 0,
                 json.encodeToString(ListSerializer(String.serializer()), session.tags),
+                session.projectId,
             ),
         )
     }
@@ -266,6 +267,54 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
             "SELECT * FROM sessions $where ORDER BY updated_at DESC LIMIT ?",
             arrayOf(limit.toString()),
         ).use { c -> buildList { while (c.moveToNext()) add(c.toSession()) } }
+    }
+
+    override suspend fun sessionsInProject(
+        projectId: String?,
+        limit: Int,
+        includeChildren: Boolean,
+        includeArchived: Boolean,
+    ): List<Session> = locked {
+        val where = buildList {
+            if (projectId.isNullOrBlank()) add("(project_id IS NULL OR project_id='')")
+            else {
+                add("project_id=?")
+                add("parent_id IS NULL")
+            }
+            if (!includeChildren) add("parent_id IS NULL")
+            if (!includeArchived) add("(archived IS NULL OR archived=0)")
+        }.joinToString(" AND ")
+        val args = buildList {
+            if (!projectId.isNullOrBlank()) add(projectId)
+            add(limit.toString())
+        }.toTypedArray()
+        db.rawQuery("SELECT * FROM sessions WHERE $where ORDER BY updated_at DESC LIMIT ?", args)
+            .use { c -> buildList { while (c.moveToNext()) add(c.toSession()) } }
+    }
+
+    /**
+     * Move a session and its child subtree to [projectId]. Metadata only: no
+     * message, part, todo or snapshot row is rewritten, so the history is intact
+     * after the move. Returns the number of sessions moved.
+     */
+    override suspend fun moveSession(
+        id: SessionId,
+        projectId: String?,
+        includeChildren: Boolean,
+    ): Int = locked {
+        transaction {
+            val targets = if (includeChildren) sessionTree(id.value) else listOf(id.value)
+            var moved = 0
+            for (target in targets) {
+                moved += db.compileStatement("UPDATE sessions SET project_id=? WHERE id=?")
+                    .use { st ->
+                        st.bindString(1, projectId ?: "")
+                        st.bindString(2, target)
+                        st.executeUpdateDelete()
+                    }
+            }
+            moved
+        }
     }
 
     override suspend fun deleteSession(id: SessionId) = locked {
@@ -824,6 +873,9 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
         tags = getString(getColumnIndexOrThrow("tags"))
             ?.let { runCatching { json.decodeFromString(ListSerializer(String.serializer()), it) }.getOrNull() }
             .orEmpty(),
+        projectId = getColumnIndex("project_id").takeIf { it >= 0 }
+            ?.let { if (isNull(it)) null else getString(it) }
+            ?.takeIf { it.isNotBlank() },
     )
 
     /** A message row without its parts; callers attach [partsFor] output. */

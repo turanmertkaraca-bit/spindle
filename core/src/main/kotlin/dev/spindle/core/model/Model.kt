@@ -126,4 +126,15 @@ data class Session(
     val pinned: Boolean = false,
     val archived: Boolean = false,
     val tags: List<String> = emptyList(),
+    /**
+     * The project this session belongs to. Nullable so a session written by an
+     * older build (or a headless caller that has no project concept) is still
+     * valid; a null projectId reads as "unfiled" and shows in the inbox.
+     *
+     * A session is *bound* to a project but not *frozen* into it: [SessionStore.moveSession]
+     * re-files a session without touching its messages, so opening a fresh
+     * context for a different part of the same project (or moving a session to
+     * another project entirely) never loses history.
+     */
+    val projectId: String? = null,
 )

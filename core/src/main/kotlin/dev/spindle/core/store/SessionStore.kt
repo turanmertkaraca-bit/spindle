@@ -32,6 +32,35 @@ interface SessionStore {
         includeArchived: Boolean = false,
     ): List<Session>
 
+    /**
+     * Sessions filed under [projectId], most recently updated first. A null
+     * [projectId] asks for the unfiled inbox (rows whose `project_id` is null or
+     * empty), so a session created before projects existed is still reachable
+     * rather than silently invisible.
+     */
+    suspend fun sessionsInProject(
+        projectId: String?,
+        limit: Int = 50,
+        includeChildren: Boolean = false,
+        includeArchived: Boolean = false,
+    ): List<Session> = sessions(limit, includeChildren, includeArchived).filter { it.projectId == projectId }
+
+    /**
+     * Re-file [id] into [projectId] without touching its messages or parts.
+     *
+     * This is the "movable session" primitive: a session is bound to a project
+     * for organisation and scoping, but moving it is a metadata edit, never a
+     * copy. Child sessions (subagents) follow their parent's project by default,
+     * so a move cascades to the subtree unless [includeChildren] is false.
+     *
+     * Returns the number of sessions moved; zero when [id] does not exist.
+     */
+    suspend fun moveSession(
+        id: SessionId,
+        projectId: String?,
+        includeChildren: Boolean = true,
+    ): Int = 0
+
     suspend fun deleteSession(id: SessionId)
 
     /**
