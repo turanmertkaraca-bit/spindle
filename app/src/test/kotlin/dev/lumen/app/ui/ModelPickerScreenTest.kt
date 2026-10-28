@@ -157,4 +157,69 @@ class ModelPickerScreenTest {
             "an empty state must never render while a refresh is in flight"
         }
     }
+
+    // ---- filter and sort ----
+
+    private val catalogue = listOf(
+        ModelInfo("p", "zeta-big", label = "Zeta", contextWindow = 400_000, inputCostPerM = 9.0),
+        ModelInfo("p", "alpha-cheap", label = "Alpha", contextWindow = 8_000, inputCostPerM = 0.1),
+        ModelInfo("p", "Mid-Model", label = "Mid", contextWindow = 128_000, inputCostPerM = 2.0),
+    )
+
+    @Test
+    fun `search matches the id and the label case-insensitively`() {
+        val byLabel = filterAndSortModels(catalogue, "p", "alpha", ModelSort.Name, false, emptySet())
+        assertEquals(listOf("alpha-cheap"), byLabel.map { it.id })
+
+        val byId = filterAndSortModels(catalogue, "p", "MID", ModelSort.Name, false, emptySet())
+        assertEquals(listOf("Mid-Model"), byId.map { it.id }, "ids match case-insensitively")
+
+        val none = filterAndSortModels(catalogue, "p", "nothing-here", ModelSort.Name, false, emptySet())
+        assertTrue(none.isEmpty(), "an unmatched query returns an empty list, not everything")
+    }
+
+    @Test
+    fun `an empty query returns every model`() {
+        val all = filterAndSortModels(catalogue, "p", "   ", ModelSort.Name, false, emptySet())
+        assertEquals(catalogue.size, all.size, "whitespace is not a filter")
+    }
+
+    @Test
+    fun `sort orders by name, context and cost`() {
+        val byName = filterAndSortModels(catalogue, "p", "", ModelSort.Name, false, emptySet())
+        assertEquals(listOf("alpha-cheap", "Mid-Model", "zeta-big"), byName.map { it.id })
+
+        val byContext = filterAndSortModels(catalogue, "p", "", ModelSort.Context, false, emptySet())
+        assertEquals(listOf("zeta-big", "Mid-Model", "alpha-cheap"), byContext.map { it.id })
+
+        // Deliberately NOT the same order as context, so this actually proves the
+        // cost comparator runs rather than falling through to another sort.
+        val priced = listOf(
+            ModelInfo("p", "cheap-big-context", label = "Cheap", contextWindow = 400_000, inputCostPerM = 0.1),
+            ModelInfo("p", "pricey-small-context", label = "Pricey", contextWindow = 8_000, inputCostPerM = 9.0),
+        )
+        val byCost = filterAndSortModels(priced, "p", "", ModelSort.Cost, false, emptySet())
+        assertEquals(
+            listOf("pricey-small-context", "cheap-big-context"),
+            byCost.map { it.id },
+            "cost sort is descending and independent of context size",
+        )
+    }
+
+    @Test
+    fun `favoritesOnly keeps just the starred refs`() {
+        val starred = setOf("p/zeta-big", "p/Mid-Model")
+        val only = filterAndSortModels(catalogue, "p", "", ModelSort.Name, true, starred)
+        assertEquals(listOf("Mid-Model", "zeta-big"), only.map { it.id })
+
+        // A starred ref from another provider must not leak into this one.
+        val foreign = filterAndSortModels(catalogue, "p", "", ModelSort.Name, true, setOf("other/zeta-big"))
+        assertTrue(foreign.isEmpty(), "favourites are scoped to the browsed provider")
+    }
+
+    @Test
+    fun `search and favoritesOnly combine`() {
+        val both = filterAndSortModels(catalogue, "p", "zeta", ModelSort.Name, true, setOf("p/zeta-big"))
+        assertEquals(listOf("zeta-big"), both.map { it.id })
+    }
 }

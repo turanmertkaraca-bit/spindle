@@ -21,6 +21,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
@@ -34,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -42,6 +45,8 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import dev.lumen.app.data.ProviderCatalogue
 import dev.spindle.core.provider.ModelInfo
@@ -237,14 +242,30 @@ fun ModelPickerScreen(
     onToggleFavorite: ((String) -> Unit)? = null,
 ) {
     var browseProvider by rememberSaveable(provider) { mutableStateOf(provider) }
-    val liveModels = remember(models, provider, browseProvider) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var sort by rememberSaveable { mutableStateOf(ModelSort.Name) }
+    var favoritesOnly by rememberSaveable { mutableStateOf(false) }
+
+    val allModels = remember(models, provider, browseProvider) {
         if (browseProvider == provider) models else ProviderCatalogue.defaultModels(browseProvider)
     }
     val known = remember(models, provider, browseProvider) {
         buildMap {
             models.forEach { put("$provider/${it.id}", it) }
-            liveModels.forEach { put("$browseProvider/${it.id}", it) }
+            allModels.forEach { put("$browseProvider/${it.id}", it) }
         }
+    }
+    // Filter and sort in one pass so the list the user sees is derived, never
+    // mutated: typing in the search box cannot leave a stale row behind.
+    val liveModels = remember(allModels, query, sort, favoritesOnly, favorites, browseProvider) {
+        filterAndSortModels(
+            models = allModels,
+            provider = browseProvider,
+            query = query,
+            sort = sort,
+            favoritesOnly = favoritesOnly,
+            favorites = favorites,
+        )
     }
     Column(
         modifier
@@ -292,6 +313,18 @@ fun ModelPickerScreen(
             }
         }
 
+        Spacer(Modifier.height(LumenSpacing.sm))
+        ModelFilterBar(
+            colors = colors,
+            query = query,
+            onQuery = { query = it },
+            sort = sort,
+            onSort = { sort = it },
+            favoritesOnly = favoritesOnly,
+            onFavoritesOnly = { favoritesOnly = it },
+            hasFavorites = favorites.isNotEmpty(),
+        )
+
         // A refresh over an already-populated list still needs to be visible: a
         // slim spectral bar under the provider row, rather than a silent swap.
         if (refreshing && models.isNotEmpty()) {
@@ -325,6 +358,16 @@ fun ModelPickerScreen(
             ) {
                 if (refreshing) {
                     LumenLoading(colors, "loading models\u2026", tag = "models-loading")
+                } else if (query.isNotBlank() || favoritesOnly) {
+                    // A filtered-to-nothing list is not "no models available":
+                    // saying so would send the user to Refresh for a problem
+                    // their own filter caused. Offer the way back instead.
+                    StateHint(
+                        colors,
+                        "No models match",
+                        detail = "Clear the search or the starred filter",
+                        tag = "models-no-match",
+                    )
                 } else {
                     StateHint(
                         colors,
@@ -397,6 +440,187 @@ internal fun pinnedRowData(
     val refProvider = ref.substringBefore('/')
     val base = known[ref]?.let { modelRowData(refProvider, it) } ?: modelRowDataFromRef(ref, tag)
     return base.copy(providerLabel = ProviderCatalogue.label(refProvider), tag = tag)
+}
+
+/** How the model list is ordered. [Name] is the neutral default. */
+internal enum class ModelSort(val label: String) {
+    Name("name"),
+    Context("context"),
+    Cost("cost"),
+}
+
+/**
+ * Apply the browser's search, sort and favourites-only filters in one pass.
+ *
+ * Pure on purpose: the screen derives its list from this rather than mutating
+ * state, so a query can never leave a stale row behind and the behaviour can be
+ * tested without a Compose harness.
+ *
+ * Matching is case-insensitive across the id and the display label, because a
+ * user searching "deepseek" should find "DeepSeek: DeepSeek-V4.1" by either
+ * name. Sorting puts unknown values last rather than first: a model with no
+ * advertised context window or cost is not "cheapest" or "smallest".
+ */
+internal fun filterAndSortModels(
+    models: List<ModelInfo>,
+    provider: String,
+    query: String,
+    sort: ModelSort,
+    favoritesOnly: Boolean,
+    favorites: Set<String>,
+): List<ModelInfo> {
+    val needle = query.trim().lowercase()
+    val filtered = models.filter { model ->
+        if (favoritesOnly && "$provider/${model.id}" !in favorites) return@filter false
+        if (needle.isEmpty()) return@filter true
+        model.id.lowercase().contains(needle) ||
+            displayModelLabel(model.id).lowercase().contains(needle)
+    }
+    return when (sort) {
+        ModelSort.Name -> filtered.sortedBy { displayModelLabel(it.id).lowercase() }
+        // Descending for size and cost: "biggest" and "priciest" are what a user
+        // opens this list to find. Both fields default to zero when a provider
+        // advertises nothing, so zero-cost models sink to the end instead of
+        // masquerading as the cheapest option.
+        ModelSort.Context -> filtered.sortedByDescending { it.contextWindow }
+        ModelSort.Cost -> filtered.sortedByDescending { it.inputCostPerM + it.outputCostPerM }
+    }
+}
+
+/**
+ * Search, sort and favourites controls for the model list.
+ *
+ * A catalogue of a few hundred models is unusable as a flat scroll: the reason
+ * to open this screen is usually "find a cheap one with a big context" or "the
+ * one I used last week". These controls are plain text and chips so they match
+ * the rest of the app's terminal-adjacent styling rather than introducing a
+ * material search bar.
+ */
+@Composable
+private fun ModelFilterBar(
+    colors: LumenColors,
+    query: String,
+    onQuery: (String) -> Unit,
+    sort: ModelSort,
+    onSort: (ModelSort) -> Unit,
+    favoritesOnly: Boolean,
+    onFavoritesOnly: (Boolean) -> Unit,
+    hasFavorites: Boolean,
+) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = LumenSpacing.page)) {
+        // Search field. A BasicTextField keeps the look consistent with the
+        // project-name and key inputs elsewhere in the app.
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(LumenShapes.inset)
+                .background(colors.surface)
+                .border(1.dp, colors.outline, LumenShapes.inset)
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "\u2315",
+                color = colors.dim,
+                fontFamily = LumenFonts.value,
+                fontSize = LumenType.body,
+            )
+            Spacer(Modifier.width(8.dp))
+            Box(Modifier.weight(1f)) {
+                if (query.isEmpty()) {
+                    Text(
+                        "search models",
+                        color = colors.dim,
+                        fontFamily = LumenFonts.value,
+                        fontSize = LumenType.body,
+                    )
+                }
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQuery,
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = colors.fg,
+                        fontFamily = LumenFonts.value,
+                        fontSize = LumenType.body,
+                    ),
+                    cursorBrush = SolidColor(colors.water),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("models-search"),
+                )
+            }
+            if (query.isNotEmpty()) {
+                Box(
+                    Modifier
+                        .clip(LumenShapes.small)
+                        .clickable { onQuery("") }
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .testTag("models-search-clear"),
+                ) {
+                    Text("\u00d7", color = colors.dim, fontFamily = LumenFonts.value, fontSize = LumenType.body)
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            for (option in ModelSort.entries) {
+                SortChip(
+                    colors = colors,
+                    text = option.label,
+                    selected = sort == option,
+                    tag = "models-sort-${option.name.lowercase()}",
+                    onClick = { onSort(option) },
+                )
+            }
+            // Favourites-only only makes sense once something is starred, so it
+            // is hidden rather than shown permanently disabled.
+            if (hasFavorites) {
+                SortChip(
+                    colors = colors,
+                    text = "starred",
+                    selected = favoritesOnly,
+                    tag = "models-filter-starred",
+                    onClick = { onFavoritesOnly(!favoritesOnly) },
+                )
+            }
+        }
+    }
+}
+
+/** A small toggle chip used for sort and filter options. */
+@Composable
+private fun SortChip(
+    colors: LumenColors,
+    text: String,
+    selected: Boolean,
+    tag: String,
+    onClick: () -> Unit,
+) {
+    Box(
+        Modifier
+            .heightIn(min = 32.dp)
+            .clip(LumenShapes.small)
+            .background(if (selected) colors.surface else Color.Transparent)
+            .border(1.dp, if (selected) colors.water else colors.outline, LumenShapes.small)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp)
+            .testTag(tag),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text,
+            color = if (selected) colors.fg else colors.dim,
+            fontFamily = LumenFonts.value,
+            fontSize = LumenType.micro,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+        )
+    }
 }
 
 @Composable
