@@ -208,6 +208,11 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
      */
     private fun sessionsProjectColumn(db: SQLiteDatabase) {
         val existing = columnNames(db, "sessions")
+        // A hand-built or partially-created database may not have the sessions
+        // table at all (only migration 1's createSchema makes it). Without this
+        // guard the ALTER below would throw and abort the whole upgrade, so a
+        // missing table is treated as "nothing to add here".
+        if (existing.isEmpty()) return
         if ("project_id" !in existing) {
             db.execSQL("ALTER TABLE sessions ADD COLUMN project_id TEXT")
         }
