@@ -125,9 +125,10 @@ class ProjectsScreenTest {
         }
 
         compose.onNodeWithText("active \u00b7 agent works here \u00b7 3 sessions").assertIsDisplayed()
-        // Tap the resume text itself, which is the visible affordance a user aims
-        // at, rather than the container: that is what a real tap hits.
-        compose.onNodeWithText("resume \u00b7 refactor the parser").assertIsDisplayed().performClick()
+        compose.onNodeWithText("resume \u00b7 refactor the parser").assertIsDisplayed()
+        // Click the clickable container by its tag: the text leaf itself carries
+        // no click action, so aiming at it would test nothing.
+        compose.onNodeWithTag("project-resume-playground").performClick()
         compose.waitForIdle()
 
         assertEquals("session-abc", opened, "resume should open the newest session")
