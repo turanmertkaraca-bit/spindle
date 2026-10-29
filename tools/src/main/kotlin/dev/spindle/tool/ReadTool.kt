@@ -91,8 +91,8 @@ class ReadTool : Tool {
         }
 
         val shown = window.lines.size
-        val truncated = end < window.totalLines || window.scanCapped
-        val totalLabel = if (window.scanCapped) "≥${window.totalLines}" else window.totalLines.toString()
+        val truncated = end < window.totalLines
+        val totalLabel = window.totalLines.toString()
         val note = if (truncated) {
             "\n…[truncated: showing lines ${start + 1}-$end of $totalLabel; " +
                 "use offset/limit to read more]"
@@ -130,6 +130,26 @@ class ReadTool : Tool {
                     capped = true
                     break
                 }
+            }
+            if (capped) {
+                // Past the scan cap the line list is already sized by `limit`, so
+                // only the remaining newlines are counted, in a fixed buffer, to
+                // keep the reported total accurate without buffering the file.
+                val buffer = CharArray(8192)
+                var newlines = 0
+                var lastChar = '\n'
+                while (true) {
+                    val read = reader.read(buffer)
+                    if (read < 0) break
+                    for (i in 0 until read) {
+                        if (buffer[i] == '\n') newlines++
+                    }
+                    lastChar = buffer[read - 1]
+                    ctx.checkAborted()
+                }
+                total += newlines
+                // A trailing final line with no newline still counts as one line.
+                if (lastChar != '\n') total++
             }
         }
         return Window(lines, total, capped)

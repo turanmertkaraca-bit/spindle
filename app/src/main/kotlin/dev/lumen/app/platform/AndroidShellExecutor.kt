@@ -388,7 +388,7 @@ private fun truncationMarker(dropped: Long): String = "\n…[output truncated $d
  * panel needs: a live shell process whose merged output streams as raw UTF-8
  * chunks and whose stdin accepts whole lines.
  *
- * The reader runs on a daemon thread and publishes to an unbounded channel;
+ * The reader runs on a daemon thread and publishes to a bounded channel;
  * [output] completes when the process closes or [close] is called. Every entry
  * point is defensive — a dead process ends the flow, it never throws.
  */
@@ -404,8 +404,19 @@ private class ProcessPtySession(
     /** Guards [onClose] so a double close cannot release a slot twice. */
     private val closeOnce = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    private val chunks = Channel<String>(Channel.UNLIMITED)
+    private val chunks = Channel<String>(capacity = PTY_CHANNEL_CAPACITY)
     private val reader = Thread(::pump)
+
+    private companion object {
+        /**
+         * Output is buffered only this far: a chatty command with a slow or
+         * stalled consumer must cost a few chunks, never unbounded heap.
+         */
+        const val PTY_CHANNEL_CAPACITY = 256
+
+        /** Emitted at most once when [chunks] overflows, so the loss is visible. */
+        const val PTY_DROP_NOTICE = "\n[output dropped: terminal consumer too slow]\n"
+    }
 
     @Volatile
     private var closed = false
@@ -422,6 +433,7 @@ private class ProcessPtySession(
     }
 
     private fun pump() {
+        var noticeSent = false
         try {
             InputStreamReader(process.inputStream, StandardCharsets.UTF_8).use { input ->
                 val buffer = CharArray(8192)
@@ -429,7 +441,13 @@ private class ProcessPtySession(
                     val read = input.read(buffer)
                     if (read < 0) break
                     if (read == 0) continue
-                    chunks.trySend(String(buffer, 0, read))
+                    // Never block the reader: a full buffer means the consumer is
+                    // too slow, so drop this chunk and keep draining the pipe.
+                    if (chunks.trySend(String(buffer, 0, read)).isFailure) {
+                        if (!noticeSent && chunks.trySend(PTY_DROP_NOTICE).isSuccess) {
+                            noticeSent = true
+                        }
+                    }
                 }
             }
         } catch (ignored: Throwable) {
