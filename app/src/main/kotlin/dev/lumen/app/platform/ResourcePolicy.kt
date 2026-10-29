@@ -70,21 +70,64 @@ object ResourcePolicy {
     private var gateSize: Int = 0
 
     /**
+     * Permits currently outstanding per gate, so [release] cannot inflate the
+     * cap. [Semaphore] itself happily accepts an unmatched or duplicate release,
+     * which would quietly raise the effective concurrency above the device's
+     * capacity; this counter makes release accounting exact instead.
+     */
+    private val outstanding = java.util.concurrent.ConcurrentHashMap<Semaphore, java.util.concurrent.atomic.AtomicInteger>()
+
+    /**
      * Acquire a slot, blocking up to [timeoutMs]. Returns null when the wait is
      * exhausted, so the caller can report "busy" instead of queueing forever.
+     *
+     * Pass [context] to enable the device-state gate: when [pauseReason] reports
+     * a hot or nearly-flat device, no slot is granted. The context-less overload
+     * is kept for tests and for callers that cannot supply one.
      */
-    fun acquire(timeoutMs: Long = 60_000L): Semaphore? {
+    fun acquire(timeoutMs: Long = 60_000L, context: Context? = null): Semaphore? {
+        // Blocking the UI thread on admission control freezes the app, so a
+        // main-thread caller fails fast and retries from a worker instead. The
+        // check is wrapped because Looper is a stub on the JVM (unit tests) and
+        // calling it there throws: an unknown thread is treated as a worker.
+        val onMainThread = runCatching {
+            Thread.currentThread() === android.os.Looper.getMainLooper()?.thread
+        }.getOrDefault(false)
+        if (onMainThread) {
+            Log.w(TAG, "acquire() called on the main thread; refusing to block")
+            return null
+        }
+        if (context != null) {
+            val reason = pauseReason(context)
+            if (reason != null) {
+                Log.w(TAG, "not admitting guest work: $reason")
+                return null
+            }
+        }
         val s = gateOrCreate()
-        return try {
-            if (s.tryAcquire(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) s else null
+        val granted = try {
+            s.tryAcquire(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
         } catch (t: InterruptedException) {
             Thread.currentThread().interrupt()
-            null
+            false
         }
+        if (!granted) return null
+        outstanding.computeIfAbsent(s) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
+        return s
     }
 
-    /** Release a slot acquired from [acquire]. Idempotent-safe per call. */
+    /**
+     * Release a slot acquired from [acquire]. Releasing more times than the slot
+     * was acquired is a no-op, so a double release (a session closing twice, a
+     * failed launch path racing a close) cannot raise the permit count past the
+     * device's cap.
+     */
     fun release(semaphore: Semaphore) {
+        val counter = outstanding[semaphore] ?: return
+        if (counter.decrementAndGet() < 0) {
+            counter.incrementAndGet()
+            return
+        }
         runCatching { semaphore.release() }
     }
 
@@ -94,7 +137,8 @@ object ResourcePolicy {
         val existing = gate
         if (existing != null && gateSize == size) return existing
         // Resizing mid-flight would strand permits; create a fresh gate and let
-        // in-flight holders release into the old one harmlessly.
+        // in-flight holders release into the old one harmlessly. Their release
+        // still finds its own counter entry, so the old gate drains correctly.
         return Semaphore(size, true).also {
             gate = it
             gateSize = size
@@ -106,6 +150,7 @@ object ResourcePolicy {
     internal fun resetForTest() {
         gate = null
         gateSize = 0
+        outstanding.clear()
     }
 
     /** How many guest processes are running right now (for diagnostics). */

@@ -1,6 +1,7 @@
 package dev.lumen.app.data
 
 import android.content.Context
+import android.util.Log
 import java.io.File
 import java.nio.file.Files
 
@@ -64,6 +65,13 @@ class ProjectStore(context: Context) {
     /** The persisted active project when its folder still exists, else null. */
     fun activeOrNull(): Project? {
         val id = prefs.getString(KEY_ACTIVE, null) ?: return null
+        // The pref is restored/tampered data on this read path, so it gets the
+        // same gate as setActive/delete: a value like ".." would otherwise
+        // resolve to filesDir and be adopted as the agent's working directory.
+        if (!isSafeId(id)) {
+            Log.w(TAG, "ignoring unsafe active project id")
+            return null
+        }
         val dir = File(root, id)
         if (!dir.isDirectory) return null
         return Project(id = id, name = nameFor(id), dir = dir)
@@ -86,6 +94,13 @@ class ProjectStore(context: Context) {
     fun create(rawName: String): Project? {
         val name = rawName.trim().replace(Regex("\\s+"), " ").take(MAX_NAME)
         if (name.isBlank()) return null
+        // Only ids were de-duplicated, so two "Work" rows were indistinguishable
+        // in the picker. Reject a duplicate display name outright rather than
+        // silently creating a twin the user cannot tell apart.
+        if (nameTaken(name, exceptId = null)) {
+            Log.w(TAG, "refusing to create a duplicate project name")
+            return null
+        }
         root.mkdirs()
         val id = uniqueId(slug(name))
         val dir = File(root, id)
@@ -112,15 +127,49 @@ class ProjectStore(context: Context) {
         val canonicalDir = runCatching { dir.canonicalFile }.getOrElse { dir.absoluteFile }
         if (canonicalDir.parentFile != canonicalRoot) return false
 
+        // Delete the files first: the prefs are the record of what exists, so
+        // rewriting them before a failed delete would make the project look
+        // gone while its folder (and the user's files) stayed behind. Nothing
+        // is mutated until the tree is actually gone.
+        if (!deleteTree(dir)) return false
         if (prefs.getString(KEY_ACTIVE, null) == id) {
             val next = all.first { it.id != id }
             prefs.edit().putString(KEY_ACTIVE, next.id).apply()
         }
         prefs.edit().remove(nameKey(id)).apply()
-        return deleteTree(dir)
+        return true
+    }
+
+    /**
+     * Rename the project [id] to [rawName]. The folder id never changes, so a
+     * rename is a single preference write and no files move. Returns the
+     * updated project, or null for an unknown id or a rejected name.
+     */
+    fun rename(id: String, rawName: String): Project? {
+        if (!isSafeId(id)) return null
+        val dir = File(root, id)
+        if (!dir.isDirectory) return null
+        val name = rawName.trim().replace(Regex("\\s+"), " ").take(MAX_NAME)
+        if (name.isBlank()) return null
+        if (nameTaken(name, exceptId = id)) {
+            Log.w(TAG, "refusing to rename to a duplicate project name")
+            return null
+        }
+        prefs.edit().putString(nameKey(id), name).apply()
+        return Project(id = id, name = name, dir = dir)
     }
 
     // ------------------------------------------------------------ internals
+
+    /**
+     * True when another project already uses [name], compared case-insensitively
+     * so "Work" and "work" cannot both exist. [exceptId] is the project being
+     * renamed, whose own current name must not count against it.
+     */
+    private fun nameTaken(name: String, exceptId: String?): Boolean {
+        val target = name.lowercase()
+        return list().any { it.id != exceptId && it.name.lowercase() == target }
+    }
 
     /** Move the pre-project-folder workspace into the default project. */
     private fun migrateLegacy() {
@@ -183,6 +232,7 @@ class ProjectStore(context: Context) {
     }
 
     companion object {
+        private const val TAG = "ProjectStore"
         private const val PREFS = "lumen.projects"
         private const val KEY_ACTIVE = "activeProject"
         private const val KEY_MIGRATED = "workspaceMigrated"

@@ -38,6 +38,14 @@ class RunService : Service() {
     @Volatile
     private var wakeLock: PowerManager.WakeLock? = null
 
+    /**
+     * Set when [teardownRun] cannot safely drop the wake lock because the stop
+     * handler failed. The run is then still going, so [onDestroy] releases the
+     * lock instead of leaving the CPU awake forever. Cleared by a new run.
+     */
+    @Volatile
+    private var wakeLockReleases: Boolean = false
+
     /** The active run's session title, so progress updates keep a name in the shade. */
     @Volatile
     private var currentTitle: String = "Lumen"
@@ -98,6 +106,11 @@ class RunService : Service() {
 
     override fun onDestroy() {
         teardownRun()
+        // [teardownRun] deliberately keeps the wake lock when the stop handler
+        // threw, so a possibly-live run keeps its CPU guarantee. The service is
+        // going away now, so the lock cannot be renewed: release it here or it
+        // drains the battery until its own timeout expires.
+        if (wakeLockReleases) releaseWakeLock()
         super.onDestroy()
     }
 
@@ -113,8 +126,13 @@ class RunService : Service() {
         try {
             startForeground(NOTIFICATION_ID, notification)
         } catch (t: Throwable) {
-            Log.e(TAG, "startForeground failed; stopping run service", t)
+            // Background start restrictions can deny foreground status. Without a
+            // notification the service cannot legally stay up, so end the run here
+            // as well: teardownRun stops the agent and drops the wake lock instead
+            // of leaving a headless run behind once the service dies.
+            Log.e(TAG, "startForeground failed; stopping the run", t)
             teardownRun()
+            markAlive(false)
             runCatching { stopSelf() }
             return
         }
@@ -140,8 +158,17 @@ class RunService : Service() {
             if (tornDown) return
             tornDown = true
         }
-        invokeStopHandlerOnce()
-        releaseWakeLock()
+        val stopped = invokeStopHandlerOnce()
+        // A throwing stop handler means the agent may still be running: dropping
+        // the wake lock and notification here would leave it going headless with
+        // no CPU guarantee. The lock is therefore kept; its own 5-minute timeout
+        // bounds the drain, and [onDestroy] releases it when the service dies.
+        if (stopped) {
+            releaseWakeLock()
+        } else {
+            Log.e(TAG, "teardown: stop handler failed; run may still be live, keeping the wake lock")
+            wakeLockReleases = true
+        }
         stopForeground(STOP_FOREGROUND_REMOVE)
         markAlive(false)
         currentTitle = "Lumen"
@@ -224,8 +251,15 @@ class RunService : Service() {
      * doze. Called from [show], i.e. on every progress notification.
      */
     private fun refreshWakeLock() {
+        // A held lock is renewed rather than left to expire: re-asserting it on
+        // progress updates keeps a long but healthy run's CPU guarantee alive
+        // without ever holding an indefinite lock. A run that stops making
+        // progress stops renewing, so the timeout still bounds a stalled run.
         val lock = wakeLock
-        if (lock != null && lock.isHeld) return
+        if (lock != null && lock.isHeld) {
+            runCatching { lock.acquire(WAKE_LOCK_TIMEOUT_MS) }
+            return
+        }
         acquireWakeLock()
     }
 
@@ -302,15 +336,19 @@ class RunService : Service() {
 
         /**
          * Invoke [RunControl.stopHandler] at most once per run, whichever of
-         * [teardownRun] or [stop] gets here first. A failing handler is logged
-         * and swallowed so teardown still completes.
+         * [teardownRun] or [stop] gets here first. Returns false when the
+         * handler threw, i.e. the agent may still be live; the failure is
+         * logged so it is never silent. Callers use the result to decide
+         * whether dropping the wake lock would leave a run going headless.
          */
-        internal fun invokeStopHandlerOnce() {
-            if (!stopInvoked.compareAndSet(false, true)) return
-            try {
+        internal fun invokeStopHandlerOnce(): Boolean {
+            if (!stopInvoked.compareAndSet(false, true)) return true
+            return try {
                 RunControl.stopHandler?.invoke()
+                true
             } catch (t: Throwable) {
                 Log.w(TAG, "stop handler failed during run teardown", t)
+                false
             }
         }
 

@@ -37,6 +37,9 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
     private val environment = AndroidEnvironment(context)
     private val debian = DebianEnvironment(context)
 
+    /** Held for [ResourcePolicy.acquire], which needs the device state. */
+    private val appContext = context.applicationContext
+
     /** Guards the one-time rootfs install on the first shell call. */
     private val installLock = Mutex()
     private var installAttempted = false
@@ -73,7 +76,7 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         // many guest processes exist at once. A slot is held for this command's
         // lifetime only, so many short commands interleave instead of queueing
         // behind one long one.
-        val slot = ResourcePolicy.acquire(timeoutMs = 120_000L)
+        val slot = ResourcePolicy.acquire(timeoutMs = 120_000L, context = appContext)
             ?: return@withContext ShellResult(
                 exitCode = -1,
                 output = "another agent command is still running; try again in a moment",
@@ -161,7 +164,7 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         // Admission control: an interactive terminal is guest work too, so it
         // takes a slot from the same gate as non-interactive commands. Held for
         // the session's lifetime, released when the pty is closed.
-        val slot = ResourcePolicy.acquire(timeoutMs = 15_000L)
+        val slot = ResourcePolicy.acquire(timeoutMs = 15_000L, context = appContext)
         if (slot == null) return@withContext null
         // The slot belongs to the returned session once it exists; until then
         // this frame still owns it, so an abandoned pty (a caller that never
