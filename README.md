@@ -96,7 +96,9 @@ verified green sweep was CI run `40853703308` on `f80644e`, where the Robolectri
 job (which includes the screenshot/UI tests) passed). Live Zen/Go Claude/GPT is
 **out of scope by owner decision** (Go
 subscription only, no paid API credits), not blocked pending a key. See
-`docs/HANDOFF.md` (read first), `docs/PLAN.md`, `docs/SPEC.md` and
+`docs/guide/` (per-subsystem developer guide — one file per area; start here to
+change code), `docs/HANDOFF.md` (read first for session history),
+`docs/PROJECT-STATUS.md` (what is left), `docs/PLAN.md`, `docs/SPEC.md` and
 `docs/PARITY.md` (what we ported from opencode and what we deliberately did
 not).
 

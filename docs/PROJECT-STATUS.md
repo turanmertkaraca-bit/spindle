@@ -105,9 +105,16 @@ working it.
 - [x] background/foreground service correctness: failed `startForeground` tears
       down the run; stop-handler failure keeps the wake lock; progress-driven
       wake-lock renewal
-- [ ] add real CPU/memory limiting to the proot path — **not done**. Niceness
-      exists (see 3); `ulimit` memory caps, `chrt`/`taskset` affinity and any
-      cgroup control do not, and cgroups need root.
+- [x] add real CPU/memory limiting to the proot path — **done** (`4ff37c0`).
+      cgroups need root, so the lever is the shell's own `ulimit`, applied to the
+      script the guest shell runs rather than to proot: `-v 2 GiB` (a runaway
+      compiler dies with ENOMEM inside the guest instead of being reaped by the
+      low-memory killer and taking the app with it) and `-n 4096`.
+      `ResourcePolicy.limitScript` joins the guards with `;` and tolerates each
+      one's failure, and is applied on the Debian, Alpine and pty paths. No
+      CPU-time ulimit on purpose — a real build can exceed any fixed number and
+      the per-tool deadline bounds wall clock better. Affinity/cgroup control
+      remains out of reach without root; that is a platform limit, not a TODO.
 
 ### Run D — UI sweep
 - [ ] minimal / merged / coherent pass on the shared chrome language

@@ -5,9 +5,11 @@ updated at the end of every work run. If you are an agent picking this up:
 read §1, then jump to the section matching your task. Do not trust a section
 whose "verified" stamp predates the current HEAD without re-checking it.
 
-- **Last updated:** stability/optimisation wave, HEAD `f80644e`
-- **Verified against:** HEAD `f80644e` (CI green on this sha — both jobs,
-  run `40853703308`)
+- **Last updated:** Run C completed, HEAD `4ff37c0`
+- **Verified against:** HEAD `4ff37c0` (CI green on this sha — both jobs)
+- **Per-subsystem developer guide:** [`guide/README.md`](guide/README.md) — one
+  file per area (agent loop, storage, tools, shell/proot, service, UI, testing,
+  conventions). Start there to change code; use this file for whole-app state.
 - **Maintainer rule:** append a changelog line in §9 whenever you change
   anything in here. Never delete a finding; mark it fixed with the commit sha.
 
@@ -29,8 +31,12 @@ Codename "spindle" is provisional. License: MIT.
 
 - `:core`, `:sandbox`, `:tools`, `:server`, `:cli`, `:store-sqlite`,
   `:provider-openai`, `:provider-anthropic` build and test locally on the JVM.
-- **`:app` cannot build locally** — there is no Android SDK. CI (GitHub
-  Actions, `android app (robolectric)` job) is the only verifier for `:app`.
+- **`:app` COMPILES locally** — an Android SDK is present at
+  `/opt/android-sdk` (platforms 34/35), so `:app:compileDebugKotlin` works with
+  `aapt2` overridden (see `guide/07-testing.md`). **Its Robolectric tests still
+  cannot run here** (no conscrypt native for aarch64), so CI's
+  `android app (robolectric)` job remains the only behavioural verifier. Local
+  `:app` verification therefore means "compiles", never "passes".
 - Local JVM verification command (works offline once caches are warm):
 
 ```
