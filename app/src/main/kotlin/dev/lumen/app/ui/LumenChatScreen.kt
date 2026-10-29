@@ -536,6 +536,11 @@ fun LumenChatScreen(
     // tests. Kept as a lambda so the parent body never READS the animated value:
     // rows re-read it only inside their own draw phase, confining recomposition
     // to the glyphs instead of every timeline row every frame.
+    //
+    // The whole lambda (and the transition it owns) is remembered so its identity
+    // only flips when ambient/running actually change — before this, `t` and
+    // `read` were rebuilt on every recomposition, making MessageRow/TodoBoard
+    // params never-equal and defeating lazy-item skipping.
     val running = busy || steps.any { it.running }
     val pulse: () -> Float = if (ambient && running) {
         val t = rememberInfiniteTransition(label = "pulse")
@@ -545,10 +550,15 @@ fun LumenChatScreen(
             animationSpec = LumenMotion.pulse,
             label = "pulse",
         )
-        val read: () -> Float = { value.value }
-        read
+        // Only the read lambda's identity needs to be stable; the transition
+        // itself stays in composition scope because rememberInfiniteTransition
+        // is composable.
+        remember(ambient && running) {
+            val read: () -> Float = { value.value }
+            read
+        }
     } else {
-        { 1f }
+        remember { { 1f } }
     }
 
     // Fold each think block into the answer/tool that follows, so it collapses
@@ -569,7 +579,11 @@ fun LumenChatScreen(
     // `forceOpenIndex` indexes the RAW step list, but the timeline renders the
     // grouped/deduped `display` list; map raw → display by id so a folded row
     // still opens. Fall back to -1 (nothing open) when it cannot be mapped.
-    val forceOpenId = remember(forceOpenIndex, steps, display) {
+    //
+    // `steps` was removed from the key set: `display` already derives from it,
+    // so keying on both only caused `forceOpenId` — and the rows keyed off it —
+    // to recompute on every streaming token.
+    val forceOpenId = remember(forceOpenIndex, display) {
         val index = forceOpenIndex ?: return@remember null
         val raw = steps.getOrNull(index) ?: return@remember null
         var foldedId: String? = null
@@ -615,44 +629,33 @@ fun LumenChatScreen(
             if (desired != null) followTail = desired
         }
     }
-    LaunchedEffect(count, last?.id, last?.body?.length) {
-        if (count == 0 || !followTail) return@LaunchedEffect
-        // Pin the last row to the tail whenever it (or a new one) grows; scrollBy
-        // of the height delta keeps a streaming bubble glued to the bottom without
-        // fighting the height changes above it.
-        val info = listState.layoutInfo
-        val lastVisible = info.visibleItemsInfo.lastOrNull { it.index == count - 1 }
-        if (lastVisible == null) {
-            // The last row is not composed yet: jump so it lays out, then pin next.
-            listState.scrollToItem(count - 1)
-        } else {
-            val delta = (info.viewportEndOffset - info.afterContentPadding) - (lastVisible.offset + lastVisible.size)
-            // Anchor the last row's BOTTOM to the viewport bottom. A positive
-            // delta is empty space below a short tail (a no-op at the end of the
-            // list); a negative delta is a row taller than the viewport, which
-            // scrolls forward to reveal its tail instead of leaving it cut at the
-            // fold.
-            if (delta > 0) listState.scrollBy(delta.toFloat()) else if (delta < 0) listState.scrollBy((-delta).toFloat())
-        }
-    }
-    // The viewport can also SHRINK without any content change: the usage meter,
-    // the todo/changes/ask cards or the IME appear and steal height, leaving the
-    // tail clipped below the fold. The growth-keyed effect above never fires then,
-    // so observe layout directly and re-pin the last row whenever a gap opens
-    // under it. Guarded by followTail and not-while-flinging so a deliberate
-    // scroll-up is never yanked back.
+    // Keep the last row pinned to the tail. A snapshotFlow on layoutInfo re-emits
+    // both on content growth (the old per-token body-length key) and on viewport
+    // shrink (cards/IME stealing height), so this single long-lived collector
+    // replaces the two effects that used to fight over the same bottom gap: one
+    // scrolled by `delta` and the other by `gap`, both firing every streaming
+    // frame. `count` and `last` are captured by the outer scope but only consulted
+    // here — the trigger is layoutInfo, not the growing body length.
     LaunchedEffect(listState) {
         snapshotFlow { listState.layoutInfo }
             .collect { info ->
                 if (!followTail || listState.isScrollInProgress) return@collect
-                val lastItem = info.visibleItemsInfo
-                    .lastOrNull { it.index == info.totalItemsCount - 1 } ?: return@collect
+                if (count == 0) return@collect
+                val lastItem = info.visibleItemsInfo.lastOrNull { it.index == info.totalItemsCount - 1 }
+                val lastVisible = if (lastItem == null) {
+                    // The last row is not composed yet: jump so it lays out,
+                    // then pin it next pass.
+                    listState.scrollToItem(count - 1)
+                    return@collect
+                } else lastItem
                 val gap = (info.viewportEndOffset - info.afterContentPadding) -
-                    (lastItem.offset + lastItem.size)
-                // Same anchor: reveal the bottom of an overhanging (taller-than-
-                // viewport) last row by scrolling forward, not just fill a
-                // positive gap under a short one.
-                if (gap > 0) listState.scrollBy(gap.toFloat()) else if (gap < 0) listState.scrollBy((-gap).toFloat())
+                    (lastVisible.offset + lastVisible.size)
+                // Anchor the last row's BOTTOM to the viewport bottom. A positive
+                // gap is empty space below a short tail (fill it); a negative gap
+                // is a row taller than the viewport (scroll forward to reveal its
+                // tail instead of leaving it cut at the fold).
+                if (gap > 0) listState.scrollBy(gap.toFloat())
+                else if (gap < 0) listState.scrollBy((-gap).toFloat())
             }
     }
     // The `↓ latest` affordance is driven purely by scroll position: it is shown
@@ -744,6 +747,29 @@ fun LumenChatScreen(
                                         step.linkedAbove -> 3.dp
                                         else -> 10.dp
                                     }
+                                    // Build the rail/animation modifier once per row
+                                    // instead of rebuilding it every time the item
+                                    // lambda runs. Keyed on row identity (not index —
+                                    // shifting positions must not re-allocate), so a
+                                    // streaming token leaves every unchanged row's
+                                    // modifier stable and MessageRow can skip.
+                                    val railModifier = remember(step.id, step.linkedAbove, colors) {
+                                        Modifier.animateItem().then(
+                                            if (step.linkedAbove) {
+                                                Modifier.drawBehind {
+                                                    val x = 1.dp.toPx()
+                                                    drawLine(
+                                                        color = colors.outline,
+                                                        start = Offset(x, 0f),
+                                                        end = Offset(x, size.height),
+                                                        strokeWidth = 1.dp.toPx(),
+                                                    )
+                                                }
+                                            } else {
+                                                Modifier
+                                            }
+                                        )
+                                    }
                                     MessageRow(
                                         step = step,
                                         colors = colors,
@@ -764,26 +790,10 @@ fun LumenChatScreen(
                                         canRegenerate = step.id == lastAssistantId,
                                         onEdit = onEdit,
                                         onOpenCanvas = onOpenCanvas,
-                                        modifier = Modifier
-                                            .animateItem()
-                                            .then(
-                                                if (step.linkedAbove) {
-                                                    Modifier.drawBehind {
-                                                        val x = 1.dp.toPx()
-                                                        drawLine(
-                                                            color = colors.outline,
-                                                            start = Offset(x, 0f),
-                                                            end = Offset(x, size.height),
-                                                            strokeWidth = 1.dp.toPx(),
-                                                        )
-                                                    }
-                                                } else {
-                                                    Modifier
-                                                },
-                                            )
+                                        modifier = railModifier
                                             .padding(top = topPad)
                                             .testTag(
-                                                if (step.linkedAbove) "run-link-${step.id}" else "run-${step.id}",
+                                                if (step.linkedAbove) "run-link-${step.id}" else "run-${step.id}"
                                             ),
                                     )
                                 }
