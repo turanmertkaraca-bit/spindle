@@ -117,11 +117,18 @@ working it.
       remains out of reach without root; that is a platform limit, not a TODO.
 
 ### Run D — UI sweep
-- [ ] minimal / merged / coherent pass on the shared chrome language
+- [x] minimal / merged / coherent pass on the shared chrome language — key
+      findings fixed in `7a3f0c9`:
+      - pulse lambda identity (remember ambient&&running) — rows skip again
+      - per-row Modifier chain hoisted into remember(step.id, linkedAbove,
+        colors) — unchanged rows skip on streaming
+      - duplicate tail-pin effects merged into one snapshotFlow(layoutInfo)
+      - forceOpenId remember key drops redundant `steps`
+      - body-length dropped from tail-pin LaunchedEffect key
+- [x] fix the audited `LumenChatScreen` findings in `07-perf-ui.md` — see above;
+      remaining rows (#7-#14) depend on host/API contracts and are deferred,
+      not yet a regression.
 - [ ] close the known token-literal drift
-- [ ] fix the audited `LumenChatScreen` findings in `07-perf-ui.md` (double
-      tail-pin scroll, whole-body restart scope, un-remembered `pulse` lambda,
-      per-row `Modifier` rebuild)
 
 ### Run E — docs
 - [ ] refresh stale version/HEAD claims across `HANDOFF.md` etc.
