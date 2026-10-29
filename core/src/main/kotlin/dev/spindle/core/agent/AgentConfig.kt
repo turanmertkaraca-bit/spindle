@@ -24,6 +24,13 @@ data class AgentConfig(
      */
     val maxRepeatedCalls: Int? = 3,
     /**
+     * Wall-clock backstop for a single run, in milliseconds. Null (the default)
+     * uses [AgentLoop.MAX_RUN_WALL_CLOCK_MS]. This exists because [maxSteps]
+     * defaults to null, so a run that keeps making progress but never stops
+     * would otherwise have no ceiling at all; a real long build can raise it.
+     */
+    val maxRunMillis: Long? = null,
+    /**
      * Opt-in structured output. Null (default) keeps provider request bodies
      * unchanged. Only the OpenAI-compatible surface honours it; Anthropic
      * ignores it (see [dev.spindle.core.provider.ResponseFormat]).

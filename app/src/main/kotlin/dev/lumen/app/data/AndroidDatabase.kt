@@ -2,6 +2,7 @@ package dev.lumen.app.data
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import android.util.Log
 import java.io.File
 
 /**
@@ -120,11 +121,22 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
         // execSQL only accepts statements that produce no result set.
         db.rawQuery("PRAGMA busy_timeout=$BUSY_TIMEOUT_MS", null).use { it.moveToFirst() }
         db.rawQuery("PRAGMA foreign_keys=ON", null).use { it.moveToFirst() }
-        db.rawQuery("PRAGMA journal_mode=WAL", null).use { it.moveToFirst() }
+        // `journal_mode` answers with the mode actually in effect, which is the
+        // *old* mode when the switch to WAL was refused (e.g. an open reader on
+        // another connection). Inspect it instead of assuming the PRAGMA worked.
+        val journalMode = db.rawQuery("PRAGMA journal_mode=WAL", null).use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }
         // NORMAL is the WAL-recommended durability/throughput point: a commit is
         // durable across app crashes, only a device power loss can lose the last
-        // transaction. Truncating the WAL after open keeps the sidecar small.
-        db.rawQuery("PRAGMA synchronous=NORMAL", null).use { it.moveToFirst() }
+        // transaction. Under DELETE/TRUNCATE it widens the crash window instead,
+        // so it is only applied once WAL is confirmed. Truncating the WAL after
+        // open keeps the sidecar small and is safe in either mode.
+        if (journalMode?.equals("wal", ignoreCase = true) == true) {
+            db.rawQuery("PRAGMA synchronous=NORMAL", null).use { it.moveToFirst() }
+        } else {
+            Log.w(TAG, "journal_mode=WAL refused; still ${journalMode ?: "unknown"}, keeping synchronous default")
+        }
         db.rawQuery("PRAGMA cache_size=$CACHE_SIZE_KB", null).use { it.moveToFirst() }
     }
 
@@ -141,6 +153,7 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
             Migration(4) { contentAddressedSnapshots(it) },
             Migration(5) { partsSessionIndex(it) },
             Migration(6) { sessionsProjectColumn(it) },
+            Migration(7) { hotIndexes(it) },
         )
         val current = userVersion(db)
         for (migration in migrations) {
@@ -361,6 +374,23 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
         }
     }
 
+    /**
+     * Indexes for the two hot access paths that were never backed: a session's
+     * todos in display order, and the newest snapshots of a session. Both tables
+     * are read per-session on every session open, so without these each read was
+     * a full table scan. `todos` and `snapshots` are only touched when present,
+     * so a partially-created legacy database cannot abort the upgrade here.
+     */
+    private fun hotIndexes(db: SQLiteDatabase) {
+        val todoColumns = columnNames(db, "todos")
+        if ("session_id" in todoColumns && "ord" in todoColumns) {
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_todos_session ON todos(session_id, ord)")
+        }
+        if ("sequence" in columnNames(db, "snapshots")) {
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_snap_session_seq ON snapshots(session_id, sequence)")
+        }
+    }
+
     private fun columnNames(db: SQLiteDatabase, table: String): Set<String> =
         db.rawQuery("PRAGMA table_info($table)", null).use { c ->
             buildSet {
@@ -413,6 +443,7 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
     }
 
     private companion object {
+        const val TAG = "AndroidDatabase"
         const val DB_NAME = "lumen.db"
         const val BUSY_TIMEOUT_MS = 5_000
 

@@ -202,8 +202,29 @@ class AgentLoop(
             val recentSignatures = ArrayDeque<String>()
             val repeatWindow = ((agent.maxRepeatedCalls ?: 3) * 2).coerceAtLeast(2)
             var repeatedCalls = 0
+            var totalToolCalls = 0
+            val runStartedAtMs = System.currentTimeMillis()
+            var budgetExhausted = false
             while (true) {
                 currentCoroutineContext().ensureActive()
+                if (System.currentTimeMillis() - runStartedAtMs > (agent.maxRunMillis ?: MAX_RUN_WALL_CLOCK_MS)) {
+                    // Backstop for a null `maxSteps`: fail every pending tool part of
+                    // the last turn so nothing is left PENDING, then stop the run.
+                    store.messages(sessionId).lastOrNull()?.let { last ->
+                        for (part in last.parts.filterIsInstance<Part.Tool>().filter { it.state == ToolState.PENDING }) {
+                            updatePart(
+                                sessionId,
+                                last.id,
+                                part.copy(
+                                    state = ToolState.ERROR,
+                                    result = ToolResult(part.call.id, "run wall-clock budget exhausted", isError = true),
+                                ),
+                            )
+                        }
+                    }
+                    budgetExhausted = true
+                    break
+                }
                 step++
 
                 // Load the durable history once per step and reuse this snapshot
@@ -510,8 +531,26 @@ class AgentLoop(
                         doomLoop = true
                         break
                     }
+                    if (++totalToolCalls > MAX_TOTAL_TOOL_CALLS) {
+                        // Same shape as the step/maxSteps exhaustion: fail this call
+                        // and every remaining call in the turn, then stop the run.
+                        for (j in index until toolParts.size) {
+                            val pending = toolParts[j]
+                            updatePart(
+                                sessionId,
+                                finalized.id,
+                                pending.copy(
+                                    state = ToolState.ERROR,
+                                    result = ToolResult(pending.call.id, "tool call budget exhausted", isError = true),
+                                ),
+                            )
+                        }
+                        budgetExhausted = true
+                        break
+                    }
                     executeTool(sessionId, finalized.id, part, session.cwd, onPermission, agent)
                 }
+                if (budgetExhausted) break
                 if (doomLoop) break
             }
 
@@ -1128,6 +1167,20 @@ class AgentLoop(
 
         /** Most auto-continuations of an output-token-truncated turn per run. */
         const val MAX_CONTINUATIONS = 3
+
+        /**
+         * Hard wall-clock backstop for a single run, checked before every step so an
+         * over-budget run never starts another provider request. Exists because
+         * `agent.maxSteps` defaults to null; generous enough not to trip normal runs.
+         */
+        const val MAX_RUN_WALL_CLOCK_MS = 30L * 60L * 1_000L
+
+        /**
+         * Hard cap on tool executions per run, counted once per `executeTool` call.
+         * A backstop for a null `agent.maxSteps` so a pathological loop cannot run
+         * unbounded; when exceeded, the turn's remaining tool parts are failed.
+         */
+        const val MAX_TOTAL_TOOL_CALLS = 250
 
         /** Sent as a user turn to resume a response cut off by the output-token limit. */
         const val CONTINUE_INSTRUCTION =
