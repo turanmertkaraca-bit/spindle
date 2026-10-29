@@ -39,11 +39,21 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
         synchronized(this) {
             check(!closed) { "database is closed" }
             database?.let { return it }
-            val opened = openHealthy()
-            migrate(opened)
-            checkpoint(opened)
-            database = opened
-            return opened
+            // Open, validate, migrate and checkpoint as one unit. Any failure closes
+            // the candidate handle and leaves the cache null, so the next call retries
+            // cleanly instead of crash-looping on a half-initialised singleton.
+            var candidate: SQLiteDatabase? = null
+            try {
+                candidate = openHealthy()
+                migrate(candidate)
+                checkpoint(candidate)
+                database = candidate
+                return candidate
+            } catch (t: Throwable) {
+                candidate?.let { runCatching { it.close() } }
+                database = null
+                throw t
+            }
         }
     }
 
@@ -54,6 +64,8 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
      */
     fun <T> lease(block: () -> T): T {
         synchronized(this) {
+            // Check before pinning: a lease that increments refs and only then sees
+            // `closed` would hand back a handle the closer is already tearing down.
             check(!closed) { "database is closed" }
             refs++
         }
@@ -77,16 +89,26 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
         val candidate = runCatching {
             appContext.openOrCreateDatabase(DB_NAME, Context.MODE_PRIVATE, null)
         }.getOrNull()
+
+        // A null handle means the open itself failed (disk pressure, a transient
+        // permission or lock problem). That is NOT corruption: renaming the file
+        // here would destroy healthy history to work around a blip. Fail with a
+        // distinguishable "unavailable" error and let the caller retry — the
+        // handle cache is left null by [db] so the next attempt opens afresh.
+        if (candidate == null) {
+            throw IllegalStateException("storage unavailable: could not open $DB_NAME")
+        }
+
         // Wait out a transient writer lock before the check so a mere BUSY is not
         // mistaken for corruption.
-        candidate?.let {
-            runCatching { it.rawQuery("PRAGMA busy_timeout=$BUSY_TIMEOUT_MS", null).use { c -> c.moveToFirst() } }
-        }
-        if (candidate != null && integrityOk(candidate)) {
+        runCatching { candidate.rawQuery("PRAGMA busy_timeout=$BUSY_TIMEOUT_MS", null).use { c -> c.moveToFirst() } }
+
+        // Only a handle that opens but fails the integrity check is quarantined.
+        if (integrityOk(candidate)) {
             configure(candidate)
             return candidate
         }
-        candidate?.let { runCatching { it.close() } }
+        runCatching { candidate.close() }
         quarantine()
         val fresh = appContext.openOrCreateDatabase(DB_NAME, Context.MODE_PRIVATE, null)
         configure(fresh)

@@ -17,6 +17,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import dev.lumen.app.MainActivity
 import dev.lumen.app.R
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Foreground service that keeps a long agent run alive while the app is
@@ -45,6 +46,17 @@ class RunService : Service() {
     @Volatile
     private var currentSessionId: String? = null
 
+    /**
+     * Guards [teardownRun] so a stop command, a failed foreground start and
+     * [onDestroy] cannot each run the teardown for the same run. Reset when a
+     * new run starts so the instance can be reused.
+     */
+    @Volatile
+    private var tornDown = false
+
+    /** Held while [teardownRun] runs so re-entry cannot double-invoke it. */
+    private val teardownLock = Any()
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -56,10 +68,17 @@ class RunService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                runCatching { RunControl.stopHandler?.invoke() }
-                stopRun()
+                // A STOP intent can arrive at an instance created by
+                // startForegroundService (the notification's Stop action), so
+                // satisfy the 5s foreground duty before tearing down.
+                show(notification("stopping\u2026"))
+                teardownRun()
             }
             ACTION_START -> {
+                // A reused instance must be able to tear down the next run, and
+                // the shared stop guard must allow the handler once more.
+                tornDown = false
+                stopInvoked.set(false)
                 currentSessionId = intent.getStringExtra(EXTRA_SESSION_ID)?.takeIf { it.isNotBlank() }
                 currentTitle = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "Lumen" }
                 show(notification("starting\u2026"))
@@ -78,8 +97,7 @@ class RunService : Service() {
     }
 
     override fun onDestroy() {
-        markAlive(false)
-        releaseWakeLock()
+        teardownRun()
         super.onDestroy()
     }
 
@@ -96,18 +114,38 @@ class RunService : Service() {
             startForeground(NOTIFICATION_ID, notification)
         } catch (t: Throwable) {
             Log.e(TAG, "startForeground failed; stopping run service", t)
+            teardownRun()
             runCatching { stopSelf() }
             return
         }
         refreshWakeLock()
     }
 
-    @Suppress("DEPRECATION")
-    private fun stopRun() {
-        markAlive(false)
-        runCatching { stopForeground(true) }
+    /**
+     * End the run behind this service exactly once: stop the agent, drop the
+     * notification and the wake lock, and clear the liveness/title/session
+     * state. Every termination path routes through here so "stop" actually
+     * stops the run instead of only stopping the service.
+     *
+     * Idempotent: [tornDown] is checked and set under [teardownLock], so a stop
+     * command racing [onDestroy] (or a failed foreground start) performs the
+     * teardown work once. The stop handler itself is invoked through
+     * [invokeStopHandlerOnce], the guard shared with the companion [stop], so
+     * the agent is stopped exactly once per run even when both paths run.
+     * Does not call `stopSelf()` — the callers decide when the service itself
+     * goes away.
+     */
+    private fun teardownRun() {
+        synchronized(teardownLock) {
+            if (tornDown) return
+            tornDown = true
+        }
+        invokeStopHandlerOnce()
         releaseWakeLock()
-        runCatching { stopSelf() }
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        markAlive(false)
+        currentTitle = "Lumen"
+        currentSessionId = null
     }
 
     /** Idempotent: creates the low-importance channel once, on API 26+. */
@@ -249,6 +287,33 @@ class RunService : Service() {
         @Volatile
         private var alive: Boolean = false
 
+        /**
+         * Exactly-once truth for [RunControl.stopHandler], shared by the
+         * instance's [teardownRun] and the companion [stop].
+         *
+         * [teardownRun]'s per-instance [tornDown] cannot cover the companion
+         * path: `stop()` invoked the handler directly and then `stopService`
+         * led to [onDestroy] -> [teardownRun], invoking it a second time. This
+         * flag is set by [invokeStopHandlerOnce] before the call, so whichever
+         * path runs first wins and the other is a no-op — including when
+         * [stop] runs with no service instance at all. Reset in [ACTION_START].
+         */
+        private val stopInvoked = AtomicBoolean(false)
+
+        /**
+         * Invoke [RunControl.stopHandler] at most once per run, whichever of
+         * [teardownRun] or [stop] gets here first. A failing handler is logged
+         * and swallowed so teardown still completes.
+         */
+        internal fun invokeStopHandlerOnce() {
+            if (!stopInvoked.compareAndSet(false, true)) return
+            try {
+                RunControl.stopHandler?.invoke()
+            } catch (t: Throwable) {
+                Log.w(TAG, "stop handler failed during run teardown", t)
+            }
+        }
+
         /** Set by the service itself as it starts and stops. */
         internal fun markAlive(running: Boolean) {
             alive = running
@@ -275,8 +340,18 @@ class RunService : Service() {
          * Stop the run. `stopService` is used rather than a `startService` STOP
          * command: it works from the background (a plain `startService` throws
          * there) and [onDestroy] releases the wake lock.
+         *
+         * Stopping the service alone used to leave the agent running with no
+         * foreground service, wake lock or notification, because the stop
+         * handler was only invoked from the [ACTION_STOP] branch of
+         * [onStartCommand]. The handler is therefore invoked here as well, so
+         * the run is stopped whether or not a service instance exists. The call
+         * goes through [invokeStopHandlerOnce], the same guard [teardownRun]
+         * uses, so the subsequent [onDestroy] does not invoke it a second time
+         * while a stop with no live instance still stops the run.
          */
         fun stop(context: Context) {
+            invokeStopHandlerOnce()
             context.stopService(Intent(context, RunService::class.java))
         }
 
