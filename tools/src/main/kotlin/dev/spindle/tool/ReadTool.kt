@@ -126,7 +126,14 @@ class ReadTool : Tool {
                 total++
                 if (total % ABORT_CHECK_INTERVAL == 0) ctx.checkAborted()
                 if (total >= offset && lines.size < limit) lines.add(line)
-                if (total >= Limits.READ_MAX_SCAN_LINES) {
+                // Stop the line-by-line scan once the requested window is complete
+                // and the cap is reached; the rest is only counted below. The cap
+                // must NOT apply while the window is still unfilled: an offset past
+                // the cap would otherwise break here and return zero lines, making
+                // pagination into a large file silently yield nothing. The file is
+                // already bounded by READ_MAX_BYTES, so reading up to `offset` is
+                // bounded work.
+                if (total >= Limits.READ_MAX_SCAN_LINES && lines.size >= limit) {
                     capped = true
                     break
                 }
