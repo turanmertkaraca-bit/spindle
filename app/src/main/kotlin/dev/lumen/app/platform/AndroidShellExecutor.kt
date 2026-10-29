@@ -106,7 +106,7 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
                 }
             }
             val ready = environment.ready()
-            val builder = ProcessBuilder(listOf(systemSh, "-c", command))
+            val builder = ProcessBuilder(listOf(systemSh, "-c", ResourcePolicy.limitScript(command)))
                 .directory(cwd.toFile())
                 .redirectErrorStream(true)
 
@@ -141,7 +141,10 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         env: Map<String, String>,
         onChunk: ((String) -> Unit)?,
     ): ShellResult {
-        val builder = debian.guestProcess(command, cwd.toFile().absolutePath)
+        // ulimit is a shell builtin, so the caps are prepended to the command the
+        // guest shell runs rather than applied to proot itself (which would limit
+        // proot's own address space, not the guest tree's).
+        val builder = debian.guestProcess(ResourcePolicy.limitScript(command), cwd.toFile().absolutePath)
         builder.environment().apply {
             // Same scrub as the Alpine path: app-process credentials must not
             // be inherited by guest commands.
@@ -173,7 +176,12 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         try {
             // Prefer a real Debian login shell once the layer is active.
             if (debian.active()) {
-                val guest = command.takeIf { it.isNotBlank() } ?: "exec /bin/bash"
+                // An interactive terminal is guest work too, so it gets the same
+                // memory/fd caps; a shell that starts with `exec /bin/bash` is left
+                // alone so an interactive session is not silently re-limited.
+                val guest = command.takeIf { it.isNotBlank() }
+                    ?.let { ResourcePolicy.limitScript(it) }
+                    ?: "exec /bin/bash"
                 val session = ProcessPtySession(
                     startUnderSetsid(debian.guestProcess(guest, cwd.toFile().absolutePath)),
                     onClose = { ResourcePolicy.release(slot) },

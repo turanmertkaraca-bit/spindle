@@ -59,6 +59,56 @@ object ResourcePolicy {
     const val THERMAL_PAUSE_TENTHS_C: Int = 420
 
     /**
+     * How far the device must cool below [THERMAL_PAUSE_TENTHS_C] before a
+     * paused run is admitted again. Without this the device flaps between
+     * paused and running on every poll while sitting at the threshold.
+     */
+    const val RESUME_HYSTERESIS_TENTHS_C: Int = 30
+
+    /**
+     * Address-space cap applied to every guest command, in kilobytes.
+     *
+     * cgroups need root, so the only memory lever available without privileges
+     * is the shell's own `ulimit -v`. A runaway compiler or a leaking build is
+     * then killed by the kernel (ENOMEM inside the guest) instead of being
+     * reaped by Android's low-memory killer, which would take the whole app
+     * down with it. Sized to leave room for a real `gradle`/`javac` run while
+     * still bounding a runaway; 0 disables the cap.
+     */
+    const val GUEST_MEMORY_LIMIT_KB: Int = 2_097_152
+
+    /**
+     * Open-file cap for guest commands. A build that leaks descriptors would
+     * otherwise hit the app's own limit and start failing unrelated I/O.
+     */
+    const val GUEST_OPEN_FILES_LIMIT: Int = 4_096
+
+    /**
+     * Wrap [script] in the resource limits that need no privileges, for
+     * execution by a POSIX shell. Returns [script] unchanged when no limit is
+     * configured.
+     *
+     * `ulimit` is a shell builtin, so this must be prepended to the shell
+     * command rather than applied to the process. Each limit is applied
+     * independently and failures are tolerated with `2>/dev/null ||`, because
+     * a shell that refuses one knob (a reduced `dash`, a busybox without `-v`)
+     * must not fail the whole command. "unlimited" is always accepted.
+     *
+     * The CPU-time cap is deliberately NOT set: a legitimate build can run far
+     * longer than any fixed number, and killing it on wall clock is what the
+     * per-tool timeout already does far more precisely.
+     */
+    fun limitScript(script: String): String {
+        val guards = buildList {
+            if (GUEST_MEMORY_LIMIT_KB > 0) add("ulimit -v $GUEST_MEMORY_LIMIT_KB 2>/dev/null")
+            if (GUEST_OPEN_FILES_LIMIT > 0) add("ulimit -n $GUEST_OPEN_FILES_LIMIT 2>/dev/null")
+        }
+        if (guards.isEmpty()) return script
+        // `;` not `&&`: a refused limit must not stop the command from running.
+        return guards.joinToString("; ") + "; " + script
+    }
+
+    /**
      * Serialises guest work. Held around a single guest process's lifetime, not
      * across a whole run: a run that makes many short calls should interleave
      * with the UI rather than hold every slot for minutes.
@@ -158,6 +208,7 @@ object ResourcePolicy {
         gate = null
         gateSize = 0
         outstanding.clear()
+        thermalPaused = false
     }
 
     /** How many guest processes are running right now (for diagnostics). */
@@ -183,11 +234,32 @@ object ResourcePolicy {
         if (battery.percent in 0..LOW_BATTERY_PERCENT && !battery.charging) {
             return "battery ${battery.percent}% and not charging"
         }
-        if (battery.temperatureTenthsC >= THERMAL_PAUSE_TENTHS_C) {
+        // Hysteresis: a device sitting on the threshold would otherwise flap
+        // between paused and running on every poll. Once paused, it stays paused
+        // until it cools RESUME_HYSTERESIS_TENTHS_C below the pause threshold.
+        // Resume is STRICTLY below the band, so `pause at T, resume at T - H`
+        // and `pause at T - H` are unambiguous rather than both true at the edge.
+        val resumeBelow = THERMAL_PAUSE_TENTHS_C - RESUME_HYSTERESIS_TENTHS_C
+        if (thermalPaused && battery.temperatureTenthsC < resumeBelow) {
+            thermalPaused = false
+            return null
+        }
+        val thermalLimit = if (thermalPaused) resumeBelow else THERMAL_PAUSE_TENTHS_C
+        if (battery.temperatureTenthsC >= thermalLimit) {
+            thermalPaused = true
             return "device is hot (${battery.temperatureTenthsC / 10}°C)"
         }
+        thermalPaused = false
         return null
     }
+
+    /**
+     * Whether the last thermal decision was "too hot". Latches so the resume
+     * threshold can sit below the pause threshold; guarded by the object monitor
+     * because admission can be called from several worker threads.
+     */
+    @Volatile
+    private var thermalPaused: Boolean = false
 
     internal data class Battery(val percent: Int, val charging: Boolean, val temperatureTenthsC: Int)
 
