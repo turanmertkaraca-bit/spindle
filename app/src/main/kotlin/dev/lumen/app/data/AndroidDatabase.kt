@@ -254,6 +254,13 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
      * and could reorder rows.
      */
     private fun migrateMessagesUniqueSeq(db: SQLiteDatabase) {
+        // A pre-versioning database can already have a `messages` table that the
+        // `CREATE TABLE IF NOT EXISTS` in migration 1 could not extend, so `seq`
+        // may be absent even though the table exists. Probe before any statement
+        // that references it; an absent table means there is nothing to renumber.
+        val existing = columnNames(db, "messages")
+        if (existing.isEmpty()) return
+        if ("seq" !in existing) db.execSQL("ALTER TABLE messages ADD COLUMN seq INTEGER")
         db.execSQL("DROP TABLE IF EXISTS _message_seq")
         db.execSQL(
             """CREATE TEMP TABLE _message_seq AS
@@ -264,6 +271,10 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
                          OR (COALESCE(x.seq, 0) = COALESCE(m.seq, 0) AND x.rowid <= m.rowid))) AS new_seq
                FROM messages m""",
         )
+        // Index the mapping's lookup key so the per-row UPDATE below resolves each
+        // message with a logarithmic probe instead of a full scan of the temp
+        // table per row (which would be quadratic in the message count).
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_message_seq_mid ON _message_seq(mid)")
         db.execSQL(
             "UPDATE messages SET seq = (SELECT new_seq FROM _message_seq WHERE mid = messages.id)",
         )
@@ -278,7 +289,12 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
      * as an AUTOINCREMENT rowid, so the table is rebuilt rather than altered.
      */
     private fun migrateSnapshotSequence(db: SQLiteDatabase) {
-        if ("sequence" in columnNames(db, "snapshots")) return
+        // A hand-built or snapshots-less database may not have the table at all;
+        // PRAGMA table_info then reads an empty column set and the INSERT ... FROM
+        // snapshots below would abort the whole upgrade. Skip the step when absent.
+        val existing = columnNames(db, "snapshots")
+        if (existing.isEmpty()) return
+        if ("sequence" in existing) return
         db.execSQL(
             """CREATE TABLE snapshots_new(
                  id TEXT NOT NULL UNIQUE, session_id TEXT, path TEXT, content TEXT,

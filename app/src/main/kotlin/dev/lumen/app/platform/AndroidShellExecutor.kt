@@ -1,6 +1,7 @@
 package dev.lumen.app.platform
 
 import android.content.Context
+import android.util.Log
 import dev.spindle.core.tool.PtySession
 import dev.spindle.core.tool.ShellExecutor
 import dev.spindle.core.tool.ShellResult
@@ -91,8 +92,13 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
             if (!environment.ready()) {
                 installLock.withLock {
                     if (!installAttempted) {
-                        installAttempted = true
-                        runCatching { environment.ensureInstalled() }
+                        // Only a successful install latches the flag, so one
+                        // transient failure (no space, interrupted extraction)
+                        // does not disable the rootfs for the process lifetime.
+                        val installed = runCatching { environment.ensureInstalled() }
+                            .onFailure { Log.w(TAG, "sandbox toolkit install failed", it) }
+                            .getOrDefault(false)
+                        if (installed) installAttempted = true
                     }
                 }
             }
@@ -134,6 +140,9 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
     ): ShellResult {
         val builder = debian.guestProcess(command, cwd.toFile().absolutePath)
         builder.environment().apply {
+            // Same scrub as the Alpine path: app-process credentials must not
+            // be inherited by guest commands.
+            scrubHostEnv(this)
             remove("JAVA_TOOL_OPTIONS")
             remove("_JAVA_OPTIONS")
             putAll(env)
@@ -154,14 +163,20 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         // the session's lifetime, released when the pty is closed.
         val slot = ResourcePolicy.acquire(timeoutMs = 15_000L)
         if (slot == null) return@withContext null
+        // The slot belongs to the returned session once it exists; until then
+        // this frame still owns it, so an abandoned pty (a caller that never
+        // calls close(), or a launch failure) cannot leak the admission slot.
+        var handedOff = false
         try {
             // Prefer a real Debian login shell once the layer is active.
             if (debian.active()) {
                 val guest = command.takeIf { it.isNotBlank() } ?: "exec /bin/bash"
-                return@withContext ProcessPtySession(
+                val session = ProcessPtySession(
                     startUnderSetsid(debian.guestProcess(guest, cwd.toFile().absolutePath)),
                     onClose = { ResourcePolicy.release(slot) },
                 )
+                handedOff = true
+                return@withContext session
             }
             val ready = environment.ready()
             val shell = command.takeIf { it.isNotBlank() } ?: systemSh
@@ -182,10 +197,15 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
                 }
             }
 
-            ProcessPtySession(startUnderSetsid(builder), onClose = { ResourcePolicy.release(slot) })
+            val session = ProcessPtySession(startUnderSetsid(builder), onClose = { ResourcePolicy.release(slot) })
+            handedOff = true
+            session
         } catch (t: Throwable) {
-            ResourcePolicy.release(slot)
             null
+        } finally {
+            // Exactly once: the session releases the slot on close, or this
+            // frame returns it because no session took ownership.
+            if (!handedOff) ResourcePolicy.release(slot)
         }
     }
 
@@ -255,7 +275,12 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         var finished = false
         var timedOut = false
         try {
-            val deadline = if (hasDeadline) System.nanoTime() + timeoutMs * 1_000_000L else Long.MAX_VALUE
+            // Saturating arithmetic: a caller may pass a huge value (e.g.
+            // Long.MAX_VALUE for "no timeout"), and `timeoutMs * 1_000_000L`
+            // would overflow into a negative deadline, killing the command on
+            // the first poll.
+            val capped = timeoutMs.coerceAtMost(MAX_TIMEOUT_MS)
+            val deadline = if (hasDeadline) System.nanoTime() + capped * 1_000_000L else Long.MAX_VALUE
             while (true) {
                 if (process.waitFor(POLL_MS, TimeUnit.MILLISECONDS)) {
                     finished = true
@@ -338,6 +363,15 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
 
     private companion object {
         const val MAX_OUTPUT_CHARS = 50_000
+        const val TAG = "AndroidShellExecutor"
+
+        /**
+         * Upper bound on a caller-supplied timeout so that
+         * `timeoutMs * 1_000_000L` cannot overflow a [Long] (~146 years).
+         * A "no timeout" request is still expressed as a non-positive value or
+         * as an effectively infinite cap like this one.
+         */
+        const val MAX_TIMEOUT_MS = Long.MAX_VALUE / 2_000_000L
     }
 }
 
