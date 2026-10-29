@@ -5,8 +5,9 @@ updated at the end of every work run. If you are an agent picking this up:
 read §1, then jump to the section matching your task. Do not trust a section
 whose "verified" stamp predates the current HEAD without re-checking it.
 
-- **Last updated:** run E, HEAD `d9e880a`
-- **Verified against:** HEAD `d9e880a` (CI green on this sha — both jobs)
+- **Last updated:** stability/optimisation wave, HEAD `f80644e`
+- **Verified against:** HEAD `f80644e` (CI green on this sha — both jobs,
+  run `40853703308`)
 - **Maintainer rule:** append a changelog line in §9 whenever you change
   anything in here. Never delete a finding; mark it fixed with the commit sha.
 
@@ -295,3 +296,21 @@ git -c credential.helper='!f() { echo "username=x-access-token"; echo "password=
 | D | `d69063a` dashboard counts + resume; interaction fixes through `551f6d9` |
 | E | `e8d5184` model search/sort/starred filter |
 | B | `d9e880a` de-flaked RetryResetTest |
+| A | `71172ad` audit reports (`docs/audit/`) + `PROJECT-STATUS.md` board |
+| B | `fed3b0e` single idempotent RunService teardown; `stop()` now stops the run; quarantine only on a failed integrity check |
+| B | `1d443bb` pty slot leak on abandoned sessions; `scrubHostEnv` on the Debian path; saturating deadline; install latches only on success; migrations 2/3 tolerate older schemas; de-dup temp table indexed |
+| B | `96c88cb` `release()` accounting so the concurrency cap actually caps; pause gate enforced; main-thread acquire; stop-handler failure keeps the wake lock; wake-lock renewal; delete-before-prefs; `rename()`; `activeOrNull` id validation |
+| C | `14aa84c` agent loop wall-clock + tool-call caps (`AgentConfig.maxRunMillis`); WAL result inspected; migration 7 indexes `todos`/`snapshots` |
+| B | `0c34d89` true line counts past the read scan cap; bounded pty channel |
+| B | `6abfd94` read windows past the scan cap (offset was returning zero lines); `ReadToolWindowTest` + `ResourcePolicyReleaseTest` |
+| B | `f80644e` five CI regressions corrected (main-thread acquire, duplicate project names, `userVersion` 7) — **CI green** |
+
+**Lessons this wave added**
+
+- The local `:app` suite cannot be trusted as a gate (see `PROJECT-STATUS.md` §1).
+  Five real regressions compiled and "passed" locally and were only caught by CI.
+- When an existing test pins behaviour you are about to change (e.g. duplicate
+  project names are *allowed*), that is a product decision — revert your change
+  rather than rewriting the test to match your preference.
+- Verify each `00-INVENTORY.md` item against HEAD before fixing it; the file is
+  pinned at `d17dbd2` and several items were already fixed.

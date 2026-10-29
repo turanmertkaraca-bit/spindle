@@ -4,7 +4,7 @@ Single source of truth for *what is being worked on right now*. Distinct from
 `HANDOFF.md` (session narrative) and `AGENTS-INDEX.md` (landed-work log): this
 file is the live board. Update it as work moves; keep it short.
 
-Verified against HEAD `d17dbd2` on branch `main`.
+Verified against HEAD `f80644e` on branch `main` (CI **green** on that sha).
 
 ---
 
@@ -54,7 +54,12 @@ local count. 123 tests do pass locally and are a useful smoke signal.
 | JVM modules | `./gradlew :core:test :tools:test :sandbox:test` | **Authoritative** locally |
 | App compiles | `./gradlew :app:compileDebugKotlin` (with AAPT2 override) | **Authoritative** locally |
 | App unit tests | `./gradlew :app:testDebugUnitTest` | Partial locally (conscrypt); authoritative in CI |
-| Robolectric/CI | push → poll `ci.yml` by sha | Authoritative |
+| Robolectric/CI | push → poll `ci.yml` by sha | **Authoritative — the only real check on `:app`** |
+
+**Do not treat a local `:app` run as a pass.** Robolectric cannot execute here,
+so a change can compile locally, pass locally, and still be red on CI. This
+happened: five `:app` tests broke and were only caught by CI. Always confirm
+the sha is green on `ci.yml` before calling work done.
 
 Rule unchanged: **never land a red commit on `main`.** A commit is done when CI
 is green on its sha.
@@ -66,31 +71,53 @@ is green on its sha.
 Status: `[ ]` todo · `[~]` in progress · `[x]` done · `[—]` deferred.
 
 ### Run A — analysis (read-only)
-- [~] A1 core agent loop
-- [~] A2 storage integrity
-- [~] A3 tools / sandbox safety
-- [x] A4 platform / proot — *verified: no niceness/CPU limit exists anywhere*
-- [~] A5 lifecycle / background
-- [ ] A6 Compose performance
-- [ ] A7 projects / models
-- [ ] A8 test coverage gaps
-- [ ] A9 doc drift
+- [x] A1 core agent loop
+- [x] A2 storage integrity
+- [x] A3 tools / sandbox safety
+- [x] A4 platform / proot — *verified: niceness exists, no CPU/memory cap*
+- [x] A5 lifecycle / background
+- [x] A6 Compose performance — audited in `07-perf-ui.md` (findings not yet fixed)
+- [x] A7 projects / models
+- [~] A8 test coverage gaps — two suites added; Robolectric gap still open (see 1)
+- [x] A9 doc drift — audited in `09-docs.md`
 
-### Run B — stability fixes
-- [ ] merge Run A findings into one ranked inventory
-- [ ] fix P0s first, then P1s; each with a test that fails before the fix
+Reports live in `docs/audit/`. `00-INVENTORY.md` is pinned at `d17dbd2` and is
+therefore **partly stale**: P0-1, P0-2, P0-3, P1-6, P1-7, P1-10 and P1-23 were
+already fixed before the fix runs began. Re-verify an item against HEAD before
+working it.
+
+### Run B — stability fixes (commits fed3b0e..f80644e)
+- [x] merge Run A findings into one ranked inventory (`00-INVENTORY.md`)
+- [x] fix P0s: quarantine on null handle, migration throw-loop, `stop()` leaving
+      the run alive, `release()` over-release
+- [x] fix P1s: pty slot leak, guest credential scrub, pty unbounded buffering,
+      timeout deadline overflow, Debian `scrubHostEnv`, install latching,
+      migrations tolerating older schemas, quadratic de-dup, WAL result unchecked,
+      missing `todos`/`snapshots` indexes, unlimited run loop, `activeOrNull`
+      unvalidated id, delete-before-prefs, read offset past scan cap
+- [x] each shipped fix has a test where one was feasible (2 new suites)
 
 ### Run C — optimisation, background, proot limits
-- [ ] wire `ResourcePolicy.pauseReason` into the run loop (computed today, called by nobody)
-- [ ] add real CPU limiting to the proot path (none exists; see A4)
-- [ ] background/foreground service correctness
+- [x] wire `ResourcePolicy.pauseReason` into admission control (was computed,
+      called by nobody)
+- [x] bound the agent loop: wall-clock + total-tool-call caps, configurable via
+      `AgentConfig.maxRunMillis`
+- [x] background/foreground service correctness: failed `startForeground` tears
+      down the run; stop-handler failure keeps the wake lock; progress-driven
+      wake-lock renewal
+- [ ] add real CPU/memory limiting to the proot path — **not done**. Niceness
+      exists (see 3); `ulimit` memory caps, `chrt`/`taskset` affinity and any
+      cgroup control do not, and cgroups need root.
 
-### Run D — UI sweep (frozen until this session; now unfrozen)
+### Run D — UI sweep
 - [ ] minimal / merged / coherent pass on the shared chrome language
 - [ ] close the known token-literal drift
+- [ ] fix the audited `LumenChatScreen` findings in `07-perf-ui.md` (double
+      tail-pin scroll, whole-body restart scope, un-remembered `pulse` lambda,
+      per-row `Modifier` rebuild)
 
 ### Run E — docs
-- [ ] refresh stale version/HEAD claims
+- [ ] refresh stale version/HEAD claims across `HANDOFF.md` etc.
 - [ ] rewrite README for developers
 
 ---
@@ -110,10 +137,14 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done · `[—]` deferred.
   limiting existed at all; that was wrong — see Run C for what is still missing
   (memory/`ulimit`, per-run throttle, and the unwired pause gate).
 - What genuinely does **not** exist: cgroup control (needs root), `ulimit`
-  memory caps on the guest, `chrt`/`taskset` affinity pinning, and any
-  enforcement of `ResourcePolicy.pauseReason`.
+  memory caps on the guest, and `chrt`/`taskset` affinity pinning.
 - `ResourcePolicy.pauseReason(context)` reads battery/thermal state and returns
-  a human-readable pause reason or `null`. It is **computed but not called**
-  from the run loop (`AGENTS-INDEX` item O8).
+  a human-readable pause reason or `null`. It is now **enforced**:
+  `ResourcePolicy.acquire(timeoutMs, context)` declines a slot when a pause
+  reason is present, and `AndroidShellExecutor` passes the app context on both
+  admission calls. (It was previously computed and called by nobody — the
+  `AGENTS-INDEX` O8 note is now obsolete.)
+- The main-thread rule: `acquire()` on the UI thread only takes an already-free
+  slot (`tryAcquire()`); it never blocks waiting for one.
 - The `grep` tool returns **false negatives** in this repo (reports "no match"
   for strings that are present). Verify by reading files, not grepping.
