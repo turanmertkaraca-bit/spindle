@@ -86,17 +86,15 @@ object ResourcePolicy {
      * is kept for tests and for callers that cannot supply one.
      */
     fun acquire(timeoutMs: Long = 60_000L, context: Context? = null): Semaphore? {
-        // Blocking the UI thread on admission control freezes the app, so a
-        // main-thread caller fails fast and retries from a worker instead. The
-        // check is wrapped because Looper is a stub on the JVM (unit tests) and
+        // What the UI thread must never do is *block* on admission control, which
+        // freezes the app until the timeout. Taking a slot that is already free is
+        // instant and harmless, so a main-thread caller still gets one; only a wait
+        // is refused, and the caller retries from a worker instead. The Looper read
+        // is wrapped because it is a stub on the plain JVM (where tests run), and
         // calling it there throws: an unknown thread is treated as a worker.
         val onMainThread = runCatching {
             Thread.currentThread() === android.os.Looper.getMainLooper()?.thread
         }.getOrDefault(false)
-        if (onMainThread) {
-            Log.w(TAG, "acquire() called on the main thread; refusing to block")
-            return null
-        }
         if (context != null) {
             val reason = pauseReason(context)
             if (reason != null) {
@@ -106,7 +104,16 @@ object ResourcePolicy {
         }
         val s = gateOrCreate()
         val granted = try {
-            s.tryAcquire(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            if (onMainThread) {
+                // Non-blocking only: never park the UI thread waiting for a slot.
+                val immediate = s.tryAcquire()
+                if (!immediate) {
+                    Log.w(TAG, "no slot free and the caller is the main thread; refusing to block")
+                }
+                immediate
+            } else {
+                s.tryAcquire(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+            }
         } catch (t: InterruptedException) {
             Thread.currentThread().interrupt()
             false

@@ -94,13 +94,6 @@ class ProjectStore(context: Context) {
     fun create(rawName: String): Project? {
         val name = rawName.trim().replace(Regex("\\s+"), " ").take(MAX_NAME)
         if (name.isBlank()) return null
-        // Only ids were de-duplicated, so two "Work" rows were indistinguishable
-        // in the picker. Reject a duplicate display name outright rather than
-        // silently creating a twin the user cannot tell apart.
-        if (nameTaken(name, exceptId = null)) {
-            Log.w(TAG, "refusing to create a duplicate project name")
-            return null
-        }
         root.mkdirs()
         val id = uniqueId(slug(name))
         val dir = File(root, id)

@@ -62,7 +62,7 @@ class AndroidDatabaseMigrationTest {
         }
 
         openRaw().use { raw ->
-            assertEquals(6, raw.userVersion(), "the version gate records the current schema")
+            assertEquals(7, raw.userVersion(), "the version gate records the current schema")
             assertTrue(raw.hasColumn("snapshots", "sequence"), "migration 3 adds the snapshot sequence")
             assertTrue(raw.isUniqueIndex("messages", "idx_msg"), "migration 2 makes (session_id, seq) unique")
             assertTrue(raw.hasIndex("parts", "idx_part_session"), "migration 5 indexes parts(session_id)")
@@ -102,7 +102,7 @@ class AndroidDatabaseMigrationTest {
         }
 
         openRaw().use { raw ->
-            assertEquals(6, raw.userVersion())
+            assertEquals(7, raw.userVersion())
             assertTrue(raw.hasColumn("snapshots", "sequence"), "the sequence column is preserved")
             assertTrue(!raw.hasColumn("snapshots", "content"), "the content column is moved to snapshot_blobs")
             assertEquals(2, raw.countBlobs(), "duplicate bodies collapse to one blob")
