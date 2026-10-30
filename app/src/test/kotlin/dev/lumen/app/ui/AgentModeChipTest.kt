@@ -48,4 +48,25 @@ class AgentModeChipTest {
         compose.waitForIdle()
         assertEquals("build", mode.value)
     }
+
+    @Test
+    fun `the goal chip toggles mode to goal`() {
+        val mode = mutableStateOf("build")
+        compose.setContent {
+            LumenChatScreen(
+                steps = emptyList(),
+                input = "",
+                busy = false,
+                error = null,
+                modifier = viewport,
+                ambient = false,
+                agentMode = mode.value,
+                onAgentMode = { mode.value = it },
+            )
+        }
+        compose.onNodeWithTag("agent-goal").assertIsDisplayed()
+        compose.onNodeWithTag("agent-goal").performClick()
+        compose.waitForIdle()
+        assertEquals("goal", mode.value)
+    }
 }

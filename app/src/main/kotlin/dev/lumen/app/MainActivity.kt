@@ -852,6 +852,7 @@ private fun animatedColors(palette: String, dark: Boolean, reduceMotion: Boolean
         outline = animateColorAsState(target.outline, spec, label = "outline").value,
         accent = animateColorAsState(target.accent, spec, label = "accent").value,
         water = animateColorAsState(target.water, spec, label = "water").value,
+        goal = animateColorAsState(target.goal, spec, label = "goal").value,
         spectrum = target.spectrum.mapIndexed { i, c ->
             animateColorAsState(c, spec, label = "spectrum$i").value
         },

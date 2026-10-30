@@ -138,4 +138,14 @@ class KeyStoreTest {
         assertNull(prefs.getString("githubToken", null))
         assertNull(prefs.getString("githubTokenEnc", null))
     }
+
+    @Test
+    fun `agent mode defaults to build and round-trips including goal`() {
+        val store = freshStore()
+        assertEquals("build", store.agentMode, "build is the default")
+        store.agentMode = "goal"
+        assertEquals("goal", freshStore().agentMode, "a fresh store sees the persisted mode")
+        store.agentMode = "plan"
+        assertEquals("plan", freshStore().agentMode, "other modes still persist")
+    }
 }

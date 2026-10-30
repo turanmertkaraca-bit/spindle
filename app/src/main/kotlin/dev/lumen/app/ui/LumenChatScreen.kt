@@ -216,6 +216,8 @@ data class LumenColors(
     val accent: Color,
     /** Primary spectral hue (cyan); used for cursor, marks and focus glow. */
     val water: Color,
+    /** Goal mode tint — warm/amber, distinct from build's cyan. */
+    val goal: Color,
     /** The iridescent stops: violet, azure, cyan, mint. */
     val spectrum: List<Color>,
     val dark: Boolean = false,
@@ -232,6 +234,7 @@ data class LumenColors(
             outline = Color(0xFFD5D5DC),
             accent = Color(0xFF6D3FC9),
             water = Color(0xFF16708A),
+            goal = Color(0xFFF0A64B),
             spectrum = listOf(
                 Color(0xFF7147C4), Color(0xFF335FB4), Color(0xFF186F82), Color(0xFF107455),
             ),
@@ -243,6 +246,7 @@ data class LumenColors(
             outline = Color(0xFF2E2E36),
             accent = Color(0xFFB9A6F5),
             water = Color(0xFF7FD8E8),
+            goal = Color(0xFFE89B4A),
             spectrum = listOf(
                 Color(0xFFB9A6F5), Color(0xFF8FB8F0), Color(0xFF7FD8E8), Color(0xFF8FDCC0),
             ),
@@ -254,6 +258,7 @@ data class LumenColors(
             outline = Color(0xFFD9CDB8),
             accent = Color(0xFFA83E12),
             water = Color(0xFF9A5A00),
+            goal = Color(0xFFF0A64B),
             spectrum = listOf(
                 Color(0xFF9A3412), Color(0xFFA8480A), Color(0xFF8A400E), Color(0xFF7C3D10),
             ),
@@ -265,6 +270,7 @@ data class LumenColors(
             outline = Color(0xFF3A2C1C),
             accent = Color(0xFFF0A64B),
             water = Color(0xFFE89B4A),
+            goal = Color(0xFFF0A64B),
             spectrum = listOf(
                 Color(0xFFF0A64B), Color(0xFFE8853F), Color(0xFFE06C5A), Color(0xFFD9A441),
             ),
@@ -276,6 +282,7 @@ data class LumenColors(
             outline = Color(0xFFCBD9CE),
             accent = Color(0xFF1E7A44),
             water = Color(0xFF0E6E52),
+            goal = Color(0xFFE06C5A),
             spectrum = listOf(
                 Color(0xFF1F7A45), Color(0xFF0F766E), Color(0xFF0E7490), Color(0xFF2F7A1E),
             ),
@@ -287,6 +294,7 @@ data class LumenColors(
             outline = Color(0xFF263528),
             accent = Color(0xFF6EE787),
             water = Color(0xFF4FD6A0),
+            goal = Color(0xFFE06C5A),
             spectrum = listOf(
                 Color(0xFF6EE787), Color(0xFF46D5C0), Color(0xFF5BC8E8), Color(0xFFA3E36B),
             ),
@@ -298,6 +306,7 @@ data class LumenColors(
             outline = Color(0xFFCDD5DE),
             accent = Color(0xFF3E6FA8),
             water = Color(0xFF0F6E86),
+            goal = Color(0xFF6FA8D8),
             spectrum = listOf(
                 Color(0xFF3A5F9E), Color(0xFF2F6FA0), Color(0xFF0F6E86), Color(0xFF2F7A57),
             ),
@@ -309,6 +318,7 @@ data class LumenColors(
             outline = Color(0xFF28323E),
             accent = Color(0xFF82B8E0),
             water = Color(0xFF6FD3E6),
+            goal = Color(0xFF6FA8D8),
             spectrum = listOf(
                 Color(0xFF82B8E0), Color(0xFF6FA8D8), Color(0xFF6FD3E6), Color(0xFF7FE0C0),
             ),
@@ -2864,6 +2874,8 @@ private fun Composer(
                     AgentModeChip("build", "agent-build", agentMode == "build", colors.water, colors, onAgentMode)
                     Spacer(Modifier.width(5.dp))
                     AgentModeChip("plan", "agent-plan", agentMode == "plan", colors.accent, colors, onAgentMode)
+                    Spacer(Modifier.width(5.dp))
+                    AgentModeChip("goal", "agent-goal", agentMode == "goal", colors.goal, colors, onAgentMode)
                     val modelLabel = model.substringAfterLast('/')
                     if ((onModel != null || onOpenModels != null) && modelLabel.isNotBlank()) {
                         Spacer(Modifier.width(5.dp))
@@ -3468,6 +3480,7 @@ private fun QuickSettingsSheet(
             segments = listOf(
                 LumenSegment("build", "build", "quick-agent-build"),
                 LumenSegment("plan", "plan", "quick-agent-plan"),
+                LumenSegment("goal", "goal", "quick-agent-goal"),
             ),
             selected = agentMode,
             onSelect = { onAgentMode?.invoke(it) },

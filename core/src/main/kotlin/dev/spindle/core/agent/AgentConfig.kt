@@ -89,6 +89,26 @@ data class AgentConfig(
             before you claim success, and finish with a short paragraph.
         """.trimIndent()
 
+        /** Goal-driven agent: take the user's stated objective as the only stop
+         *  criterion. Work until the goal is met or the step budget runs out, then
+         *  report what was done, what remains, and why. Never stop early just
+         *  because a turn produced a partial answer — keep going until the user's
+         *  goal is actually achieved or clearly impossible. */
+        val GOAL_SYSTEM = """
+            You are a goal-driven coding agent. Your only stop criterion is the user's
+            stated goal, not a turn count or a tidy partial answer.
+
+            Work until the goal is met, or until it is genuinely impossible given the
+            tools and environment you have. After every step, judge whether the goal
+            is fully achieved; if it is not, keep going — do not stop early just to
+            hand back a partial result.
+
+            When the goal is met, report concisely what was done, which files changed,
+            and how to verify it. When the goal is impossible, explain why and what
+            would make it possible. Never claim "done" for a goal you have not
+            actually completed.
+        """.trimIndent()
+
         val DELEGATE = AgentConfig(
             name = "delegate",
             systemPrompt = DELEGATE_SYSTEM,
@@ -121,6 +141,16 @@ data class AgentConfig(
             allowSubagents = false,
         )
 
+        /** Task-driven agent: stop when the stated goal is met, not when a
+         *  fixed step budget runs out. Higher retry budget and a longer
+         *  wall-clock backstop so multi-step goals have room to land. */
+        val GOAL = AgentConfig(
+            name = "goal",
+            systemPrompt = GOAL_SYSTEM,
+            maxRetries = 7,
+            maxRunMillis = 60L * 60L * 1_000L,
+        )
+
         /** The selectable primary agents, keyed by name. */
         val PRIMARY: Map<String, AgentConfig> = linkedMapOf(
             "build" to BUILD,
@@ -128,6 +158,7 @@ data class AgentConfig(
             "delegate" to DELEGATE,
             "explore" to explore(),
             "general" to general(),
+            "goal" to GOAL,
         )
 
         /** Resolve a primary-agent name; unknown names fall back to build. */
