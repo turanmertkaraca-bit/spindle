@@ -144,8 +144,8 @@ class KeyStoreTest {
         val store = freshStore()
         assertEquals("build", store.agentMode, "build is the default")
         store.agentMode = "goal"
-        assertEquals("goal", freshStore().agentMode, "a fresh store sees the persisted mode")
+        assertEquals("goal", newStore().agentMode, "a new store sees the persisted mode")
         store.agentMode = "plan"
-        assertEquals("plan", freshStore().agentMode, "other modes still persist")
+        assertEquals("plan", newStore().agentMode, "other modes still persist")
     }
 }
