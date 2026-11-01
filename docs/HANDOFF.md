@@ -2,9 +2,7 @@
 
 Native Android agent app on the `spindle` engine. Repo
 `turanmertkaraca-bit/spindle`, branch `main`, package `dev.lumen.app`.
-Latest code HEAD = `c8f1ed6`, version **0.2.8** (`versionCode 13`); the 0.2.8
-wave (project isolation, storage clearing, Files rework) lands on top of
-`c8f1ed6`. CI
+Latest code HEAD = `c0dd166`, version **0.2.8** (`versionCode 13`). CI
 (`.github/workflows/ci.yml`) runs both jobs (`jvm backend` + `android app
 (robolectric)`) — always re-verify CI by sha with the `ci.sh` poll in §4 before
 trusting a build. Releases **v0.2.0**–**v0.2.6** are published, each with a
@@ -32,8 +30,11 @@ build. A fresh debug APK is staged on device at
   (exact param names/types) and the **test tags to preserve**.
 - **The UI is FROZEN.** The owner has signed off on the current look. Do NOT
   make UI/visual changes unless explicitly asked.
-- `:app` **cannot build locally** (no Android SDK) — CI/Robolectric is the
-  verifier. JVM modules build locally.
+- `:app` compiles locally with the SDK present at `/opt/android-sdk` (platforms
+  34/35) and `aapt2` overridden — see `docs/guide/07-testing.md`. Its Robolectric
+  tests still cannot run here (no aarch64 conscrypt), so CI's
+  `android app (robolectric)` job remains the behavioural verifier. Local `:app`
+  verification therefore means "compiles", never "passes".
 - Java: `bash -lc '. /root/env.sh && …'`. Keys pre-staged at
   `/root/live-keys.env` (mode 600, outside the repo); source it, never write a
   key to a file or log.
@@ -246,9 +247,12 @@ The 0.2.x waves landed since the last handoff; all are CI-green.
 ## 3. How to work here (saves tokens)
 
 ### 3.1 Environment + keys
-- **No Android SDK** in this guest: `:app` **cannot** build/test locally. CI
-  (Robolectric) verifies it; the screenshot sweep is the only way to *see* the
-  UI. JVM modules build locally (§4).
+- **Android SDK** is present at `/opt/android-sdk` (platforms 34/35), so
+  `:app:compileDebugKotlin` builds locally with `aapt2` overridden — see
+  `docs/guide/07-testing.md`. Its Robolectric tests still cannot run here (no
+  aarch64 conscrypt), so CI's `android app (robolectric)` job remains the
+  behavioural verifier. Local `:app` verification therefore means "compiles",
+  never "passes".
 - Java: `bash -lc '. /root/env.sh && …'` sets `JAVA_HOME` + Gradle proxy props.
 - **Keys** pre-staged at `/root/live-keys.env` (mode 600, OUTSIDE the repo).
   `source` it; never write a key into a file or log; never commit. Remote

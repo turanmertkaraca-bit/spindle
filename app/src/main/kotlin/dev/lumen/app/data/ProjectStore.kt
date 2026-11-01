@@ -232,8 +232,9 @@ class ProjectStore(context: Context) {
         private const val ROOT_DIR = "projects"
         private const val LEGACY_DIR = "workspace"
         const val DEFAULT_NAME = "playground"
-        private const val DEFAULT_ID = "playground"
-        private const val MAX_NAME = 48
-        private const val MAX_ID = 48
+        const val DEFAULT_ID = "playground"
+        /** Max project name length — public so UI truncation matches the store. */
+        const val MAX_NAME = 48
+        const val MAX_ID = 48
     }
 }

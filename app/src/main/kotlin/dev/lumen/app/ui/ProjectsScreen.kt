@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.ProjectRow
+import dev.lumen.app.data.ProjectStore
 
 private val Mono = FontFamily.Monospace
 
@@ -337,7 +338,7 @@ private fun ProjectNameDialog(
             Column {
                 BasicTextField(
                     value = value,
-                    onValueChange = { value = it.take(48) },
+                    onValueChange = { value = it.take(ProjectStore.MAX_NAME) },
                     singleLine = true,
                     textStyle = TextStyle(color = colors.fg, fontFamily = Mono, fontSize = LumenType.bodyLarge),
                     cursorBrush = SolidColor(colors.water),
