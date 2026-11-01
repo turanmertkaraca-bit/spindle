@@ -128,11 +128,21 @@ working it.
 - [x] fix the audited `LumenChatScreen` findings in `07-perf-ui.md` — see above;
       remaining rows (#7-#14) depend on host/API contracts and are deferred,
       not yet a regression.
-- [ ] close the known token-literal drift
+- [x] close the known token-literal drift (`66ba758`):
+      ProjectsScreen hardcoded `.take(48)` while ProjectStore caps at
+      `MAX_NAME = 48`; exposed `MAX_NAME` as a public const and wired the
+      dialog truncation to `ProjectStore.MAX_NAME`.
 
 ### Run E — docs
-- [ ] refresh stale version/HEAD claims across `HANDOFF.md` etc.
-- [ ] rewrite README for developers
+- [x] refresh stale version/HEAD claims across `HANDOFF.md` etc. (`66ba758`):
+      HEAD updated to current, stale "0.2.8 lands on top of c8f1ed6" line
+      removed, `:app` build claim corrected (SDK present, compiles locally;
+      Robolectric stays CI-only), "no Android SDK" in 3.1 corrected.
+- [x] rewrite README for developers (`66ba758`):
+      document-first structure (HANDOFF -> guide -> PROJECT-STATUS -> PLAN ->
+      SPEC -> PARITY), module table, current version 0.2.8, local JVM + :app
+      compile instructions with proxy/aapt2 flags, live smoke guidance, and a
+      clear "compile locally != passes Robolectric" note.
 
 ---
 
