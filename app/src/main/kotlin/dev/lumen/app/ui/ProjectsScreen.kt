@@ -141,6 +141,10 @@ fun ProjectsScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 items(projects, key = { it.id }) { project ->
+                    // The store de-duplicates ids but allows two projects to share
+                    // a display name, so flag the collision and let the row show
+                    // its folder id — otherwise two "Work" rows are identical.
+                    val duplicate = projects.count { it.name.equals(project.name, ignoreCase = true) } > 1
                     ProjectRowCard(
                         colors = colors,
                         project = project,
@@ -148,6 +152,7 @@ fun ProjectsScreen(
                         onSwitch = { onSwitch(project.id) },
                         onDelete = { deleting = project },
                         onOpenSession = onOpenSession,
+                        duplicateName = duplicate,
                     )
                 }
             }
@@ -162,6 +167,9 @@ fun ProjectsScreen(
             onDismiss = { creating = false },
             onConfirm = { name ->
                 onCreate(name)
+                // Closes on confirm; a rejected name (duplicate, uncreatable) is
+                // reported through the host's `error` slot, which the screen
+                // renders above the list with an actionable message.
                 creating = false
             },
         )
@@ -224,6 +232,8 @@ private fun ProjectRowCard(
     onSwitch: () -> Unit,
     onDelete: () -> Unit,
     onOpenSession: ((String) -> Unit)? = null,
+    /** True when another project shares this display name; shows the folder id. */
+    duplicateName: Boolean = false,
 ) {
     Column(
         Modifier
@@ -256,7 +266,7 @@ private fun ProjectRowCard(
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    projectSubtitle(project),
+                    projectSubtitle(project, duplicateName),
                     color = if (project.active) colors.water else colors.dim,
                     fontFamily = Mono,
                     fontSize = LumenType.micro,
@@ -308,14 +318,20 @@ private fun ProjectRowCard(
 /**
  * The secondary line under a project name. Keeps the active hint but adds the
  * session count so a folder with history reads differently from an empty one.
+ *
+ * [duplicateName] additionally shows the folder id: the store de-duplicates ids
+ * but allows two projects to share a display name ("Work" twice), which left the
+ * rows indistinguishable with no hint which folder a tap would open. Only shown
+ * when disambiguation is actually needed, so the common case stays uncluttered.
  */
-private fun projectSubtitle(project: ProjectRow): String {
+private fun projectSubtitle(project: ProjectRow, duplicateName: Boolean = false): String {
     val sessions = when (project.sessionCount) {
         0 -> "no sessions"
         1 -> "1 session"
         else -> "${project.sessionCount} sessions"
     }
-    return if (project.active) "active \u00b7 agent works here \u00b7 $sessions" else "$sessions \u00b7 tap to switch"
+    val base = if (project.active) "active \u00b7 agent works here \u00b7 $sessions" else "$sessions \u00b7 tap to switch"
+    return if (duplicateName) "$base \u00b7 ${project.id}" else base
 }
 
 @Composable
