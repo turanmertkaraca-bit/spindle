@@ -133,6 +133,25 @@ working it.
       `MAX_NAME = 48`; exposed `MAX_NAME` as a public const and wired the
       dialog truncation to `ProjectStore.MAX_NAME`.
 
+### Run F — audit tail (verified against source, not the stale audit)
+- [x] `08-projects` P1 #22: duplicate display names rendered identically
+      (`4f2933d`). Rows now count case-insensitive collisions and show the
+      folder id only when one exists. Rejecting duplicates at create time was
+      rejected as the fix because `ProjectStoreTest` pins the allow-duplicates
+      contract and ids (not names) are the store's identity rule.
+- [x] Verified-already-fixed, no work needed: P1 #3 (overflow retry emits
+      `PartReset` + fresh ids), P1 #24 (`ProjectStore.rename` exists), P1 #23
+      (`createProject` already feeds the `error` slot), P2 #13 (shell deadline
+      saturates via `MAX_TIMEOUT_MS`), P2 #14 (pty channel is bounded),
+      P2 #15 (`installAttempted` latches only on success), P2 #18
+      (`activeOrNull` validates with `isSafeId`), and the shell executor kills
+      the process tree on cancellation (P1 #1's core concern).
+- [—] Deferred deliberately, still open: P2 #9 (non-existent path resolves to
+      the deepest existing ancestor — a deliberate containment choice, but the
+      prompt can show the raw request), P2 #10 (granted roots accept `/` and
+      `$HOME`), P2 #3 (ASK path has no deadline), P2 #6 (no FK cascade).
+      These need API/behaviour decisions beyond a surgical fix.
+
 ### Run E — docs
 - [x] refresh stale version/HEAD claims across `HANDOFF.md` etc. (`66ba758`):
       HEAD updated to current, stale "0.2.8 lands on top of c8f1ed6" line
