@@ -1,11 +1,16 @@
 package dev.spindle.tool
 
+import dev.spindle.core.model.SessionId
 import dev.spindle.core.provider.ToolSpec
 import dev.spindle.core.tool.SubagentSpec
 import dev.spindle.core.tool.Tool
 import dev.spindle.core.tool.ToolContext
 import dev.spindle.core.tool.ToolOutcome
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import java.nio.file.Files
+import java.nio.file.Path
 import java.util.Locale
 
 /**
@@ -63,14 +68,70 @@ class TaskTool : Tool {
         val label = agent?.takeIf { it.isNotBlank() } ?: "general"
         val cost = String.format(Locale.ROOT, "%.4f", result.costUsd)
         val header = "[subagent $label · ${result.childTokens} tok · $$cost]"
+        val (report, reportPath) = inlineReport(ctx.cwd, result.sessionId, result.text)
         return ToolOutcome(
-            output = "$header\n${result.text}",
+            output = "$header\n$report",
             isError = !result.ok,
-            metadata = mapOf(
-                "sessionId" to result.sessionId.value,
-                "tokens" to result.childTokens.toString(),
-                "cost" to result.costUsd.toString(),
-            ),
+            metadata = buildMap {
+                put("sessionId", result.sessionId.value)
+                put("tokens", result.childTokens.toString())
+                put("cost", result.costUsd.toString())
+                if (reportPath != null) put("reportPath", reportPath)
+            },
         )
+    }
+
+    /**
+     * Bound the child's report before it enters the parent's context.
+     *
+     * A subagent can read widely and hand back a very large string. That string
+     * is persisted in the parent's tool result and re-sent on **every** later
+     * turn, so an uncapped report is a permanent context tax, not a one-off
+     * cost — the whole point of delegating to a subagent is to keep the parent
+     * small. Over-cap text is spilled into the workspace so the parent can
+     * `read` it on demand instead of paying for it always.
+     *
+     * Keeps the head (the findings) and the tail (the conclusion) and drops the
+     * middle. A failed write degrades to a plain clip: the report is never lost
+     * silently, it just costs more context.
+     */
+    private suspend fun inlineReport(
+        cwd: Path,
+        sessionId: SessionId,
+        text: String,
+    ): Pair<String, String?> {
+        if (text.length <= MAX_REPORT_CHARS) return text to null
+        val relative = "$SPILL_DIR/${sessionId.value.replace(UNSAFE_CHARS, "_")}.txt"
+        val written = runCatching {
+            withContext(Dispatchers.IO) {
+                val file = cwd.resolve(relative)
+                Files.createDirectories(file.parent)
+                Files.writeString(file, text)
+                true
+            }
+        }.getOrDefault(false)
+
+        val head = MAX_REPORT_CHARS * 3 / 4
+        val tail = MAX_REPORT_CHARS - head
+        val preview = text.take(head) + "\n\u2026[truncated]\u2026\n" + text.takeLast(tail)
+        return if (written) {
+            preview + "\n\n[full report: $relative — read it if you need the middle]" to relative
+        } else {
+            preview to null
+        }
+    }
+
+    private companion object {
+        /**
+         * Characters of the child's report inlined into the parent. Deliberately
+         * far below the loop's global 60k tool-output cap: a report is a
+         * summary, and the spill file is the escape hatch for detail.
+         */
+        const val MAX_REPORT_CHARS = 4_000
+
+        const val SPILL_DIR = ".spindle/subagents"
+
+        /** Anything outside this set in a session id is replaced for a safe path. */
+        val UNSAFE_CHARS = Regex("[^A-Za-z0-9._-]")
     }
 }

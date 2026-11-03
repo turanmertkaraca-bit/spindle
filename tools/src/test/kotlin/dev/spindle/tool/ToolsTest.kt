@@ -588,6 +588,50 @@ class ToolsTest {
     }
 
     @Test
+    fun subagentReportOverCapIsTruncatedAndSpilledToDisk() = runTest {
+        withTempDir { dir ->
+            // A child that read widely: far more text than should ever enter the
+            // parent's context, since a persisted tool result is re-sent on every
+            // later turn.
+            val big = "FINDING\n" + ("x".repeat(20_000)) + "\nCONCLUSION"
+            val ctx = FakeToolContext(
+                dir,
+                scriptedSubagent = SubagentResult(SessionId("ses_big"), big, ok = true),
+            )
+
+            val outcome = TaskTool().run(obj("""{"description":"big","prompt":"go"}"""), ctx)
+
+            assertFalse(outcome.isError, outcome.output)
+            assertTrue(outcome.output.length < 5_000, "report must be capped, got ${outcome.output.length}")
+            // Both ends survive: the head carries findings, the tail the conclusion.
+            assertTrue(outcome.output.contains("FINDING"), "head must survive")
+            assertTrue(outcome.output.contains("CONCLUSION"), "tail must survive")
+
+            // The full text is recoverable, and the path is advertised.
+            val path = assertNotNull(outcome.metadata["reportPath"], "spill path must be reported")
+            assertTrue(outcome.output.contains(path), "output must tell the model where the rest is")
+            val spilled = java.nio.file.Files.readString(dir.resolve(path))
+            assertTrue(spilled.contains(big), "spill must hold the untruncated report")
+        }
+    }
+
+    @Test
+    fun subagentReportUnderCapIsInlinedVerbatim() = runTest {
+        withTempDir { dir ->
+            val small = "a short report"
+            val ctx = FakeToolContext(
+                dir,
+                scriptedSubagent = SubagentResult(SessionId("ses_small"), small, ok = true),
+            )
+
+            val outcome = TaskTool().run(obj("""{"description":"s","prompt":"p"}"""), ctx)
+
+            assertTrue(outcome.output.contains(small), outcome.output)
+            assertNull(outcome.metadata["reportPath"], "a small report needs no spill file")
+        }
+    }
+
+    @Test
     fun taskWithFailingSubagentIsError() = runTest {
         withTempDir { dir ->
             val ctx = FakeToolContext(
