@@ -20,9 +20,10 @@ over HTTP; the app does not use it.
 
 | Document | For |
 |---|---|
-| [`docs/HANDOFF.md`](docs/HANDOFF.md) | **Read first.** Session narrative, version, how to work, CI poll, invariants. |
+| [`docs/analysis/README.md`](docs/analysis/README.md) | **Read first for new work.** Analysis briefs, ranked work queue, subagent protocol. |
+| [`docs/HANDOFF.md`](docs/HANDOFF.md) | Session narrative, version, how to work, CI poll, invariants. |
 | [`docs/guide/README.md`](docs/guide/README.md) | Per-subsystem developer guide — one file per area (agent loop, storage, tools, shell/proot, service, UI, testing, conventions). |
-| [`docs/PROJECT-STATUS.md`](docs/PROJECT-STATUS.md) | What is left: Run D token-literal drift and Run E docs (this file). |
+| [`docs/PROJECT-STATUS.md`](docs/PROJECT-STATUS.md) | The live board: what is done, what is left. |
 | [`docs/PLAN.md`](docs/PLAN.md) | Milestones M0–M10 + merge track m11–m15. |
 | [`docs/SPEC.md`](docs/SPEC.md) | Engine contracts (loop, events, SPIs, wire). |
 | [`docs/PARITY.md`](docs/PARITY.md) | What was ported from opencode vs deliberately dropped. |

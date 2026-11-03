@@ -163,6 +163,20 @@ working it.
       compile instructions with proxy/aapt2 flags, live smoke guidance, and a
       clear "compile locally != passes Robolectric" note.
 
+### Run G — analysis handoff (for the goal-mode session)
+- [x] wrote `docs/analysis/` — a self-contained brief set so a fresh session or
+      subagent can start informed instead of re-deriving the codebase:
+      `HANDOFF-NEXT.md` (entry), `STATUS.md` (ranked queue), `PROTOCOL.md`
+      (subagent waves), `bugs/` (confirmed root causes), `ui/` (per-screen +
+      screenshot/VLM method), `arch/` (subagents, context, environment),
+      `features/` (GitHub, git tool).
+- [x] diagnosed the owner-reported "every model shows free" bug to root cause
+      (`bugs/BUG-01-models-show-free.md`) — `0.0` price is rendered as "free".
+- [x] found there is **no subagent concurrency cap** at all
+      (`arch/SUBAGENTS.md`); owner wants 7.
+- [x] repaired `.git` (523 objects were broken proot symlinks; recovered from
+      `*.0001` sidecars) and cleaned the environment (1.6G → 22M in /tmp).
+
 ---
 
 ## 3. Known-good facts (do not re-derive)
