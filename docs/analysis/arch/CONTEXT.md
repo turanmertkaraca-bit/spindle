@@ -104,3 +104,39 @@ Fix items 1 and 4 first — they have the largest and most certain effect.
 - Do not shrink `compactKeepTokens` without checking that compaction quality
   holds — over-compacting makes the agent forget the task and redo work, which
   costs *more* context than it saves.
+
+---
+
+## How opencode handles subagent results (researched, for comparison)
+
+Useful because the owner asked. opencode does **not** fully solve this — it has
+the same class of bug filed against it — but its design points are worth copying:
+
+1. **Tool outputs are truncated by a generic wrapper** (`Tool.define`), with a
+   configured byte cap (`tool_output.max_bytes`, default ~51,200 bytes). So a
+   subagent result is bounded the same way as any other tool output — it is not
+   exempt.
+2. **Known bug (opencode #11903):** the task tool appends a `<task_metadata>`
+   block *before* the generic truncation runs, so on large output the metadata
+   (including `session_id`) is truncated away. Their fix direction: truncate
+   first, then append metadata — never let the tail metadata be clipped.
+   **Lesson for us:** our `reportPath` hint must stay *outside* the truncation,
+   exactly as opencode learned. Ours is appended after the head/tail preview, so
+   it survives — keep it that way.
+3. **Subagent sessions are resumable** by `session_id`, so a parent can ask a
+   child to continue rather than re-spawning it. That is the real context saver:
+   you pay once for the child's context, then reuse it.
+4. Their compaction is two-phase (prune tool outputs, then summarise), rather
+   than summarising everything at once.
+
+### The gap we still have
+
+`SubagentSpec` in this repo has **no `sessionId` / resume parameter** — every
+`task` call creates a *new* child session. So a parent cannot say "continue
+where you left off"; it must re-brief a fresh child, paying the full input cost
+again. The metadata we return already carries `sessionId`, so the plumbing to
+build resume exists but is unused.
+
+**Suggested follow-up (not done):** add an optional `sessionId` to
+`SubagentSpec`/`TaskTool`, and when present, continue that child session instead
+of creating one. This is the next real context win after the cap.
