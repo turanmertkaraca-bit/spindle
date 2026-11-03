@@ -1,6 +1,6 @@
 # BUG-01 · Every model shows "free"
 
-**Status:** `[ ]` open · **Owner-reported** · **Root cause confirmed by reading
+**Status:** `[x]` **FIXED in `c4408c6`** · Owner-reported · **Root cause confirmed by reading
 the code, not guessed.**
 
 ## Symptom
@@ -108,3 +108,28 @@ already covers filtering/sorting — extend it. Note `:app` tests are
 
 `:app` compiles locally; **behaviour is verified on CI only.** Push, wait for
 the `android app (robolectric)` job, and confirm green before marking done.
+
+---
+
+## Done (c4408c6) — CI green on both jobs
+
+Implemented the `pricingKnown` flag route (not nullable prices) because it
+touches far fewer call sites and is serialization-safe.
+
+- `ModelInfo.pricingKnown` (default **false** = unknown) + `isFree` helper that
+  requires a reported, genuinely-zero price.
+- Bundled snapshot: all 8 priced models marked known; `openrouter/free` is
+  known-and-zero (the only true "free").
+- Live `/models` parse marks `pricingKnown` only when the payload carried a
+  price; the overlay is sticky (`pricingKnown || live.pricingKnown`).
+- UI: `modelCostLabel()` → `"0.28/0.42"` | `"free"` | `"—"` (unknown).
+- Cost sort ranks known prices above unknown, so an unpriced model cannot top a
+  "most expensive" list.
+
+Tests: `modelCostLabel` all three cases, cost-sort with an unknown model,
+`ModelInfo.isFree` (unknown / confirmed-free / priced / half-free).
+
+**Still open as a follow-up:** the underlying *why* — whether the configured
+providers actually return `pricing` from `/models` at all. If they do not, the
+UI is now honest ("—") but most models will still show unknown. Verify against a
+real `/models` response before deciding whether more parsing is needed.

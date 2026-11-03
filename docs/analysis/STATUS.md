@@ -10,10 +10,10 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[—]` deferred
 
 ## Tier 1 — visible bugs the owner reported
 
-### [ ] BUG-01 · Every model shows "free"
+### [x] BUG-01 · Every model shows "free" — FIXED `c4408c6`
 **Detail:** `docs/analysis/bugs/BUG-01-models-show-free.md`
-Root cause fully diagnosed (a `0.0` price is rendered as the word "free").
-Small, contained fix. **Do this first — it is the owner's named bug.**
+Done: `pricingKnown` flag + `modelCostLabel`; unknown now renders "—".
+Follow-up: confirm providers actually return `pricing` (`/models`).
 
 ### [ ] FEAT-01 · GitHub surface is far too thin
 **Detail:** `docs/analysis/features/GITHUB.md`

@@ -54,15 +54,15 @@ each turn, capped at `MAX_RULES_CHARS`.
 which the app already tracks via `fileRevision`); cap harder; and consider
 summarising large rule files once rather than re-sending verbatim.
 
-### 4. Subagent results are copied wholesale into the parent
+### 4. ~~Subagent results are copied wholesale into the parent~~ **FIXED `88df698`**
 `SubagentSpawner` returns `SubagentResult(text = ...)`, and the parent's `task`
 tool result embeds that text. A child that read a lot can hand back a very large
 string, which then lives in the parent forever.
 
-**Fix:** cap the child's returned text (e.g. 4k chars) and require the child to
-summarise; spill the full text to a file the parent can `read`. This is the
-single biggest win when many subagents are used — which is exactly the intended
-workflow.
+**Done:** `TaskTool` now inlines at most 4,000 chars (head 3/4 + tail 1/4) and
+spills the full report to `.spindle/subagents/<session>.txt`, advertising the
+path in both the output and metadata. A failed spill degrades to a plain clip.
+This was the biggest win for the many-subagent workflow, and it is now closed.
 
 ### 5. Reasoning/thinking parts are persisted and re-sent
 Thinking is folded for display, but the raw parts remain in the store and are
