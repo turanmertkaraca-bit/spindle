@@ -47,3 +47,5 @@ fixtures/live/
 
 # local release artifacts (published by CI)
 dist/
+replay/
+hs_err_pid*.log
