@@ -24,7 +24,27 @@ data class ModelInfo(
     val outputCostPerM: Double = 0.0,
     val cacheReadCostPerM: Double = 0.0,
     val cacheWriteCostPerM: Double = 0.0,
-)
+    /**
+     * Whether the zero prices above were actually *reported* rather than simply
+     * absent. A cost of `0.0` means two very different things:
+     *
+     *  - `pricingKnown = true`  -> the provider says this model is genuinely free
+     *    (e.g. OpenRouter's `openrouter/free`).
+     *  - `pricingKnown = false` -> nobody told us a price; it is *unknown*, and
+     *    the UI must not claim it is free.
+     *
+     * Defaults to false so an un-annotated model reads as "unknown" rather than
+     * silently asserting it costs nothing.
+     */
+    val pricingKnown: Boolean = false,
+) {
+    /**
+     * True only when a price was reported AND it is zero — a genuinely free
+     * model. Unknown pricing is not free.
+     */
+    val isFree: Boolean
+        get() = pricingKnown && inputCostPerM <= 0.0 && outputCostPerM <= 0.0
+}
 
 /** An inline image travelling as base64; adapters render it per provider shape. */
 data class WireImage(

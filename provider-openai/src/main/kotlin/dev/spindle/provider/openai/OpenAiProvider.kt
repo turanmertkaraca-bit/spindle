@@ -158,6 +158,12 @@ private fun enrichModel(base: ModelInfo, o: JsonObject): ModelInfo {
             ?: perMillionPrice(cost?.get("cache_read")) ?: base.cacheReadCostPerM,
         cacheWriteCostPerM = perTokenPrice(pricing?.get("input_cache_write") ?: pricing?.get("cache_write"))
             ?: perMillionPrice(cost?.get("cache_write")) ?: base.cacheWriteCostPerM,
+        // Pricing is only "known" when this payload actually carried a price for
+        // it. That distinction is what stops the UI from labelling an un-priced
+        // model as free.
+        pricingKnown = base.pricingKnown ||
+            perTokenPrice(pricing?.get("prompt")) != null ||
+            perMillionPrice(cost?.get("input")) != null,
     )
 }
 

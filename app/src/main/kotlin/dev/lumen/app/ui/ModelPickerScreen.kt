@@ -78,6 +78,30 @@ internal fun displayModelLabel(raw: String): String {
     return if (sep in 1 until trimmed.length - 2) trimmed.substring(sep + 2).trim() else trimmed
 }
 
+/**
+ * The cost column text for one model.
+ *
+ * `0.0` alone is ambiguous, so it is never rendered as "free" on its own:
+ *
+ *  - a real price            -> "0.28/0.42"
+ *  - known to cost nothing   -> "free"   (provider said so, e.g. openrouter/free)
+ *  - no price was reported   -> "—"      (unknown; must not claim it is free)
+ *
+ * Kept as a pure function so it is unit-testable without composing.
+ */
+internal fun modelCostLabel(
+    inputCostPerM: Double,
+    outputCostPerM: Double,
+    pricingKnown: Boolean,
+): String = when {
+    inputCostPerM > 0.0 || outputCostPerM > 0.0 -> buildList {
+        if (inputCostPerM > 0.0) add(String.format(Locale.US, "%.2f", inputCostPerM))
+        if (outputCostPerM > 0.0) add(String.format(Locale.US, "%.2f", outputCostPerM))
+    }.joinToString("/")
+    pricingKnown -> "free"
+    else -> "\u2014"
+}
+
 /** Build a row from a live model of the given provider. */
 internal fun modelRowData(provider: String, m: ModelInfo): ModelRowData = ModelRowData(
     ref = "$provider/${m.id}",
@@ -85,16 +109,7 @@ internal fun modelRowData(provider: String, m: ModelInfo): ModelRowData = ModelR
     id = m.id,
     providerLabel = null,
     contextWindow = m.contextWindow.takeIf { it > 0 },
-    cost = if (m.inputCostPerM > 0.0 || m.outputCostPerM > 0.0) {
-        buildList {
-            if (m.inputCostPerM > 0.0) add(String.format(Locale.US, "%.2f", m.inputCostPerM))
-            if (m.outputCostPerM > 0.0) add(String.format(Locale.US, "%.2f", m.outputCostPerM))
-        }.joinToString("/")
-    } else {
-        // A model that advertises no price is free, not "unknown": draw the word
-        // so the blank cost slot never reads as a bug or a fetched-nothing state.
-        "free"
-    },
+    cost = modelCostLabel(m.inputCostPerM, m.outputCostPerM, m.pricingKnown),
     tag = "model-option-${m.id}",
 )
 
@@ -479,11 +494,15 @@ internal fun filterAndSortModels(
     return when (sort) {
         ModelSort.Name -> filtered.sortedBy { displayModelLabel(it.id).lowercase() }
         // Descending for size and cost: "biggest" and "priciest" are what a user
-        // opens this list to find. Both fields default to zero when a provider
-        // advertises nothing, so zero-cost models sink to the end instead of
-        // masquerading as the cheapest option.
+        // opens this list to find. Context still defaults to zero when unknown,
+        // which sinks it — that is fine, smaller is a safe fallback.
         ModelSort.Context -> filtered.sortedByDescending { it.contextWindow }
-        ModelSort.Cost -> filtered.sortedByDescending { it.inputCostPerM + it.outputCostPerM }
+        // Cost ranks only known prices. An un-priced model is unknown, not the
+        // cheapest, so it must not top a "most expensive" list by accident.
+        ModelSort.Cost -> filtered.sortedWith(
+            compareByDescending<ModelInfo> { it.pricingKnown }
+                .thenByDescending { it.inputCostPerM + it.outputCostPerM },
+        )
     }
 }
 

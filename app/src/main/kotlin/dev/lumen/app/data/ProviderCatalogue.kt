@@ -38,24 +38,29 @@ object ProviderCatalogue {
         ModelInfo(
             "opencode-go", "deepseek-v4.1-flash", contextWindow = 1_000_000, supportsReasoning = true,
             inputCostPerM = 0.28, outputCostPerM = 0.42, cacheReadCostPerM = 0.028,
+            pricingKnown = true,
         ),
         ModelInfo(
             "opencode-go", "glm-5.3-flash", contextWindow = 200_000,
             inputCostPerM = 0.10, outputCostPerM = 0.10, cacheReadCostPerM = 0.02,
+            pricingKnown = true,
         ),
         ModelInfo(
             "opencode-go", "kimi-k2.7-code", contextWindow = 200_000,
             inputCostPerM = 0.55, outputCostPerM = 2.20, cacheReadCostPerM = 0.15,
+            pricingKnown = true,
         ),
     )
     private val deepseekModels = listOf(
         ModelInfo(
             "deepseek", "deepseek-flash", contextWindow = 1_000_000, supportsReasoning = true,
             inputCostPerM = 0.28, outputCostPerM = 0.42, cacheReadCostPerM = 0.028,
+            pricingKnown = true,
         ),
         ModelInfo(
             "deepseek", "deepseek-v4-pro", contextWindow = 1_000_000, supportsReasoning = true,
             inputCostPerM = 0.55, outputCostPerM = 2.19, cacheReadCostPerM = 0.14,
+            pricingKnown = true,
         ),
     )
 
@@ -64,15 +69,15 @@ object ProviderCatalogue {
     private val openrouterModels = listOf(
         ModelInfo(
             "openrouter", "openrouter/free", label = "OpenRouter Free (auto)", contextWindow = 128_000,
-            inputCostPerM = 0.0, outputCostPerM = 0.0,
+            inputCostPerM = 0.0, outputCostPerM = 0.0, pricingKnown = true,
         ),
         ModelInfo(
             "openrouter", "openrouter/auto", label = "OpenRouter Auto", contextWindow = 200_000,
-            inputCostPerM = 0.5, outputCostPerM = 1.5,
+            inputCostPerM = 0.5, outputCostPerM = 1.5, pricingKnown = true,
         ),
         ModelInfo(
             "openrouter", "openrouter/pareto-code", label = "OpenRouter Pareto Code", contextWindow = 200_000,
-            inputCostPerM = 0.5, outputCostPerM = 1.5,
+            inputCostPerM = 0.5, outputCostPerM = 1.5, pricingKnown = true,
         ),
     )
 
@@ -123,6 +128,9 @@ object ProviderCatalogue {
         outputCostPerM = live.outputCostPerM.takeIf { it > 0.0 } ?: outputCostPerM,
         cacheReadCostPerM = live.cacheReadCostPerM.takeIf { it > 0.0 } ?: cacheReadCostPerM,
         cacheWriteCostPerM = live.cacheWriteCostPerM.takeIf { it > 0.0 } ?: cacheWriteCostPerM,
+        // Sticky: once either side reports pricing, the model is priced. A live
+        // payload without pricing must not erase what the snapshot already knew.
+        pricingKnown = pricingKnown || live.pricingKnown,
     )
 
     /** Human label for a provider id. */

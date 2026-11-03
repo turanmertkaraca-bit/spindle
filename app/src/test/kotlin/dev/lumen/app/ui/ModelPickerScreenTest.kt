@@ -207,6 +207,47 @@ class ModelPickerScreenTest {
     }
 
     @Test
+    fun `an unpriced model is unknown, never labelled free`() {
+        // The owner-reported bug: every model read "free".
+        assertEquals(
+            "\u2014",
+            modelCostLabel(inputCostPerM = 0.0, outputCostPerM = 0.0, pricingKnown = false),
+            "an unreported price is unknown, not free",
+        )
+    }
+
+    @Test
+    fun `a genuinely free model is labelled free`() {
+        assertEquals(
+            "free",
+            modelCostLabel(inputCostPerM = 0.0, outputCostPerM = 0.0, pricingKnown = true),
+            "a provider-confirmed zero price is free",
+        )
+    }
+
+    @Test
+    fun `a priced model shows its input and output rates`() {
+        assertEquals("0.28/0.42", modelCostLabel(0.28, 0.42, pricingKnown = true))
+        // Only one side priced: show just that side rather than a stray slash.
+        assertEquals("0.28", modelCostLabel(0.28, 0.0, pricingKnown = true))
+    }
+
+    @Test
+    fun `cost sort ranks known prices above unknown ones`() {
+        val models = listOf(
+            ModelInfo("p", "unknown-price", label = "Unknown", contextWindow = 1_000),
+            ModelInfo("p", "cheap", label = "Cheap", contextWindow = 1_000, inputCostPerM = 0.1, pricingKnown = true),
+            ModelInfo("p", "dear", label = "Dear", contextWindow = 1_000, inputCostPerM = 9.0, pricingKnown = true),
+        )
+        val sorted = filterAndSortModels(models, "p", "", ModelSort.Cost, false, emptySet())
+        assertEquals(
+            listOf("dear", "cheap", "unknown-price"),
+            sorted.map { it.id },
+            "unknown pricing must sink below real prices, not masquerade as cheapest",
+        )
+    }
+
+    @Test
     fun `favoritesOnly keeps just the starred refs`() {
         val starred = setOf("p/zeta-big", "p/Mid-Model")
         val only = filterAndSortModels(catalogue, "p", "", ModelSort.Name, true, starred)
