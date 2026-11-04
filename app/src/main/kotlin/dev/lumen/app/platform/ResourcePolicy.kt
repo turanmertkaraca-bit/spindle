@@ -66,16 +66,48 @@ object ResourcePolicy {
     const val RESUME_HYSTERESIS_TENTHS_C: Int = 30
 
     /**
-     * Address-space cap applied to every guest command, in kilobytes.
+     * Address-space cap applied to guest commands, in kilobytes — **except**
+     * for commands that are known to need far more (see [MEMORY_HUNGRY]).
      *
      * cgroups need root, so the only memory lever available without privileges
      * is the shell's own `ulimit -v`. A runaway compiler or a leaking build is
      * then killed by the kernel (ENOMEM inside the guest) instead of being
      * reaped by Android's low-memory killer, which would take the whole app
-     * down with it. Sized to leave room for a real `gradle`/`javac` run while
-     * still bounding a runaway; 0 disables the cap.
+     * down with it. 0 disables the cap.
+     *
+     * **Why the exception exists:** a JVM reserves a large *virtual* address
+     * space (heap + metaspace + code cache + thread stacks + direct buffers),
+     * routinely several GB, even when its resident set is small. Capping `-v`
+     * at 2 GiB therefore makes `./gradlew`, `mvn`, `javac` and `kotlinc` fail
+     * with a native "insufficient memory" error that looks like real OOM but is
+     * purely the address-space ceiling. Measured on this project: applying the
+     * cap to `./gradlew` broke the build outright.
      */
     const val GUEST_MEMORY_LIMIT_KB: Int = 2_097_152
+
+    /**
+     * Commands whose first token means "this needs real address space", so the
+     * `ulimit -v` cap must be skipped. Matched on the **basename** of the first
+     * word of the script, which covers `./gradlew`, `/usr/bin/java`, `sh -c
+     * "java …"`-free forms, and the common build launchers.
+     *
+     * The open-file cap is still applied to these: a JVM that leaks descriptors
+     * is a real problem, and 4096 is ample for a build.
+     *
+     * Kept deliberately short. Adding to it is a judgement call: the cap exists
+     * to stop one runaway command taking the whole app down, so an entry here
+     * trades that protection for the command actually working.
+     */
+    private val MEMORY_HUNGRY = setOf(
+        "java", "javac", "javaw", "kotlinc", "kotlin",
+        "gradle", "gradlew", "mvn", "maven", "sbt",
+        "node", "npm", "npx", "yarn", "pnpm", "tsc", "webpack", "vite", "jest",
+        "python3", "python", "pip", "pip3", "conda",
+        "dotnet", "go", "cargo", "rustc", "swift", "dart", "flutter",
+        "clang", "clang++", "gcc", "g++", "ld", "cmake",
+        "apt", "apt-get", "dpkg",
+        "docker", "podman",
+    )
 
     /**
      * Open-file cap for guest commands. A build that leaks descriptors would
@@ -99,13 +131,35 @@ object ResourcePolicy {
      * per-tool timeout already does far more precisely.
      */
     fun limitScript(script: String): String {
+        val memoryCapped = !isMemoryHungry(script)
         val guards = buildList {
-            if (GUEST_MEMORY_LIMIT_KB > 0) add("ulimit -v $GUEST_MEMORY_LIMIT_KB 2>/dev/null")
+            if (GUEST_MEMORY_LIMIT_KB > 0 && memoryCapped) {
+                add("ulimit -v $GUEST_MEMORY_LIMIT_KB 2>/dev/null")
+            }
             if (GUEST_OPEN_FILES_LIMIT > 0) add("ulimit -n $GUEST_OPEN_FILES_LIMIT 2>/dev/null")
         }
         if (guards.isEmpty()) return script
         // `;` not `&&`: a refused limit must not stop the command from running.
         return guards.joinToString("; ") + "; " + script
+    }
+
+    /**
+     * True when [script] starts with a tool that needs more address space than
+     * the cap allows. Looks only at the first word (skipping leading
+     * environment assignments and `sudo`/`exec`/`time` prefixes), so a build
+     * invoked as `cd x && ./gradlew` is *not* detected — deliberately: a
+     * composite script is the user's own composition and gets the cap, which
+     * is the conservative direction. The single-command form is by far the
+     * common one for a build.
+     */
+    internal fun isMemoryHungry(script: String): Boolean {
+        val first = script.trim()
+            .substringBefore(' ')
+            .substringBefore('\n')
+            .trim()
+        if (first.isEmpty()) return false
+        val base = first.substringAfterLast('/').lowercase()
+        return base in MEMORY_HUNGRY
     }
 
     /**

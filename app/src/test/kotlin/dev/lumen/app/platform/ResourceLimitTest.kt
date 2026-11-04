@@ -65,6 +65,62 @@ class ResourceLimitTest {
     }
 
     @Test
+    fun `a build command is exempt from the memory cap but keeps the fd cap`() {
+        // A JVM reserves several GB of address space; capping -v at 2 GiB makes
+        // ./gradlew die with a native "insufficient memory" error that looks
+        // like real OOM. Measured on this project.
+        val out = ResourcePolicy.limitScript("./gradlew test")
+
+        assertFalse(
+            out.contains("ulimit -v"),
+            "a build must not get the address-space cap, got: $out",
+        )
+        assertTrue(
+            out.contains("ulimit -n ${ResourcePolicy.GUEST_OPEN_FILES_LIMIT}"),
+            "the fd cap still applies to a build, got: $out",
+        )
+        assertTrue(out.endsWith("; ./gradlew test"))
+    }
+
+    @Test
+    fun `memory hungry launchers are recognised by basename and path`() {
+        listOf(
+            "./gradlew assembleDebug",
+            "/usr/bin/java -jar x.jar",
+            "kotlinc Foo.kt",
+            "npm run build",
+            "python3 setup.py",
+            "/opt/node/bin/node index.js",
+        ).forEach { cmd ->
+            assertTrue(
+                ResourcePolicy.isMemoryHungry(cmd),
+                "expected '$cmd' to be treated as memory-hungry",
+            )
+        }
+    }
+
+    @Test
+    fun `ordinary commands still get the memory cap`() {
+        listOf("ls -la", "git status", "echo hi", "rg foo", "cat file.txt").forEach { cmd ->
+            assertFalse(
+                ResourcePolicy.isMemoryHungry(cmd),
+                "expected '$cmd' to keep the cap",
+            )
+            assertTrue(
+                ResourcePolicy.limitScript(cmd).contains("ulimit -v"),
+                "'$cmd' should still be capped",
+            )
+        }
+    }
+
+    @Test
+    fun `a composite script keeps the cap (conservative)`() {
+        // Only the first token is examined; `cd x && ./gradlew` is the user's own
+        // composition, so it is capped rather than exempted.
+        assertFalse(ResourcePolicy.isMemoryHungry("cd sub && ./gradlew test"))
+    }
+
+    @Test
     fun `a hot device pauses and a cool one does not`() {
         val hot = ResourcePolicy.Battery(percent = 80, charging = false, temperatureTenthsC = 450)
         val cool = ResourcePolicy.Battery(percent = 80, charging = false, temperatureTenthsC = 300)
