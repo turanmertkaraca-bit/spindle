@@ -131,3 +131,47 @@ Two jobs, both must be green on the pushed sha:
 `.github/workflows/release.yml` publishes an APK when a `v*` tag is pushed, and
 it **asserts** package id, versionName and the debug signing cert before
 publishing.
+
+---
+
+## 6. The 2 GiB address-space cap — and why builds failed (FIXED `d7e4fda`)
+
+**Symptom:** every Gradle/JVM run dies with
+
+```
+# There is insufficient memory for the Java Runtime Environment to continue.
+# Native memory allocation (malloc) failed to allocate ...
+```
+
+even though `free -m` shows ~1.8 GB available and nothing is hogging RAM.
+
+**Cause:** the shell carries `ulimit -v 2097152` — a **2 GiB virtual address
+space** cap, exactly equal to `ResourcePolicy.GUEST_MEMORY_LIMIT_KB`. The guest
+`ulimit -v` guard added in Run C was applied to *every* command the agent ran,
+including `./gradlew`. A JVM reserves heap + metaspace + code cache + thread
+stacks + direct buffers — routinely several GB of *virtual* space — so the
+allocation fails immediately. It is not real OOM; it is the ceiling.
+
+**Not fixable with swap/zram here** (checked, for the record):
+
+- `swapon` → `Function not implemented` (no swap support in this kernel/namespace)
+- no `zram-control`, no zram module
+- `/proc/sys/vm/*` not writable (Permission denied)
+- `ulimit -v` cannot be raised: `Operation not permitted`
+
+So the only real fix is on the **app** side: don't cap what needs the space.
+
+**Fix (`d7e4fda`):** `ResourcePolicy.limitScript` now skips `ulimit -v` for
+`MEMORY_HUNGRY` launchers (java/javac/kotlinc/gradle/mvn/node/npm/python/gcc/
+cargo/docker/apt…), matched on the **basename of the first token**. The fd cap
+(`ulimit -n`) still applies to them. A composite script (`cd x && ./gradlew`)
+keeps the cap — conservative by design.
+
+**Consequence for agents:** running `./gradlew …` as a single command now works.
+If you wrap it (`cd sub && ./gradlew …`, or a shell script that calls it), the
+cap still applies and the JVM will die — invoke the launcher directly, or add
+the wrapper basename to `MEMORY_HUNGRY` if it is a routine one.
+
+**A 2 GiB `ulimit -v` is still worth having** for non-JVM commands: it stops a
+runaway process from being reaped by Android's low-memory killer, which would
+take the whole app down rather than just the command.
