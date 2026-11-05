@@ -2204,13 +2204,27 @@ private fun WindowedText(
 }
 
 /**
- * A monospace tool-output block. Short output stays a single Text (tag on the
- * Text itself, preserving hit-testing and scroll-to); a pathological result is
- * chunked so no single layout is unbounded. The card around it is already
- * height-bounded, so this only trims the per-layout cost.
+ * A monospace tool-output block.
+ *
+ * Short output stays a single `Text` (tag on the Text itself, preserving
+ * hit-testing and scroll-to).
+ *
+ * **Long output is windowed, not fully laid out.** This used to chunk the
+ * *whole* string into 4,000-char `Text` composables, which meant a large tool
+ * result — a 1,000-result glob is ~80,000 chars, i.e. ~20 full text layouts —
+ * was laid out inside a `LazyColumn` item on every pass. That is what crashed
+ * the app when a broad glob swept a big tree: the transcript tried to lay out
+ * tens of thousands of characters of file paths at once. The card is already
+ * height-bounded, so laying out past the visible window is pure cost, and it
+ * was unbounded cost.
+ *
+ * Same contract as [WindowedText]: show a head, offer "show all" behind a
+ * scrollable 320dp box so a curious user can still read everything without the
+ * transcript ever laying it all out at once.
  */
 @Composable
 private fun RawOutputText(text: String, colors: LumenColors, modifier: Modifier, tag: String) {
+    var showAll by remember(text) { mutableStateOf(false) }
     if (text.length <= LITERAL_MAX_CHARS) {
         Text(
             text,
@@ -2220,8 +2234,45 @@ private fun RawOutputText(text: String, colors: LumenColors, modifier: Modifier,
         return
     }
     Column(modifier.testTag(tag)) {
-        for (chunk in textChunks(text, TEXT_CHUNK_CHARS)) {
-            Text(chunk, color = colors.dim, fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp)
+        if (showAll) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Column {
+                    for (chunk in textChunks(text, TEXT_CHUNK_CHARS)) {
+                        Text(chunk, color = colors.dim, fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp)
+                    }
+                }
+            }
+            Text(
+                "show less",
+                color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clip(LumenShapes.small)
+                    .border(1.dp, colors.outline, LumenShapes.small)
+                    .clickable { showAll = false }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .testTag("tool-output-show-less"),
+            )
+        } else {
+            Text(
+                text.take(LITERAL_MAX_CHARS),
+                color = colors.dim, fontFamily = Mono, fontSize = 11.sp, lineHeight = 16.sp,
+            )
+            val hidden = text.length - LITERAL_MAX_CHARS
+            Text(
+                "\u2026[$hidden chars hidden] \u00b7 show all",
+                color = colors.accent, fontFamily = Mono, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clip(LumenShapes.small)
+                    .border(1.dp, colors.outline, LumenShapes.small)
+                    .clickable { showAll = true }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .testTag("tool-output-show-all"),
+            )
         }
     }
 }

@@ -3,6 +3,7 @@ package dev.lumen.app.ui
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -231,6 +232,35 @@ class LumenChatScreenTest {
             .performScrollTo()
         compose.waitForIdle()
         compose.onNodeWithText("output line 50", substring = true, useUnmergedTree = true).assertExists()
+    }
+
+    @Test
+    fun `a huge tool output is windowed instead of fully laid out`() {
+        // Regression: a broad glob returns up to 1000 paths (~80k chars). The raw
+        // output block used to chunk the WHOLE string into 4000-char Text
+        // composables, so the transcript laid out ~20 full text blocks per pass
+        // and the app crashed while streaming in another chat.
+        val huge = (1..1000).joinToString("\n") { "vendor/Butterscotch/some/deep/path/file$it.kt" }
+        val s = listOf(
+            UiStep("t", StepKind.TOOL, "GLOB", "x", summary = "glob **/*.kt", body = huge),
+        )
+        compose.setContent {
+            LumenChatScreen(s, input = "", busy = false, error = null, modifier = viewport, ambient = false)
+        }
+        compose.onNodeWithTag("tools-toggle").performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+
+        // The head is shown and the tail is explicitly hidden behind an affordance.
+        compose.onNodeWithText("file1.kt", substring = true, useUnmergedTree = true).assertExists()
+        compose.onNodeWithTag("tool-output-show-all", useUnmergedTree = true).assertExists()
+        compose.onNodeWithText("file1000.kt", substring = true, useUnmergedTree = true)
+            .assertDoesNotExist()
+
+        // Opting in reveals it, behind its own bounded scroll box.
+        compose.onNodeWithTag("tool-output-show-all", useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.OnClick)
+        compose.waitForIdle()
+        compose.onNodeWithTag("tool-output-show-less", useUnmergedTree = true).assertExists()
     }
 
     @Test
