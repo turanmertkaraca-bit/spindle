@@ -21,8 +21,11 @@ with **no Android dependency**, so it runs and is tested on a plain JVM. The
 Compose UI (`:app`) is a thin consumer of the event stream — there is no HTTP
 server between them and no second state model.
 
-Read `docs/guide/README.md` next: it is a **per-subsystem developer guide**, one
-file per area, written against this exact HEAD.
+Read `docs/analysis/OWNER-BRIEF.md` (what "finished" means, measured against the
+code) and `docs/analysis/STATUS.md` (the ordered queue).
+
+`docs/guide/README.md` is the **per-subsystem developer guide**, one file per
+area, written against this exact HEAD.
 
 ---
 

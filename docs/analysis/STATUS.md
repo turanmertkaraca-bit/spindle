@@ -6,6 +6,23 @@ commit sha and a one-line result.
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[—]` deferred
 
+> **The full acceptance spec is [`OWNER-BRIEF.md`](OWNER-BRIEF.md).** It states
+> what "finished" means in the owner's terms. This queue is the ordered
+> implementation of it.
+
+---
+
+## Tier 0 — ship-blockers (owner's core complaint)
+
+### [ ] MOTION-01 · Streaming animation must not strobe; honour system reduce-motion
+**Detail:** `OWNER-BRIEF.md` §A
+`LumenMotion.pulse` loops forever (1.4 s, reverse) for the whole duration of an
+AI run — exactly when the owner says it is seizure-adjacent. `reduceMotion` is
+honoured in only 2 places and is NOT derived from the system animation scale.
+
+### [ ] PERF-01 · Smoothness while streaming
+**Detail:** `ui/CHAT-SCREEN.md` (#2 decomposition, #10/#11/#14 cheap remembers).
+
 ---
 
 ## Tier 1 — visible bugs the owner reported
@@ -62,6 +79,23 @@ Four findings were deliberately deferred because each needs a behavioural
 decision, not a surgical patch. Read the reasons before "fixing" them.
 
 ---
+
+## Tier 3b — phone-developer file manager
+
+### [ ] FILES-01 · Unify file-type routing; APK install + PDF hand-off from Files
+**Detail:** `OWNER-BRIEF.md` §C
+`.apk` only routes for mentions, not from the Files screen. PDF has no handling.
+Type routing is a duplicated `when` in `MainActivity`.
+
+### [ ] TERM-01 · Show the agent's own commands in the terminal view
+**Detail:** `OWNER-BRIEF.md` §D
+
+## Tier 4 — new capability
+
+### [ ] WEB-01 · Optional browser-control mode
+**Detail:** `OWNER-BRIEF.md` §E
+Nothing exists today; the only WebView is the local-only Canvas. Off by default,
+own tool, denied to plan/explore, behind the approval gate.
 
 ## Done (do not redo)
 

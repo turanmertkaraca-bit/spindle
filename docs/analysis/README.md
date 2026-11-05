@@ -9,7 +9,8 @@ of re-deriving the codebase and burning context.
 |---|---|---|
 | 1 | [`HANDOFF-NEXT.md`](HANDOFF-NEXT.md) | **Entry point.** Mission, rules, environment, traps. |
 | 2 | [`STATUS.md`](STATUS.md) | **The ranked work queue.** Start your next task here. |
-| 3 | [`PROTOCOL.md`](PROTOCOL.md) | How to run subagent waves (1 writer per file; ≤7 at a time). |
+| 3 | [`OWNER-BRIEF.md`](OWNER-BRIEF.md) | **What "finished" means.** The owner's acceptance spec, measured against the code. |
+| 4 | [`PROTOCOL.md`](PROTOCOL.md) | How to run subagent waves (1 writer per file; ≤7 at a time). |
 
 ## Then, by task
 
