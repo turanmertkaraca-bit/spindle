@@ -32,6 +32,12 @@ honoured in only 2 places and is NOT derived from the system animation scale.
 Done: `pricingKnown` flag + `modelCostLabel`; unknown now renders "—".
 Follow-up: confirm providers actually return `pricing` (`/models`).
 
+### [x] BUG-02 · Large tool output crashed the app — FIXED `57c3395`
+**Detail:** `docs/analysis/bugs/BUG-02-large-tool-output-crash.md`
+A 1000-result glob (~80k chars) was fully laid out as ~20 Text blocks per pass.
+`RawOutputText` had no cap though `WindowedText` beside it did. This is also why
+other chats showed "aborted" — the process died and RunRecovery swept them.
+
 ### [ ] FEAT-01 · GitHub surface is far too thin
 **Detail:** `docs/analysis/features/GITHUB.md`
 `GitHubClient` exposes exactly **2** calls (user, repo). The `git` tool has 13
