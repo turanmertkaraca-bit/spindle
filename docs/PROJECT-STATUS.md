@@ -177,6 +177,18 @@ working it.
 - [x] repaired `.git` (523 objects were broken proot symlinks; recovered from
       `*.0001` sidecars) and cleaned the environment (1.6G → 22M in /tmp).
 
+### Run H — owner-reported fixes (v0.2.9)
+- [x] subagent reports capped before entering the parent context (`88df698`) —
+      4k inline, full text spilled to `.spindle/subagents/`, path advertised.
+      Previously the whole child report was persisted and re-sent every turn.
+- [x] "every model shows free" (`c4408c6`) — `ModelInfo.pricingKnown` + `isFree`;
+      unknown renders `—`, `free` only when the provider says so; cost sort no
+      longer ranks unknown as cheapest.
+- [x] build tools exempt from the guest `ulimit -v` cap (`d7e4fda`) — the 2 GiB
+      address-space cap made `./gradlew` fail with native OOM, so the agent could
+      not build the project it works on.
+- [x] released as **v0.2.9** (`versionCode 14`).
+
 ---
 
 ## 3. Known-good facts (do not re-derive)
