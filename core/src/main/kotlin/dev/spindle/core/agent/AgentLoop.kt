@@ -941,7 +941,7 @@ class AgentLoop(
     private fun summarizeProviderError(message: String): String {
         val mentioned = MESSAGE_FIELD.find(message)?.groupValues?.getOrNull(1)
         val base = mentioned ?: message.substringBefore('{').trim().ifBlank { message }
-        val oneLine = WHITESPACE.replace(base, " ").trim()
+        val oneLine = WHITESPACE.replace(input = base, replacement = " ").trim()
         return if (oneLine.length <= 160) oneLine else oneLine.take(157) + "\u2026"
     }
 
@@ -1180,8 +1180,6 @@ class AgentLoop(
     internal companion object {
         /** Pulls the provider's own `message` field out of a JSON error body. */
         val MESSAGE_FIELD = Regex("\"message\"\\s*:\\s*\"([^\"]{1,200})\"")
-
-        val WHITESPACE = Regex("\\s+")
 
         const val COMPACT_MARKER = "[compacted]"
         const val AGENTS_FILE = "AGENTS.md"
