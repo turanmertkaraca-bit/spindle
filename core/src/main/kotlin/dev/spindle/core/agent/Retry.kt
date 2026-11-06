@@ -168,6 +168,12 @@ object Retry {
                 // Fatal rejections (bad key, context length, content filter) end
                 // the run at once; they will never succeed by waiting.
                 if (!canRetry) throw e
+                // A *declared* verdict says whether the failure is retryable at
+                // all — it must not also mean "retry without limit". Previously a
+                // declared `true` skipped this budget check entirely, so `429
+                // rate limited` retried forever and `maxRetries` was ignored for
+                // exactly the failures it exists for. Only a genuine connectivity
+                // drop is unbounded.
                 if (!network && attempt > fatalRetries) throw e
                 val hint = retryAfterMs(e)
                 // Connectivity: patient, capped backoff. Other transient: normal.

@@ -360,4 +360,51 @@ class RetryTest {
         assertIs<RuntimeException>(error)
         assertEquals(1, calls, "a declared non-retryable verdict must not be retried")
     }
+
+    @Test
+    fun `a declared retryable verdict still respects the attempt budget`() = runTest {
+        // Regression: a declared `retryable = true` skipped the budget check, so a
+        // 429 that the adapter marked retryable retried forever and maxRetries was
+        // ignored for exactly the case it exists for.
+        var calls = 0
+        val error = capture {
+            Retry.withResilientRetry(
+                fatalRetries = 3,
+                retryable = { true },
+                classify = { true },
+                retryAfterMs = { 1L },
+            ) {
+                calls++
+                throw RuntimeException("429 too many requests")
+            }
+        }
+        assertIs<RuntimeException>(error)
+        // attempt increments before the check `attempt > fatalRetries`, so
+        // fatalRetries = 3 allows attempts 1..3 to retry and attempt 4 to give up:
+        // 4 block executions in total.
+        assertEquals(4, calls, "3 retries then give up on the 4th attempt")
+    }
+
+    @Test
+    fun `a capacity 429 hint is honoured instead of our own backoff`() = runTest {
+        // OpenCode Go says "retry shortly (after 30 s)" in the BODY. Reading only
+        // the Retry-After header gave us a 500ms backoff into a full cell.
+        val text = "OpenAI HTTP 429: {\"error\":{\"type\":\"server_error\"," +
+            "\"message\":\"Upstream request failed: [prefill_cap_refused] the " +
+            "cell is at capacity; retry shortly (after 30 s)\"}}"
+        val parsed = ProviderErrors.retryHintFrom(text)
+        assertEquals(30_000L, parsed)
+    }
+
+    @Test
+    fun `retry hint parsing handles seconds, minutes, millis and garbage`() {
+        val r = ProviderErrors
+        assertEquals(45_000L, r.retryHintFrom("retry in 45 seconds"))
+        assertEquals(90_000L, r.retryHintFrom("please retry after 1.5 minutes"))
+        assertEquals(2_000L, r.retryHintFrom("after 2000 ms"))
+        assertEquals(null, r.retryHintFrom("no hint here"))
+        assertEquals(null, r.retryHintFrom(null))
+        // Bounded so a garbled body cannot stall a run.
+        assertEquals(300_000L, r.retryHintFrom("after 999 minutes"))
+    }
 }

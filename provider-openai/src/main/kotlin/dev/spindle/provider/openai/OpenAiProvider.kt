@@ -306,8 +306,13 @@ class OpenAiProvider(
                             ProviderEvent.Failure(
                                 "OpenAI HTTP ${resp.code}: ${body ?: ""}",
                                 statusCode = resp.code,
+                                // A header is authoritative; when absent, the body
+                                // often states the wait ("retry shortly (after 30 s)").
+                                // Ignoring the body meant we retried in 500ms into a
+                                // full cell and burned every attempt in half a minute.
                                 retryAfterMs = parseRetryAfter(resp.header("retry-after"))
-                                    ?: parseRetryAfter(resp.header("retry-after-ms"), isMillis = true),
+                                    ?: parseRetryAfter(resp.header("retry-after-ms"), isMillis = true)
+                                    ?: ProviderErrors.retryHintFrom(body),
                                 contextOverflow = ProviderErrors.isContextOverflow(body ?: "", resp.code),
                             ),
                         )

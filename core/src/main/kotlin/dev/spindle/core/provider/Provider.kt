@@ -149,6 +149,35 @@ object ProviderErrors {
         val m = message.lowercase()
         return CONTEXT_OVERFLOW_MARKERS.any { it in m }
     }
+
+    /**
+     * Providers sometimes state the wait in the error **body** rather than in a
+     * `Retry-After` header — e.g. OpenCode Go's capacity rejections say
+     * "the cell is at capacity; retry shortly (after 30 s)". Reading only the
+     * header threw that away and fell back to our own sub-second backoff, which
+     * hammered an already-full cell and burned the whole attempt budget in ~30s
+     * of needless retries.
+     *
+     * Recognises "after 30 s", "after 30s", "after 1 minute", "retry in 30
+     * seconds". Returns milliseconds, or null when none is stated. Bounded to
+     * 5 minutes so a garbled body cannot stall a run indefinitely.
+     */
+    private val RETRY_HINT: Regex =
+        Regex("(?:after|retry (?:in|after))\\s+([0-9]+(?:\\.[0-9]+)?)\\s*(ms|milliseconds?|s|secs?|seconds?|m|mins?|minutes?)", RegexOption.IGNORE_CASE)
+
+    fun retryHintFrom(message: String?): Long? {
+        if (message.isNullOrBlank()) return null
+        val m = RETRY_HINT.find(message) ?: return null
+        val value = m.groupValues[1].toDoubleOrNull() ?: return null
+        if (!value.isFinite() || value <= 0.0) return null
+        val unit = m.groupValues[2].lowercase()
+        val ms = when {
+            unit.startsWith("ms") || unit.startsWith("milli") -> value
+            unit == "m" || unit.startsWith("min") -> value * 60_000.0
+            else -> value * 1_000.0
+        }
+        return ms.toLong().coerceIn(1L, 300_000L)
+    }
 }
 
 interface Provider {

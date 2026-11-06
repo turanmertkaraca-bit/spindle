@@ -314,7 +314,7 @@ class AgentLoop(
                         },
                         retryAfterMs = { th -> (th as? ProviderFailure)?.failure?.retryAfterMs },
                         retryable = { th -> (th as? ProviderFailure)?.failure?.retryable },
-                        onRetry = { attempt, err, _ ->
+                        onRetry = { attempt, err, waitMs ->
                             // The previous attempt already streamed deltas for the
                             // text/reasoning parts into the UI. Retract them before
                             // the next attempt emits anything, otherwise the UI
@@ -336,7 +336,13 @@ class AgentLoop(
                             val note = if (network) {
                                 "network unavailable — waiting to reconnect (attempt $attempt)"
                             } else {
-                                "retrying (attempt $attempt/${agent.maxRetries}) after: ${err.message}"
+                                // Keep this to one line. A 429 body is a wall of
+                                // JSON that lands in the transcript and the
+                                // diagnostics log verbatim; the reader wants the
+                                // cause and the wait, not the envelope.
+                                val cause = summarizeProviderError(err.message ?: "")
+                                val wait = if (waitMs > 0) " in ${waitMs / 1000}s" else ""
+                                "retrying (${attempt}/${agent.maxRetries})$wait: $cause"
                             }
                             bus.emit(AgentEvent.Error(sessionId, note))
                         },
@@ -925,6 +931,21 @@ class AgentLoop(
         else metadata + (DURATION_KEY to (clock() - startedAt).toString())
 
     /**
+     * A one-line, human-readable cause from a provider failure message.
+     *
+     * Adapters embed the whole response body (`OpenAI HTTP 429: {"error":{...}}`),
+     * which is noise in the transcript and in the diagnostics log. Prefer the
+     * provider's own `message` field when present, else the text before the JSON,
+     * and hard-cap the length.
+     */
+    private fun summarizeProviderError(message: String): String {
+        val mentioned = MESSAGE_FIELD.find(message)?.groupValues?.getOrNull(1)
+        val base = mentioned ?: message.substringBefore('{').trim().ifBlank { message }
+        val oneLine = WHITESPACE.replace(base, " ").trim()
+        return if (oneLine.length <= 160) oneLine else oneLine.take(157) + "\u2026"
+    }
+
+    /**
      * Clip [text] to [max] characters, keeping both the head and the tail so an
      * error/log line at the end of a long output is never silently lost.
      */
@@ -1157,6 +1178,11 @@ class AgentLoop(
     }
 
     internal companion object {
+        /** Pulls the provider's own `message` field out of a JSON error body. */
+        val MESSAGE_FIELD = Regex("\"message\"\\s*:\\s*\"([^\"]{1,200})\"")
+
+        val WHITESPACE = Regex("\\s+")
+
         const val COMPACT_MARKER = "[compacted]"
         const val AGENTS_FILE = "AGENTS.md"
         /** Injected into every agent's system prompt (incl. subagents). */
