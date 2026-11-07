@@ -407,4 +407,51 @@ class RetryTest {
         // Bounded so a garbled body cannot stall a run.
         assertEquals(300_000L, r.retryHintFrom("after 999 minutes"))
     }
+
+    @Test
+    fun `a capacity rejection gets a much larger budget than an ordinary error`() = runTest {
+        // Real log: five 30s waits then the run died after ~2.5 minutes, because a
+        // capacity 429 consumed the normal 5-attempt budget. A long goal run must
+        // wait a busy cell out instead.
+        var calls = 0
+        val error = capture {
+            Retry.withResilientRetry(
+                fatalRetries = 5,
+                retryable = { true },
+                classify = { true },
+                retryAfterMs = { 1L },
+            ) {
+                calls++
+                if (calls <= 10) throw RuntimeException("429 [prefill_cap_refused] the cell is at capacity")
+                throw RuntimeException("boom")
+            }
+        }
+        assertIs<RuntimeException>(error)
+        assertTrue(calls > 10, "a capacity rejection must outlive the normal budget, got $calls")
+    }
+
+    @Test
+    fun `capacity is detected from the provider wording`() {
+        assertTrue(Retry.isCapacity("Upstream request failed: [prefill_cap_refused] the cell is at capacity"))
+        assertTrue(Retry.isCapacity("provider overloaded"))
+        assertFalse(Retry.isCapacity("invalid api key"))
+        assertFalse(Retry.isCapacity("context length exceeded"))
+    }
+
+    @Test
+    fun `an ordinary transient error still stops at the normal budget`() = runTest {
+        var calls = 0
+        capture {
+            Retry.withResilientRetry(
+                fatalRetries = 2,
+                retryable = { true },
+                classify = { true },
+                retryAfterMs = { 1L },
+            ) {
+                calls++
+                throw RuntimeException("500 server exploded")
+            }
+        }
+        assertEquals(3, calls, "fatalRetries=2 means 3 executions then give up")
+    }
 }

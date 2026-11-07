@@ -59,6 +59,10 @@ object Retry {
             "temporarily unavailable" in m -> true
             "overloaded" in m -> true
             "rate limit" in m -> true
+            "at capacity" in m -> true
+            "capacity" in m -> true
+            "prefill_cap" in m -> true
+            "server_error" in m -> true
             WORD_EOF.containsMatchIn(m) -> true
             else -> false
         }
@@ -97,6 +101,31 @@ object Retry {
             else -> false
         }
     }
+
+    /**
+     * True when the provider is refusing because *it* is at capacity rather than
+     * because of anything we did (OpenCode Go: `[prefill_cap_refused] the cell is
+     * at capacity; retry shortly`). These are transient infrastructure limits
+     * that routinely last minutes, so they get a far larger budget than an
+     * ordinary transient error: a goal run should wait it out, not die.
+     */
+    fun isCapacity(message: String): Boolean {
+        val m = message.lowercase()
+        return "at capacity" in m ||
+            "prefill_cap" in m ||
+            "capacity" in m ||
+            "overloaded" in m
+    }
+
+    /** How many attempts a capacity rejection gets before the run gives up. */
+    const val CAPACITY_ATTEMPTS = 30
+
+    /**
+     * Ceiling for a provider-supplied wait. A capacity hint is usually ~30s; we
+     * allow up to two minutes so a busy cell is genuinely waited out rather than
+     * re-hit early, without letting a garbled body stall the run for an hour.
+     */
+    const val MAX_WAIT_MS = 120_000L
 
     /** Exponential backoff with jitter: attempts start at 1. */
     fun backoffMs(attempt: Int, base: Long = 500, cap: Long = 8_000): Long {
@@ -174,12 +203,16 @@ object Retry {
                 // rate limited` retried forever and `maxRetries` was ignored for
                 // exactly the failures it exists for. Only a genuine connectivity
                 // drop is unbounded.
-                if (!network && attempt > fatalRetries) throw e
+                // Capacity rejections are the provider's problem and routinely
+                // last minutes; give them their own, much larger budget so a
+                // long goal run waits rather than dying after ~2.5 minutes.
+                val budget = if (isCapacity(e.message ?: "")) CAPACITY_ATTEMPTS else fatalRetries
+                if (!network && attempt > budget) throw e
                 val hint = retryAfterMs(e)
                 // Connectivity: patient, capped backoff. Other transient: normal.
                 // A provider Retry-After hint always wins, bounded to one minute.
                 val wait = if (hint != null && hint > 0) {
-                    minOf(hint, 60_000)
+                    minOf(hint, MAX_WAIT_MS)
                 } else if (network) {
                     backoffMs(attempt, base = 1_000, cap = 30_000)
                 } else {
