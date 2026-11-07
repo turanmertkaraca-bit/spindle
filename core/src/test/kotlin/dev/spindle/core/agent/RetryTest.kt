@@ -329,7 +329,7 @@ class RetryTest {
     }
 
     @Test
-    fun `retry-after hint is capped at one minute`() = runTest {
+    fun `retry-after hint is bounded so a garbled body cannot stall a run`() = runTest {
         val waits = mutableListOf<Long>()
         val error = capture {
             Retry.withResilientRetry(
@@ -341,7 +341,9 @@ class RetryTest {
             }
         }
         assertIs<RuntimeException>(error)
-        assertEquals(listOf(60_000L), waits)
+        // Raised from 1 to 2 minutes: a capacity hint is usually ~30s, and waiting
+        // out a busy cell is better than re-hitting it early. Still bounded.
+        assertEquals(listOf(Retry.MAX_WAIT_MS), waits)
     }
 
     @Test
