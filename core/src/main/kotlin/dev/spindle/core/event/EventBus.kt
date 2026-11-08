@@ -145,6 +145,12 @@ class EventBus {
 
     private val counter = AtomicLong(0)
 
+    /** How many short waits [publish] will attempt before giving up. */
+    private val PUBLISH_RETRIES = 8
+
+    /** Wait per retry; 8 * 5ms bounds the stall at ~40ms. */
+    private val PUBLISH_RETRY_MS = 5L
+
     /** Bounded replay ring of the most recent entries, oldest first. */
     private val ring = ArrayDeque<Entry>()
     private val ringLock = Any()
@@ -158,8 +164,34 @@ class EventBus {
             val entry = Entry(counter.incrementAndGet(), event)
             ring.addLast(entry)
             while (ring.size > REPLAY_CAPACITY) ring.removeFirst()
-            sequences.tryEmit(entry)
-            flow.tryEmit(event)
+            publish(sequences, entry)
+            publish(flow, event)
+        }
+    }
+
+    /**
+     * Publish without ever dropping an event the UI depends on.
+     *
+     * `tryEmit` returns false when the buffer is full AND the overflow policy
+     * refuses the new element. With `DROP_OLDEST` that cannot normally happen,
+     * but it can for a terminal `StateChanged` racing a burst of deltas on a slow
+     * collector, and losing it is catastrophic in a specific way: the screen
+     * stays `busy = true` forever, or a run ends and nothing tells the UI. The
+     * user sees a chat that "just stopped".
+     *
+     * So: try the non-blocking path first (the common case, and it preserves
+     * ordering), and if it refuses, retry briefly. A dropped progress event
+     * degrades to a missed spinner tick; a dropped terminal event is a silent
+     * failure, and those are not equivalent.
+     */
+    private fun <T> publish(target: MutableSharedFlow<T>, value: T) {
+        if (target.tryEmit(value)) return
+        // The buffer is momentarily saturated. Spin a few short intervals rather
+        // than blocking the agent loop: bounded, so a genuinely dead collector
+        // still cannot wedge the run (the replay ring is the safety net).
+        repeat(PUBLISH_RETRIES) {
+            Thread.sleep(PUBLISH_RETRY_MS)
+            if (target.tryEmit(value)) return
         }
     }
 

@@ -3996,6 +3996,18 @@ class ChatViewModel(
             )
             val notice = RunEndPolicy.notice(cause)
             diag("watchdog: ${cause.name} -> ${notice.message ?: "silent"}")
+            // The run job is done, so the UI must not still look busy: a terminal
+            // StateChanged can be lost when its publish is refused while the
+            // buffer is saturated, and with no later event there is no sequence
+            // gap for the collector to notice. Always clear the spinner and
+            // resync from the store (the authoritative source) — the replay ring
+            // is only kept for diagnostics here, because "is it in the ring" does
+            // not tell us whether the UI *applied* it.
+            val inRing = bus.replayAfter(lastEventSeq)
+                .count { it.event is AgentEvent.StateChanged && it.event.sessionId == sid }
+            if (inRing == 0) diag("watchdog: terminal StateChanged missing from the replay ring")
+            _state.value = _state.value.copy(busy = false)
+            reconcileCurrent()
             _state.value = _state.value.copy(
                 busy = false,
                 error = notice.message ?: _state.value.error,

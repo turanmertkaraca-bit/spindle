@@ -1,6 +1,8 @@
 package dev.spindle.core.event
 
+import dev.spindle.core.model.PartId
 import dev.spindle.core.model.SessionId
+import dev.spindle.core.model.SessionState
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -78,5 +80,32 @@ class EventBusTest {
         assertEquals(listOf(1L, 2L), tagged.map { it.seq })
         assertEquals(listOf("a", "b"), tagged.map { (it.event as AgentEvent.Progress).message })
         assertEquals(2, plain.size, "existing collectors of events keep receiving every event")
+    }
+
+    /**
+     * A terminal `StateChanged` must never be lost to a saturated buffer.
+     *
+     * Losing it is catastrophic in a specific way: `busy` stays true forever, or a
+     * finished run looks like it "just stopped" with no explanation. The bus used
+     * a bare `tryEmit`; [EventBus.emit] now retries briefly when the buffer
+     * refuses, so the event survives.
+     */
+    @Test
+    fun `a terminal state event lands in the ring even under a burst`() {
+        val bus = EventBus()
+        val sid = SessionId("ses_burst")
+        // Saturate the publish path with far more events than the buffer holds.
+        repeat(5_000) {
+            bus.emit(AgentEvent.PartDelta(sid, "m", PartId("p"), DeltaKind.TEXT, "x"))
+        }
+        bus.emit(AgentEvent.StateChanged(sid, SessionState.IDLE))
+
+        val terminal = bus.replayAfter(bus.lastSeq() - 1)
+            .map { it.event }
+            .filterIsInstance<AgentEvent.StateChanged>()
+        assertTrue(
+            terminal.any { it.state == SessionState.IDLE },
+            "the terminal StateChanged must be present in the replay ring",
+        )
     }
 }
