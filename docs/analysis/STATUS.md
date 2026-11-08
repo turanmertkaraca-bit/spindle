@@ -180,3 +180,39 @@ Append it under the right tier with: an id, one-line description, a pointer to
 an analysis file. If it is non-trivial, write the analysis file first — an item
 without a detail file forces the next agent to start from scratch, which is the
 exact problem these docs exist to prevent.
+
+### [x] FREEZE-01 · The chat froze (ANR) and teleported mid-transcript — FIXED `5e90bfc`
+Owner: *"the app just froze on me android said the app stoped working"* and
+*"teleporting me to some the middle of the chat"*. **One root cause, and it is a
+main-thread infinite loop:**
+
+```kotlin
+snapshotFlow { listState.layoutInfo }.collect { info ->
+    if (gap > 0) listState.scrollBy(gap.toFloat())   // <-- scroll inside the collector
+    else if (gap < 0) listState.scrollBy((-gap).toFloat())
+}
+```
+
+`scrollBy` invalidates layout → layout changes `layoutInfo` → the collector fires
+again → scrolls again. It never settles: that is the ANR, and every partial layout
+pass issued another corrective scroll, which is the teleporting. Worse, `gap > 0`
+means **empty space below a short tail**, which no scroll can remove — so one
+branch could never converge.
+
+Fix: `ChatScrollPolicy` splits the decision from the action.
+- `correction(...)` returns `None` / `JumpToLast` / `ScrollBy`, and `None` covers
+  both "already aligned" and "empty space below" → a settled transcript scrolls
+  not at all.
+- `shouldFollow(...)` is **tri-state** (`Boolean?`): `null` means inconclusive, and
+  the caller keeps its previous value. Collapsing that to a plain `Boolean` was my
+  own regression (`e487e6b`) and it re-broke following.
+- It takes `pinnedOnce`: before the first pin the list is at the top only because
+  nothing has scrolled it yet, so it counts as "at the tail". Without that the
+  decision latches: not following → won't pin → stays at the top → still "not
+  following".
+- The pin effect keys on `(listState, count, lastBodyLength)` so a *growing* answer
+  re-arms it, and sub-pixel gaps are ignored so layout rounding cannot keep it
+  alive.
+
+15 JVM tests in `ChatScrollPolicyTest`, including the exact freeze case, the
+latch, and "repeatedly measuring a settled list always says None".
