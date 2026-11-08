@@ -55,9 +55,28 @@ class ChatScrollPolicyTest {
         assertFalse(
             ChatScrollPolicy.shouldFollow(
                 canScrollForward = true, totalItems = 50, lastVisibleIndex = 20,
-                lastVisibleEnd = 800, viewportEnd = 800, scrolling = false, tolerancePx = 4f,
+                // Genuinely away from the bottom: the last visible row ends well
+                // above the viewport bottom AND the index is far from the end.
+                lastVisibleEnd = 400, viewportEnd = 800, scrolling = false, tolerancePx = 4f,
             ),
             "a reader looking at old messages must not be dragged to the bottom",
+        )
+    }
+
+    /**
+     * The bug that made the "latest" cue stick permanently: rows taller than the
+     * viewport mean a reader at the bottom can have a last-visible index far from
+     * `totalItems - 1`. Judging by index alone said "not at the tail" even though
+     * the last row reached the bottom.
+     */
+    @Test
+    fun `a tall row reaching the bottom counts as the tail even with a low index`() {
+        assertTrue(
+            ChatScrollPolicy.shouldFollow(
+                canScrollForward = true, totalItems = 50, lastVisibleIndex = 40,
+                lastVisibleEnd = 800, viewportEnd = 800, scrolling = false, tolerancePx = 4f,
+            ),
+            "geometry (the row reaches the bottom) must win over the index heuristic",
         )
     }
 

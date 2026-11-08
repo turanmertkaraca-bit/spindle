@@ -48,15 +48,25 @@ object ChatScrollPolicy {
         tolerancePx: Float,
     ): Boolean {
         if (totalItems == 0) return true
-        // Nothing to scroll: we are by definition at the tail.
+        // Nothing to scroll: we are by definition at the tail. This is the ONLY
+        // reliable "at the bottom" signal, because it comes from the scroll
+        // container rather than from geometry we infer.
         if (!canScrollForward) return true
-        val index = lastVisibleIndex ?: return true
-        // A row is appended below the fold: the reader has moved up deliberately.
-        if (index < totalItems - 2) return false
         // Never fight an in-flight gesture.
         if (scrolling) return false
+        val index = lastVisibleIndex ?: return true
         val gap = viewportEnd - lastVisibleEnd
-        return kotlin.math.abs(gap) <= tolerancePx
+        // Geometry says the last visible row reaches the viewport bottom.
+        if (kotlin.math.abs(gap) <= tolerancePx) return true
+        // Otherwise fall back to the row-index heuristic.
+        //
+        // The gap check MUST come first: rows can be taller than the viewport, so
+        // a reader who is genuinely at the bottom can have a last-visible index far
+        // from `totalItems - 1`. Judging by index alone reported "not at the tail"
+        // for anyone reading a long answer, which showed the "latest" cue
+        // permanently and made the pin effect refuse to follow. The index test only
+        // decides the ambiguous case where the geometry is inconclusive.
+        return index >= totalItems - 2
     }
 
     /**
