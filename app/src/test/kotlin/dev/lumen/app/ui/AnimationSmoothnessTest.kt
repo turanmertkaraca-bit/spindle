@@ -105,49 +105,31 @@ class AnimationSmoothnessTest {
                 ScreenshotSupport.writePng(frame, File(dir, "think_%02d.png".format(i)))
             }
 
-            val firstLast = ScreenshotSupport.meanAbsDiff(frames.first(), frames.last())
-            val consecutive = frames.zipWithNext { a, b -> ScreenshotSupport.meanAbsDiff(a, b) }
-            val medianConsecutive = median(consecutive)
-            val maxConsecutive = consecutive.maxOrNull() ?: 0.0
-            val hitchRatio = if (medianConsecutive > 1e-6) maxConsecutive / medianConsecutive else Double.MAX_VALUE
-            val distanceToLast = frames.map { ScreenshotSupport.meanAbsDiff(it, frames.last()) }
+            val m = MotionMetrics.from(frames)
+            println("[anim] ${m.summary()}")
+            File(dir, "metrics.txt").writeText(m.report())
 
-            val tailCount = minOf(8, distanceToLast.size)
-            val tail = distanceToLast.takeLast(tailCount)
-            val convergenceTolerance = maxOf(0.25, tail.firstOrNull()?.times(0.1) ?: 0.0)
-            val converged = tail.zipWithNext().all { (a, b) -> b <= a + convergenceTolerance }
-
-            var distinctPairs = 0
-            for (d in consecutive) if (d > 0.01) distinctPairs++
-
-            println(
-                "[anim] frames=${frames.size} firstLast=%.4f".format(firstLast) +
-                    " medianConsec=%.4f".format(medianConsecutive) +
-                    " maxConsec=%.4f".format(maxConsecutive) +
-                    " hitchRatio=%.2f".format(hitchRatio) +
-                    " converged=$converged distinctPairs=$distinctPairs",
-            )
-            File(dir, "metrics.txt").writeText(
-                buildString {
-                    appendLine("frames=${frames.size}")
-                    appendLine("firstLast=%.4f".format(firstLast))
-                    appendLine("medianConsecutive=%.4f".format(medianConsecutive))
-                    appendLine("maxConsecutive=%.4f".format(maxConsecutive))
-                    appendLine("hitchRatio=%.2f".format(hitchRatio))
-                    appendLine("converged=$converged")
-                    appendLine("distinctPairs=$distinctPairs")
-                },
-            )
-            if (firstLast <= 0.25) println("[anim] WARN: first and last frames look nearly identical (no visible motion)")
-            if (!converged) println("[anim] WARN: frames did not settle monotonically toward the last frame")
-            if (hitchRatio > 6.0) println("[anim] WARN: possible hitch (max/median consecutive diff > 6x)")
+            // Warnings are advisory only; the hard checks below are deterministic
+            // geometry, so they cannot flake on Robolectric rasterisation.
+            if (m.firstLast <= 0.25) println("[anim] WARN: first and last frames look nearly identical (no visible motion)")
+            if (!m.converged) println("[anim] WARN: frames did not settle monotonically toward the last frame")
+            if (m.hitchRatio != null && m.hitchRatio > 6.0) {
+                println("[anim] WARN: possible hitch (max/median consecutive diff > 6x)")
+            }
 
             AnimatedGifWriter.write(frames, File(dir, "think_expand.gif"), delayMs = 80)
 
-            // The one hard check: the harness must actually have captured motion.
-            check(frames.size >= 2 && distinctPairs >= 1) {
+            // Hard checks: the harness must have captured motion, and the
+            // expansion must actually come to rest. A spring that never settles is
+            // the "jitter" the owner complained about, and it used to be only a
+            // printed warning that could never fail a build.
+            check(frames.size >= 2 && m.distinctPairs >= 1) {
                 "expected >= 2 distinct frames from the think-expansion animation, " +
-                    "got ${frames.size} frames / $distinctPairs distinct transitions"
+                    "got ${frames.size} frames / ${m.distinctPairs} distinct transitions"
+            }
+            check(m.converged) {
+                "the think-expansion animation never settled: distances to the final frame " +
+                    "were not monotonically decreasing (${m.report().trim().replace("\n", ", ")})"
             }
         } finally {
             compose.mainClock.autoAdvance = true
@@ -198,25 +180,18 @@ class AnimationSmoothnessTest {
             }
             ScreenshotSupport.writePng(frames.last(), File(dir, "todo_expanded.png"))
 
-            var distinctPairs = 0
-            for (i in 1 until frames.size) {
-                if (ScreenshotSupport.meanAbsDiff(frames[i - 1], frames[i]) > 0.01) distinctPairs++
-            }
-            println("[anim] todo frames=${frames.size} distinctPairs=$distinctPairs")
+            val m = MotionMetrics.from(frames)
+            println("[anim] todo ${m.summary()}")
 
-            check(frames.size >= 2 && distinctPairs >= 1) {
+            check(frames.size >= 2 && m.distinctPairs >= 1) {
                 "expected >= 2 distinct frames from the todo-board expansion, " +
-                    "got ${frames.size} frames / $distinctPairs distinct transitions"
+                    "got ${frames.size} frames / ${m.distinctPairs} distinct transitions"
+            }
+            check(m.converged) {
+                "the todo-board expansion never settled: ${m.report().trim().replace("\n", ", ")}"
             }
         } finally {
             compose.mainClock.autoAdvance = true
         }
-    }
-
-    private fun median(xs: List<Double>): Double {
-        if (xs.isEmpty()) return 0.0
-        val sorted = xs.sorted()
-        val mid = sorted.size / 2
-        return if (sorted.size % 2 == 0) (sorted[mid - 1] + sorted[mid]) / 2.0 else sorted[mid]
     }
 }
