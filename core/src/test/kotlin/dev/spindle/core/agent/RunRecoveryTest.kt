@@ -57,7 +57,7 @@ class RunRecoveryTest {
         val message = store.message(SessionId("ses_stale"), MessageId("msg_open"))
         assertNotNull(message)
         assertEquals(FinishReason.ERROR, message.finish)
-        assertEquals("aborted", message.error)
+        assertEquals(RunRecovery.INTERRUPTED, message.error)
         val tool = message.parts.single() as Part.Tool
         assertEquals(ToolState.ERROR, tool.state)
         assertEquals("aborted", tool.result?.output)

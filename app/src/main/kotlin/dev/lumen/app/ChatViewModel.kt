@@ -27,6 +27,7 @@ import dev.lumen.app.platform.RunService
 import dev.lumen.app.platform.WorkspaceActions
 import dev.lumen.app.platform.WorkspaceWatcher
 import dev.lumen.app.ui.model.StepKind
+import dev.lumen.app.ui.RunEndPolicy
 import dev.lumen.app.ui.model.StepMapper
 import dev.lumen.app.ui.model.UiStep
 import dev.spindle.core.model.FileEdit
@@ -593,12 +594,36 @@ class ChatViewModel(
     private var completionSuppressed = false
 
     /**
+     * Watches the run launched by [send] and reports if it ends without the loop
+     * ever signalling a clean finish.
+     *
+     * The owner's report — "dropped the chat without an interrupt alert, it just
+     * stopped" — is the case this exists for: a run that dies from a cause the
+     * loop itself never surfaced (a swallowed throwable, a lost event, an async
+     * teardown) leaves the screen idle with no explanation. Silence is the one
+     * outcome a long-running agent must never produce, so the watchdog makes the
+     * failure visible and the notification fire even on that path.
+     */
+    private var runWatchdog: Job? = null
+
+    /**
      * The run generation that currently owns [perf], or 0 when none. Guarded by
      * [perfLock]; lets a superseded run's teardown refuse to stop the sampler
      * that a newer run already started.
      */
     private val perfLock = Any()
     private var perfGeneration = 0
+
+    /**
+     * True once `AgentLoop.prompt` returned normally for the CURRENT run.
+     *
+     * Reset by [send]. Read by [runWatchdog]. A volatile flag rather than
+     * inspecting the coroutine's state because the interesting question is not
+     * "is the job alive" (it can be alive during teardown) but "did the loop
+     * report an outcome".
+     */
+    @Volatile
+    private var loopReturned = false
 
     /** Bumped on every session switch so a slow `openSession` cannot land stale. */
     private var sessionOpenToken = 0
@@ -884,7 +909,21 @@ class ChatViewModel(
      */
     suspend fun runStartupMaintenance(onProgress: (String) -> Unit = {}): String {
         onProgress("recovering runs…")
-        stage { RunRecovery.reconcile(store, runningSessions ?: emptySet()) }
+        // Count what was repaired: a run interrupted by the process dying is
+        // otherwise invisible until the user opens that exact chat. Telling them
+        // on launch is what turns "it just stopped" into "it stopped because the
+        // app was closed".
+        val interrupted = stageValue { RunRecovery.reconcile(store, runningSessions ?: emptySet()) } ?: 0
+        if (interrupted > 0) {
+            diag("recovered $interrupted interrupted run(s)")
+            _state.value = _state.value.copy(
+                hint = if (interrupted == 1) {
+                    "1 run was interrupted when the app last stopped"
+                } else {
+                    "$interrupted runs were interrupted when the app last stopped"
+                },
+            )
+        }
 
         onProgress("pruning history…")
         stage { store.prune(keepSessions = KEEP_SESSIONS) }
@@ -934,6 +973,14 @@ class ChatViewModel(
         // cancellation, though, is a real teardown and must still propagate.
         runCatching { block() }.onFailure { if (it is CancellationException) throw it }
     }
+
+    /**
+     * [stage] for a step whose RESULT the caller needs (e.g. how many runs were
+     * repaired). Same best-effort semantics: a failure yields null and lets the
+     * boot continue, but cancellation still propagates.
+     */
+    private suspend fun <T> stageValue(block: suspend () -> T): T? =
+        runCatching { block() }.onFailure { if (it is CancellationException) throw it }.getOrNull()
 
     /**
      * Delete the regenerable boot caches and return the bytes reclaimed: the
@@ -1923,7 +1970,10 @@ class ChatViewModel(
      * boundary.
      */
     private fun switchTo(project: Project) {
-        stop()
+        // Switching project cancels any live run. Say why, because the chat closes
+        // at the same time and the user would otherwise see the answer vanish with
+        // no explanation — the "it just stopped" report.
+        stop("you switched to the \u201c${project.name}\u201d project")
         workspace = project.dir.toPath()
         workspaceTruncated = false
         completionIndex = null
@@ -3781,6 +3831,8 @@ class ChatViewModel(
 
         val generation = ++runGeneration
         completionSuppressed = false
+        loopReturned = false
+        runWatchdog?.cancel()
         runStartedAt = System.currentTimeMillis()
         runningSessionId = currentId
         runningSessions?.add(currentId)
@@ -3874,6 +3926,7 @@ class ChatViewModel(
                     ).apply { compactAtFraction = _state.value.autoCompactPercent / 100.0 },
                     rules = if (keys.terseReplies) TERSE_RULES else null,
                 )
+                loopReturned = true
                 diag("run finished")
             } catch (e: CancellationException) {
                 // A user stop (or a superseding run) is an expected end, not an
@@ -3918,9 +3971,66 @@ class ChatViewModel(
             }
             if (generation == runGeneration) refreshSessions()
         }
+
+        // The watchdog: if the run coroutine ENDS without `AgentLoop.prompt`
+        // having returned, the user was left with a silent stop. Say so plainly on
+        // the screen and in the shade, so "it just stopped" always has an
+        // explanation the next time. A user stop bumps the generation and sets
+        // completionSuppressed, so an intentional stop is still silent.
+        val watchdogJob = scope.launch {
+            val finished = runJob?.join() != null
+            if (!finished) return@launch
+            if (generation != runGeneration) return@launch
+            if (loopReturned || completionSuppressed) return@launch
+            // The run coroutine ENDED but `AgentLoop.prompt` never returned. From
+            // the user's side that is indistinguishable from a hang: the chat goes
+            // idle and nothing explains it. RunEndPolicy decides what to say, so
+            // the "never silent" rule is one testable place rather than an
+            // accident of which `finally` happened to win.
+            val cause = RunEndPolicy.classify(
+                userStopped = false,
+                superseded = false,
+                loopReturned = loopReturned,
+                loopFailed = _state.value.error != null,
+                reason = null,
+            )
+            val notice = RunEndPolicy.notice(cause)
+            diag("watchdog: ${cause.name} -> ${notice.message ?: "silent"}")
+            _state.value = _state.value.copy(
+                busy = false,
+                error = notice.message ?: _state.value.error,
+            )
+            runningSessionId = null
+            runningSessions?.remove(sid.value)
+            syncRunningSessions()
+            if (notice.notify) {
+                context?.let { ctx ->
+                    val title = runCatching { store.session(sid)?.title }
+                        .getOrNull().orEmpty().ifBlank { "Lumen run" }
+                    runCatching {
+                        RunService.notifyInterrupted(ctx, sid.value, title, notice.message.orEmpty())
+                    }
+                }
+            }
+        }
+        runWatchdog = watchdogJob
     }
 
-    fun stop() {
+    /**
+     * Stop the live run.
+     *
+     * [reason] exists because a stop is not always the user pressing Stop. A
+     * project switch, a chat close or a new send also cancel the run, and those
+     * used to be completely silent: the owner's "it just stopped, no alert"
+     * report is precisely that. Naming the cause means the screen can say why the
+     * work ended instead of going quiet. A plain Stop press passes null and stays
+     * silent, because the user already knows — they did it.
+     */
+    fun stop(reason: String? = null) {
+        val wasRunning = _state.value.busy || runJob?.isActive == true
+        // Capture the session BEFORE the live marker is cleared: the shade
+        // notification below needs it, and it is gone two lines later.
+        val stoppedSession = runningSessionId
         runGeneration++
         completionSuppressed = true
         runJob?.cancel()
@@ -3936,8 +4046,25 @@ class ChatViewModel(
         // stop() is authoritative: kill the live sampler even though the run's
         // own finally now sees a bumped generation and would skip it.
         reportPerf(stopPerfNow())
-        diag("run stopped")
-        _state.value = _state.value.copy(busy = false, ask = null)
+        diag(if (reason != null) "run stopped: $reason" else "run stopped")
+        _state.value = _state.value.copy(
+            busy = false,
+            ask = null,
+            // Only surface a hint when something OTHER than the user's own Stop
+            // ended the run, and only if it was actually running: a hint on an
+            // idle chat is noise.
+            hint = if (reason != null && wasRunning) "run stopped \u00b7 $reason" else _state.value.hint,
+        )
+        // A non-user stop must also reach the shade: with the Activity
+        // backgrounded the on-screen hint is invisible, and that is exactly when
+        // "it just stopped" happens with no explanation.
+        if (reason != null && wasRunning && stoppedSession != null) {
+            context?.let { ctx ->
+                val title = runCatching { store.session(SessionId(stoppedSession))?.title }
+                    .getOrNull().orEmpty().ifBlank { "Lumen run" }
+                runCatching { RunService.notifyInterrupted(ctx, stoppedSession, title, reason) }
+            }
+        }
     }
 
     override fun onCleared() {

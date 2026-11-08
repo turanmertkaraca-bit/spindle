@@ -443,6 +443,48 @@ class RunService : Service() {
             }
         }
 
+        /**
+         * Announce that a run ended WITHOUT a clean finish.
+         *
+         * Distinct from `notifyComplete(failed = true)`: a failure is the loop
+         * reporting an error, which the user can read in the transcript. An
+         * interruption means the run vanished — the screen went idle and nothing
+         * explained why. The owner's report was exactly that ("dropped the chat
+         * without an interrupt alert"), so this path must always make a sound and
+         * a visible notification, never be silently swallowed.
+         *
+         * Uses the error channel (its sound is the water-drop dong) so the user
+         * can tell it apart from a normal completion without unlocking the phone.
+         */
+        fun notifyInterrupted(context: Context, sessionId: String, title: String, reason: String) {
+            runCatching {
+                val manager = context.getSystemService(NotificationManager::class.java) ?: return
+                ensureResultChannel(context, manager, failed = true)
+                val notification = NotificationCompat.Builder(context, CHANNEL_ID_ERROR)
+                    .setContentTitle(title.ifBlank { "Lumen" })
+                    .setContentText("run interrupted \u00b7 $reason")
+                    .setStyle(
+                        NotificationCompat.BigTextStyle()
+                            .bigText("The run stopped before it finished. $reason"),
+                    )
+                    .setSmallIcon(R.drawable.ic_launcher_monochrome)
+                    .setContentIntent(sessionIntent(context, sessionId))
+                    .setTicker("$title \u2014 run interrupted")
+                    .setCategory(NotificationCompat.CATEGORY_ERROR)
+                    .setShowWhen(true)
+                    .setAutoCancel(true)
+                    .setOnlyAlertOnce(false)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .apply {
+                        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                            setSound(errorSound(context))
+                        }
+                    }
+                    .build()
+                manager.notify(resultNotificationId(sessionId), notification)
+            }
+        }
+
         /** "2m 10s" / "45s" / null when the run time is unknown or negligible. */
         private fun durationLabel(durationMs: Long?): String? {
             if (durationMs == null || durationMs < 1_000) return null

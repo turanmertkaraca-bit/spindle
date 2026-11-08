@@ -22,6 +22,15 @@ import kotlinx.coroutines.CancellationException
  */
 object RunRecovery {
     /**
+     * Error text written onto a run whose process died mid-answer.
+     *
+     * Deliberately a sentence rather than the bare word "aborted": the user sees
+     * this in the transcript, and "aborted" is indistinguishable from having
+     * pressed Stop themselves.
+     */
+    const val INTERRUPTED = "interrupted — the app was closed or stopped before this answer finished"
+
+    /**
      * Repair sessions left RUNNING by a killed process. A run cannot outlive its
      * process, so any RUNNING session whose id is not in [liveSessionIds] is
      * stale: its open tool parts become ERROR "aborted", any open assistant
@@ -76,7 +85,12 @@ object RunRecovery {
                 message.copy(
                     parts = parts,
                     finish = if (openAssistant) FinishReason.ERROR else message.finish,
-                    error = message.error ?: if (openAssistant) "aborted" else null,
+                    // Say WHY, in words the user can act on. "aborted" reads like
+                    // the user cancelled a run they never touched; the truth is
+                    // that the app process went away mid-answer (low-memory kill,
+                    // OS reclaim, crash). That distinction is the difference
+                    // between a mysterious silent stop and an explanation.
+                    error = message.error ?: if (openAssistant) INTERRUPTED else null,
                 ),
             )
         }
