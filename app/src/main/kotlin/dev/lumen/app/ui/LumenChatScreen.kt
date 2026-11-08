@@ -651,7 +651,14 @@ fun LumenChatScreen(
                 scrolling = listState.isScrollInProgress,
                 tolerancePx = tailTolerancePx,
             )
-        }.collect { desired -> followTail = desired }
+        }.collect { desired ->
+            // Tri-state: null means "the measurement is inconclusive, keep what
+            // the reader had". Assigning unconditionally let one ambiguous layout
+            // pass flip a reader at the tail into "not following", which is what
+            // showed the latest-cue permanently and stopped the pin from
+            // following a streaming answer.
+            if (desired != null) followTail = desired
+        }
     }
     // Keep the last row pinned to the tail. A snapshotFlow on layoutInfo re-emits
     // both on content growth (the old per-token body-length key) and on viewport

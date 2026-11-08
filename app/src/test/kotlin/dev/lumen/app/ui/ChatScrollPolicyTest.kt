@@ -32,7 +32,8 @@ class ChatScrollPolicyTest {
 
     @Test
     fun `an empty list is at the tail`() {
-        assertTrue(
+        assertEquals(
+            true,
             ChatScrollPolicy.shouldFollow(
                 canScrollForward = false, totalItems = 0, lastVisibleIndex = null,
                 lastVisibleEnd = 0, viewportEnd = 0, scrolling = false, tolerancePx = 4f,
@@ -42,7 +43,8 @@ class ChatScrollPolicyTest {
 
     @Test
     fun `content that fits is at the tail`() {
-        assertTrue(
+        assertEquals(
+            true,
             ChatScrollPolicy.shouldFollow(
                 canScrollForward = false, totalItems = 3, lastVisibleIndex = 2,
                 lastVisibleEnd = 500, viewportEnd = 800, scrolling = false, tolerancePx = 4f,
@@ -52,7 +54,8 @@ class ChatScrollPolicyTest {
 
     @Test
     fun `scrolling up past the last two rows stops following`() {
-        assertFalse(
+        assertEquals(
+            false,
             ChatScrollPolicy.shouldFollow(
                 canScrollForward = true, totalItems = 50, lastVisibleIndex = 20,
                 // Genuinely away from the bottom: the last visible row ends well
@@ -71,7 +74,8 @@ class ChatScrollPolicyTest {
      */
     @Test
     fun `a tall row reaching the bottom counts as the tail even with a low index`() {
-        assertTrue(
+        assertEquals(
+            true,
             ChatScrollPolicy.shouldFollow(
                 canScrollForward = true, totalItems = 50, lastVisibleIndex = 40,
                 lastVisibleEnd = 800, viewportEnd = 800, scrolling = false, tolerancePx = 4f,
@@ -81,8 +85,11 @@ class ChatScrollPolicyTest {
     }
 
     @Test
-    fun `an in-flight gesture is never fought`() {
-        assertFalse(
+    fun `an in-flight gesture is inconclusive, not "away from the tail"`() {
+        // Returning false here would flip a reader who is mid-fling-towards-the-
+        // tail into "not following" and stick the latest-cue on screen.
+        assertEquals(
+            null,
             ChatScrollPolicy.shouldFollow(
                 canScrollForward = true, totalItems = 50, lastVisibleIndex = 49,
                 lastVisibleEnd = 700, viewportEnd = 800, scrolling = true, tolerancePx = 4f,
@@ -91,8 +98,22 @@ class ChatScrollPolicyTest {
     }
 
     @Test
+    fun `an ambiguous near-end measurement is inconclusive`() {
+        // Near the end by index, but the measured gap disagrees. The caller must
+        // keep its previous belief rather than being forced to "not following".
+        assertEquals(
+            null,
+            ChatScrollPolicy.shouldFollow(
+                canScrollForward = true, totalItems = 50, lastVisibleIndex = 48,
+                lastVisibleEnd = 700, viewportEnd = 800, scrolling = false, tolerancePx = 4f,
+            ),
+        )
+    }
+
+    @Test
     fun `being within the tolerance counts as the tail`() {
-        assertTrue(
+        assertEquals(
+            true,
             ChatScrollPolicy.shouldFollow(
                 canScrollForward = true, totalItems = 50, lastVisibleIndex = 49,
                 lastVisibleEnd = 797, viewportEnd = 800, scrolling = false, tolerancePx = 4f,

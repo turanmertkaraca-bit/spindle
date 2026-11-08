@@ -37,6 +37,8 @@ object ChatScrollPolicy {
      * @param viewportEnd       viewport bottom, minus any content padding.
      * @param scrolling         true while a user gesture or fling is in flight.
      * @param tolerancePx       how close counts as "at the bottom".
+     * @return true / false when the measurement decides, or **null** when it is
+     *   inconclusive and the caller should keep its current state.
      */
     fun shouldFollow(
         canScrollForward: Boolean,
@@ -46,27 +48,28 @@ object ChatScrollPolicy {
         viewportEnd: Int,
         scrolling: Boolean,
         tolerancePx: Float,
-    ): Boolean {
+    ): Boolean? {
         if (totalItems == 0) return true
-        // Nothing to scroll: we are by definition at the tail. This is the ONLY
-        // reliable "at the bottom" signal, because it comes from the scroll
-        // container rather than from geometry we infer.
+        // Nothing to scroll: by definition at the tail. This is the only signal
+        // that comes from the scroll container rather than from geometry we infer.
         if (!canScrollForward) return true
-        // Never fight an in-flight gesture.
-        if (scrolling) return false
+        // Never fight an in-flight gesture. Inconclusive rather than false: the
+        // gesture may be a fling towards the tail.
+        if (scrolling) return null
         val index = lastVisibleIndex ?: return true
         val gap = viewportEnd - lastVisibleEnd
-        // Geometry says the last visible row reaches the viewport bottom.
         if (kotlin.math.abs(gap) <= tolerancePx) return true
-        // Otherwise fall back to the row-index heuristic.
+        // Geometry says the tail is off-screen. If the last row is also far from
+        // the end of the list, the reader has clearly scrolled up.
+        if (index < totalItems - 2) return false
+        // Inconclusive: near the end by index, but the measured gap disagrees with
+        // that. Keep whatever the caller already believed.
         //
-        // The gap check MUST come first: rows can be taller than the viewport, so
-        // a reader who is genuinely at the bottom can have a last-visible index far
-        // from `totalItems - 1`. Judging by index alone reported "not at the tail"
-        // for anyone reading a long answer, which showed the "latest" cue
-        // permanently and made the pin effect refuse to follow. The index test only
-        // decides the ambiguous case where the geometry is inconclusive.
-        return index >= totalItems - 2
+        // Returning null (not false) is essential and was the bug: a single
+        // inconclusive layout pass used to flip the reader to "not following" at
+        // startup, which showed the "latest" cue permanently and stopped the pin
+        // effect from following a streaming answer.
+        return null
     }
 
     /**
