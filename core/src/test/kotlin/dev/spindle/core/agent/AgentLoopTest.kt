@@ -12,6 +12,8 @@ import dev.spindle.core.model.Role
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.model.SessionState
+import dev.spindle.core.model.TodoItem
+import dev.spindle.core.model.TodoStatus
 import dev.spindle.core.model.ToolCall
 import dev.spindle.core.model.ToolState
 import dev.spindle.core.model.Usage
@@ -1525,5 +1527,75 @@ class AgentLoopTest {
         loop.prompt(SessionId("ses_continue_bound"), "go", "fake/fake-1")
 
         assertEquals(4, provider.requests.size, "initial turn plus at most three continuations")
+    }
+
+    // ---- goal mode: a long task must not stop at the window boundary ----
+
+    @Test
+    fun `a renewing agent keeps going while todos are open, then winds down`() = runTest {
+        fun tool() = listOf(
+            ProviderEvent.ToolCallStart(0, "c1", "echo"),
+            ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"x\"}"),
+            ProviderEvent.ToolCallEnd(0),
+            ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+        )
+        fun report() = listOf(
+            ProviderEvent.TextDelta("final report"),
+            ProviderEvent.Finished(FinishReason.STOP),
+        )
+        val provider = ScriptedProvider(tool(), tool(), report())
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val sid = SessionId("ses_goal")
+        newSession(store, sid.value)
+        // Open work: the goal is explicitly unfinished.
+        store.setTodos(sid, listOf(TodoItem("t1", "ship the thing", TodoStatus.IN_PROGRESS)))
+
+        // maxRunMillis = 0 makes every window immediately "spent", so this test
+        // exercises the renewal path without waiting on a clock.
+        val agent = AgentConfig(
+            name = "goal",
+            maxSteps = 1,
+            maxRunMillis = 0L,
+            renewsBudget = true,
+            maxBudgetWindows = 2,
+        )
+        val last = loop.prompt(sid, "goal", "fake/fake-1", agent)
+
+        // Two renewals were allowed, so the run went past both windows and
+        // finished with a report instead of stopping on the first boundary.
+        assertEquals(3, provider.requests.size)
+        assertEquals("final report", last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+    }
+
+    @Test
+    fun `a goal agent with nothing outstanding does not renew`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(ProviderEvent.TextDelta("done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val sid = SessionId("ses_goal_done")
+        newSession(store, sid.value)
+        // Every todo finished: there is nothing to keep working on.
+        store.setTodos(sid, listOf(TodoItem("t1", "ship the thing", TodoStatus.DONE)))
+
+        val last = loop.prompt(
+            sid, "goal", "fake/fake-1",
+            AgentConfig(name = "goal", maxRunMillis = 0L, renewsBudget = true, maxBudgetWindows = 5),
+        )
+
+        assertEquals(1, provider.requests.size)
+        assertEquals("done", last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
     }
 }

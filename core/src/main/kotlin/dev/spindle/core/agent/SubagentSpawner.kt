@@ -125,8 +125,26 @@ class SubagentSpawner(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Throwable) {
+            // A child that THREW still did work. Returning a bare "failed" threw
+            // all of it away, so the parent had to redo the whole investigation.
+            // Report what the child wrote before it died, plus the cause.
             store.session(childId)?.let { store.updateSession(it.copy(updatedAt = System.currentTimeMillis())) }
-            return SubagentResult(childId, "subagent failed: ${e.message}", false)
+            val salvaged = runCatching {
+                store.messages(childId)
+                    .asReversed()
+                    .firstOrNull { it.role == Role.ASSISTANT }
+                    ?.parts
+                    ?.filterIsInstance<Part.Text>()
+                    ?.joinToString("") { it.text }
+                    .orEmpty()
+            }.getOrDefault("")
+            val cause = e.message?.takeIf { it.isNotBlank() } ?: e::class.simpleName ?: "unknown error"
+            val body = if (salvaged.isNotBlank()) {
+                "subagent stopped with an error ($cause). Its findings up to that point:\n\n$salvaged"
+            } else {
+                "subagent failed: $cause"
+            }
+            return SubagentResult(childId, body, false)
         }
 
         val text = subagentReport(store, childId, finalMessage)

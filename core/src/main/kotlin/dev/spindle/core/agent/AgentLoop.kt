@@ -12,8 +12,9 @@ import dev.spindle.core.model.PartId
 import dev.spindle.core.model.Role
 import dev.spindle.core.model.SessionId
 import dev.spindle.core.model.SessionState
-import dev.spindle.core.model.ToolCall
 import dev.spindle.core.model.TodoItem
+import dev.spindle.core.model.TodoStatus
+import dev.spindle.core.model.ToolCall
 import dev.spindle.core.model.ToolResult
 import dev.spindle.core.model.ToolState
 import dev.spindle.core.model.Usage
@@ -218,11 +219,53 @@ class AgentLoop(
              */
             var wrapUpReason: String? = null
             var budgetExhausted = false
+            /**
+             * How many budget windows this run has used. A goal run renews its
+             * budget when it still has unfinished todos, so "work until the goal
+             * is met" is actually true instead of a claim contradicted by a
+             * 30-minute wall clock. Bounded, because an agent that never finishes
+             * must still stop eventually.
+             */
+            var windows = 0
+            // Start of the CURRENT window. Renewing moves it forward, so the
+            // wall-clock check becomes a sliding budget rather than a single
+            // absolute deadline that can never be extended.
+            var windowStartedAtMs = runStartedAtMs
             while (true) {
                 currentCoroutineContext().ensureActive()
                 if (wrapUpReason == null &&
-                    System.currentTimeMillis() - runStartedAtMs > (agent.maxRunMillis ?: MAX_RUN_WALL_CLOCK_MS)
+                    System.currentTimeMillis() - windowStartedAtMs > (agent.maxRunMillis ?: MAX_RUN_WALL_CLOCK_MS)
                 ) {
+                    // The wall clock is spent. A goal run that still has open work
+                    // renews for another window instead of stopping: that is the
+                    // difference between "goal mode" and "build mode with a longer
+                    // timeout". Everything else winds down with a report.
+                    val progress = try {
+                        store.todos(sessionId)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Throwable) {
+                        emptyList()
+                    }
+                    val outstanding = progress.count {
+                        it.status == TodoStatus.PENDING || it.status == TodoStatus.IN_PROGRESS
+                    }
+                    val canRenew = agent.renewsBudget &&
+                        outstanding > 0 &&
+                        windows < agent.maxBudgetWindows
+                    if (canRenew) {
+                        windows++
+                        windowStartedAtMs = System.currentTimeMillis()
+                        bus.emit(
+                            AgentEvent.Progress(
+                                sessionId,
+                                "goal mode: extending the run — window ${windows + 1} of at most " +
+                                    "${agent.maxBudgetWindows + 1}, $outstanding todo" +
+                                    (if (outstanding == 1) " still" else "s still") + " open",
+                            ),
+                        )
+                        continue
+                    }
                     // Backstop for a null `maxSteps`: fail every pending tool part of
                     // the last turn so nothing is left PENDING, then wind down
                     // instead of returning nothing.

@@ -31,6 +31,19 @@ data class AgentConfig(
      */
     val maxRunMillis: Long? = null,
     /**
+     * When the wall-clock window is spent, start another instead of stopping —
+     * but only while the session still has PENDING/IN_PROGRESS todos. This is
+     * what makes a *goal* run keep going until the goal is met; a `build` run
+     * leaves it false so a normal turn has one bounded window.
+     */
+    val renewsBudget: Boolean = false,
+    /**
+     * How many extra windows a renewing agent may take. Bounded on purpose: an
+     * agent whose todos never progress must still come to rest, and every extra
+     * window spends real tokens.
+     */
+    val maxBudgetWindows: Int = 0,
+    /**
      * Opt-in structured output. Null (default) keeps provider request bodies
      * unchanged. Only the OpenAI-compatible surface honours it; Anthropic
      * ignores it (see [dev.spindle.core.provider.ResponseFormat]).
@@ -149,6 +162,13 @@ data class AgentConfig(
             systemPrompt = GOAL_SYSTEM,
             maxRetries = 7,
             maxRunMillis = 60L * 60L * 1_000L,
+            // "Work until the goal is met" has to survive a long task. A single
+            // 60-minute window contradicted the prompt: the run simply stopped
+            // mid-plan, which is exactly the "goal mode keeps stopping" report.
+            // Renewal is gated on unfinished todos, so a run with nothing left to
+            // do still ends immediately.
+            renewsBudget = true,
+            maxBudgetWindows = 8,
         )
 
         /** The selectable primary agents, keyed by name. */
