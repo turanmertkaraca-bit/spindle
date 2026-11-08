@@ -2562,8 +2562,9 @@ private fun UsageMeter(
     // Otherwise it keeps the classic rolled-up token/cost/budget line.
     val label = if (contextWindow > 0) {
         val next = if (nextCostUsd >= 0.0) String.format(Locale.US, " \u00b7 next \$%.4f", nextCostUsd) else ""
-        String.format(Locale.US, "\u2248 %d new", newTokens) + next +
-            String.format(Locale.US, " \u00b7 ctx %d", contextWindow)
+        // "ctx N" moved into the composer's context bar, where the user is
+        // actually typing; repeating it here just added noise above the card.
+        String.format(Locale.US, "\u2248 %d new", newTokens) + next
     } else {
         val tokens = String.format(Locale.US, "%.1fk tok", usage.totalTokens / 1000.0)
         val cost = if (usage.costUsd > 0.0) String.format(Locale.US, " \u00b7 \$%.4f", usage.costUsd) else ""
@@ -2593,32 +2594,66 @@ private fun UsageMeter(
  * fills and warms from water -> accent -> alert as it runs low.
  */
 @Composable
-private fun ContextMeter(colors: LumenColors, usedFraction: Float) {
-    val remaining = (1f - usedFraction).coerceIn(0f, 1f)
+private fun ContextMeter(colors: LumenColors, usedTokens: Int, window: Int) {
+    val usedFraction = if (window > 0) (usedTokens.toFloat() / window.toFloat()).coerceIn(0f, 1f) else 0f
+    val remaining = 1f - usedFraction
     val tint = when {
         remaining <= 0.05f -> LumenAlert
         remaining <= 0.20f -> colors.accent
         else -> colors.water
     }
-    Box(
+    Column(
         Modifier
             .fillMaxWidth()
-            .height(3.dp)
-            .clip(LumenShapes.pill)
-            .background(colors.outline.copy(alpha = 0.5f))
             .semantics {
-                progressBarRangeInfo = ProgressBarRangeInfo(remaining, 0f..1f)
-                contentDescription = "context ${(remaining * 100).roundToInt()}% free"
+                progressBarRangeInfo = ProgressBarRangeInfo(usedFraction, 0f..1f)
+                contentDescription = ContextLabel.accessibility(usedTokens, window)
             }
             .testTag("context-meter"),
     ) {
+        // A label, because a 3dp hairline on its own is not information: the
+        // owner asked for the limit to be visible IN the composer, and a bar with
+        // no number forces the reader to guess what it is measuring.
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "context",
+                color = colors.faint,
+                fontFamily = Mono,
+                fontSize = 9.5.sp,
+                letterSpacing = 0.6.sp,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                ContextLabel.describe(usedTokens, window),
+                color = if (remaining <= 0.20f) tint else colors.dim,
+                fontFamily = Mono,
+                fontSize = 9.5.sp,
+                letterSpacing = 0.3.sp,
+                modifier = Modifier.testTag("context-meter-label"),
+            )
+        }
+        Spacer(Modifier.height(4.dp))
         Box(
             Modifier
-                .fillMaxWidth(remaining)
-                .height(3.dp)
+                .fillMaxWidth()
+                .height(4.dp)
                 .clip(LumenShapes.pill)
-                .background(tint),
-        )
+                .background(colors.outline.copy(alpha = 0.5f)),
+        ) {
+            // Fill from the LEFT as the context grows, which is the direction
+            // people read a "limit" bar. The previous version drained from the
+            // right, so a nearly-full context looked nearly empty.
+            Box(
+                Modifier
+                    .fillMaxWidth(usedFraction.coerceAtLeast(if (usedTokens > 0) 0.01f else 0f))
+                    .height(4.dp)
+                    .clip(LumenShapes.pill)
+                    .background(tint),
+            )
+        }
     }
 }
 
@@ -2878,8 +2913,11 @@ private fun Composer(
         ) {
             // A thin context gauge at the top of the card: it drains as the
             // window fills, so "how much is left" reads at a glance.
-            if (contextWindow > 0 && contextUsedTokens > 0) {
-                ContextMeter(colors, contextUsedTokens.toFloat() / contextWindow.toFloat())
+            // Shown whenever the window is known, even at zero usage: the point is
+            // that the LIMIT is visible while composing, not only after the first
+            // turn has already spent part of it.
+            if (contextWindow > 0) {
+                ContextMeter(colors, contextUsedTokens, contextWindow)
                 Spacer(Modifier.height(8.dp))
             }
             Box(Modifier.fillMaxWidth()) {
