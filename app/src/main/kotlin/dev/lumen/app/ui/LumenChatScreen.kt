@@ -641,20 +641,17 @@ fun LumenChatScreen(
     LaunchedEffect(listState, tailTolerancePx) {
         snapshotFlow {
             val info = listState.layoutInfo
-            if (info.totalItemsCount == 0) return@snapshotFlow true
-            val lastVisible = info.visibleItemsInfo.lastOrNull() ?: return@snapshotFlow true
-            val gap = (info.viewportEndOffset - info.afterContentPadding) -
-                (lastVisible.offset + lastVisible.size)
-            when {
-                !listState.canScrollForward -> true
-                lastVisible.index < info.totalItemsCount - 2 -> false
-                listState.isScrollInProgress -> false
-                abs(gap) <= tailTolerancePx -> true
-                else -> null
-            }
-        }.collect { desired ->
-            if (desired != null) followTail = desired
-        }
+            val lastVisible = info.visibleItemsInfo.lastOrNull()
+            ChatScrollPolicy.shouldFollow(
+                canScrollForward = listState.canScrollForward,
+                totalItems = info.totalItemsCount,
+                lastVisibleIndex = lastVisible?.index,
+                lastVisibleEnd = lastVisible?.let { it.offset + it.size } ?: 0,
+                viewportEnd = info.viewportEndOffset - info.afterContentPadding,
+                scrolling = listState.isScrollInProgress,
+                tolerancePx = tailTolerancePx,
+            )
+        }.collect { desired -> followTail = desired }
     }
     // Keep the last row pinned to the tail. A snapshotFlow on layoutInfo re-emits
     // both on content growth (the old per-token body-length key) and on viewport
@@ -663,26 +660,42 @@ fun LumenChatScreen(
     // scrolled by `delta` and the other by `gap`, both firing every streaming
     // frame. `count` and `last` are captured by the outer scope but only consulted
     // here — the trigger is layoutInfo, not the growing body length.
-    LaunchedEffect(listState) {
+    //
+    // WHY THIS NO LONGER SCROLLS FROM INSIDE THE COLLECTOR:
+    // `scrollBy` invalidates layout, layout changes `layoutInfo`, and this
+    // collector would fire again — an unbounded feedback loop that pegged the main
+    // thread ("app has stopped working") and teleported the reader because every
+    // partial layout issued another correction. The decision now comes from
+    // `ChatScrollPolicy.correction`, which returns null when the list is already
+    // aligned, so a settled transcript produces no scroll, no relayout and no
+    // re-emit. `MAX_CORRECTIONS_PER_SETTLE` bounds the pathological case.
+    // A single assistant Part only ever GROWS its body, so `count` never changes
+    // while a long answer streams. Keying the pin effect on the last row's body
+    // length re-arms it on growth *without* making it re-fire on every frame: the
+    // key changes only when text arrives.
+    val lastBodyLength = last?.body?.length ?: 0
+    LaunchedEffect(listState, count, lastBodyLength) {
         snapshotFlow { listState.layoutInfo }
             .collect { info ->
                 if (!followTail || listState.isScrollInProgress) return@collect
-                if (count == 0) return@collect
+                if (count == 0 || info.totalItemsCount == 0) return@collect
                 val lastItem = info.visibleItemsInfo.lastOrNull { it.index == info.totalItemsCount - 1 }
-                val lastVisible = if (lastItem == null) {
-                    // The last row is not composed yet: jump so it lays out,
-                    // then pin it next pass.
-                    listState.scrollToItem(count - 1)
-                    return@collect
-                } else lastItem
-                val gap = (info.viewportEndOffset - info.afterContentPadding) -
-                    (lastVisible.offset + lastVisible.size)
-                // Anchor the last row's BOTTOM to the viewport bottom. A positive
-                // gap is empty space below a short tail (fill it); a negative gap
-                // is a row taller than the viewport (scroll forward to reveal its
-                // tail instead of leaving it cut at the fold).
-                if (gap > 0) listState.scrollBy(gap.toFloat())
-                else if (gap < 0) listState.scrollBy((-gap).toFloat())
+                val correction = ChatScrollPolicy.correction(
+                    lastRowIsComposed = lastItem != null,
+                    lastRowBottom = lastItem?.let { it.offset + it.size } ?: 0,
+                    viewportEnd = info.viewportEndOffset - info.afterContentPadding,
+                )
+                when (correction) {
+                    ChatScrollPolicy.Correction.None -> Unit
+                    ChatScrollPolicy.Correction.JumpToLast -> listState.scrollToItem(count - 1)
+                    // ONE scroll, not a loop. The loop is what the previous
+                    // implementation effectively became via snapshotFlow: scroll
+                    // -> relayout -> re-emit -> scroll. `correction` already
+                    // guarantees the delta is worth applying, and the next
+                    // layoutInfo emission is a *new* measurement rather than the
+                    // same one re-read.
+                    is ChatScrollPolicy.Correction.ScrollBy -> listState.scrollBy(correction.deltaPx)
+                }
             }
     }
     // The `↓ latest` affordance is driven purely by scroll position: it is shown
