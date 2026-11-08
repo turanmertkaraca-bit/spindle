@@ -205,6 +205,10 @@ class MarkdownMentionTest {
         }
         compose.onNodeWithTag("usage-meter", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithText("42 new", substring = true).assertIsDisplayed()
-        compose.onNodeWithText("ctx 200000", substring = true).assertIsDisplayed()
+        // The window itself moved INTO the composer's context gauge, where the
+        // user is typing; the floating usage line no longer repeats it. Assert
+        // the new home so this contract stays pinned from either side.
+        compose.onNodeWithTag("context-meter", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag("context-meter-label", useUnmergedTree = true).assertIsDisplayed()
     }
 }

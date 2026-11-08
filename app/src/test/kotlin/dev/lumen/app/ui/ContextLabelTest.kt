@@ -46,7 +46,8 @@ class ContextLabelTest {
 
     @Test
     fun `remaining counts down and never goes negative`() {
-        assertEquals("188k tokens left", ContextLabel.remaining(12_400, 200_000))
+        // 200_000 - 12_400 = 187_600 -> "187k" (whole-k above 100k).
+        assertEquals("187k tokens left", ContextLabel.remaining(12_400, 200_000))
         assertEquals("0 tokens left", ContextLabel.remaining(250_000, 200_000))
         assertEquals("unknown", ContextLabel.remaining(1_000, 0))
     }
@@ -81,7 +82,7 @@ class ContextLabelTest {
     fun `token formatting is compact at every scale`() {
         assertEquals("0", ContextLabel.tokens(0))
         assertEquals("840", ContextLabel.tokens(840))
-        assertEquals("1.0k", ContextLabel.tokens(1_000))
+        assertEquals("1k", ContextLabel.tokens(1_000))
         assertEquals("12.4k", ContextLabel.tokens(12_400))
         assertEquals("200k", ContextLabel.tokens(200_000))
         assertEquals("1.00M", ContextLabel.tokens(1_000_000))

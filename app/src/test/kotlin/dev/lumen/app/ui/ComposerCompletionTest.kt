@@ -57,18 +57,22 @@ class ComposerCompletionTest {
 
         compose.onNodeWithTag("composer").performClick()
         compose.onNodeWithTag("composer").performTextInput("@src")
-        compose.waitForIdle()
+        // The completion walk is a `withContext(Dispatchers.IO)` inside a
+        // `LaunchedEffect`, so `waitForIdle()` alone does not guarantee it has
+        // landed — it can return before the IO hop completes. Poll until the
+        // popup exists instead of racing it (this is the class of flake that made
+        // the suite fail on one sha and pass on the next).
+        awaitTag("file-suggestions")
 
         compose.onNodeWithTag("file-suggestions").assertIsDisplayed()
         compose.onNodeWithText("src/App.kt").assertIsDisplayed()
 
         compose.onNodeWithTag("file-suggestion-0").performSemanticsAction(SemanticsActions.OnClick)
-        compose.waitForIdle()
+        // The popup hides once the completed token has been pushed back through
+        // `onInput` and re-derived; poll rather than assume one idle pass covers it.
+        awaitNoTag("file-suggestions")
 
         assertEquals("@src/App.kt ", input.value)
-        check(compose.onAllNodesWithTag("file-suggestions").fetchSemanticsNodes().isEmpty()) {
-            "the popup should hide once the token is completed"
-        }
     }
 
     @Test
@@ -115,5 +119,29 @@ class ComposerCompletionTest {
             .performSemanticsAction(SemanticsActions.OnClick)
         compose.waitForIdle()
         assertEquals(0, jumped)
+    }
+
+    /** Poll until [tag] exists, or fail with a clear message. */
+    private fun awaitTag(tag: String) {
+        val deadline = System.currentTimeMillis() + 5_000L
+        while (System.currentTimeMillis() < deadline) {
+            compose.waitForIdle()
+            if (compose.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty()) return
+            Thread.sleep(20)
+        }
+        throw AssertionError("'$tag' never appeared")
+    }
+
+    /** Poll until [tag] is gone, or fail with a clear message. */
+    private fun awaitNoTag(tag: String) {
+        val deadline = System.currentTimeMillis() + 5_000L
+        var remaining = -1
+        while (System.currentTimeMillis() < deadline) {
+            compose.waitForIdle()
+            remaining = compose.onAllNodesWithTag(tag).fetchSemanticsNodes().size
+            if (remaining == 0) return
+            Thread.sleep(20)
+        }
+        throw AssertionError("'$tag' was still present ($remaining nodes)")
     }
 }

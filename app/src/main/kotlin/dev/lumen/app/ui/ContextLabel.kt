@@ -66,7 +66,9 @@ object ContextLabel {
         val n = count.coerceAtLeast(0)
         return when {
             n < 1_000 -> n.toString()
+            // "1k", not "1.0k": a trailing ".0" is just noise in a 9.5sp label.
             n < 100_000 -> String.format(Locale.US, "%.1fk", n / 1_000.0)
+                .let { if (it.endsWith(".0k")) it.dropLast(3) + "k" else it }
             n < 1_000_000 -> "${n / 1_000}k"
             // Above 10M a two-decimal "M" is longer than the label can hold
             // (Int.MAX_VALUE would render "2147.48M"), so switch to whole M.
