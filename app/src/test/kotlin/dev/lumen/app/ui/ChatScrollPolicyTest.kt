@@ -97,6 +97,36 @@ class ChatScrollPolicyTest {
         )
     }
 
+    /**
+     * A transcript that has never been pinned sits at the top because nothing has
+     * scrolled it yet — not because the reader chose to be there. Treating that as
+     * "away from the tail" shows the cue on a brand-new chat and stops the pin
+     * from ever engaging.
+     */
+    @Test
+    fun `before the first pin the reader is considered at the tail`() {
+        assertEquals(
+            true,
+            ChatScrollPolicy.shouldFollow(
+                canScrollForward = true, totalItems = 12, lastVisibleIndex = 0,
+                lastVisibleEnd = 300, viewportEnd = 800, scrolling = false, tolerancePx = 4f,
+                pinnedOnce = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `after a pin, scrolling to the top stops following`() {
+        assertEquals(
+            false,
+            ChatScrollPolicy.shouldFollow(
+                canScrollForward = true, totalItems = 12, lastVisibleIndex = 0,
+                lastVisibleEnd = 300, viewportEnd = 800, scrolling = false, tolerancePx = 4f,
+                pinnedOnce = true,
+            ),
+        )
+    }
+
     @Test
     fun `an ambiguous near-end measurement is inconclusive`() {
         // Near the end by index, but the measured gap disagrees. The caller must

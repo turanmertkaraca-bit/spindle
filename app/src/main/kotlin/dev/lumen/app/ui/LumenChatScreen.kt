@@ -637,6 +637,11 @@ fun LumenChatScreen(
     // to the bottom even though they had scrolled up; the latest cue is driven
     // from followTail (see below).
     var followTail by rememberSaveable { mutableStateOf(true) }
+    // Whether the transcript has ever been pinned to the tail. Until it has, the
+    // list sits at the top because nothing has scrolled it yet, and letting the
+    // geometry flip `followTail` off in that state shows the "latest" cue on a
+    // brand-new chat and stops the pin from ever following.
+    var pinnedOnce by remember { mutableStateOf(false) }
     val tailTolerancePx = with(LocalDensity.current) { 4.dp.toPx() }
     LaunchedEffect(listState, tailTolerancePx) {
         snapshotFlow {
@@ -650,6 +655,7 @@ fun LumenChatScreen(
                 viewportEnd = info.viewportEndOffset - info.afterContentPadding,
                 scrolling = listState.isScrollInProgress,
                 tolerancePx = tailTolerancePx,
+                pinnedOnce = pinnedOnce,
             )
         }.collect { desired ->
             // Tri-state: null means "the measurement is inconclusive, keep what
@@ -694,14 +700,20 @@ fun LumenChatScreen(
                 )
                 when (correction) {
                     ChatScrollPolicy.Correction.None -> Unit
-                    ChatScrollPolicy.Correction.JumpToLast -> listState.scrollToItem(count - 1)
+                    ChatScrollPolicy.Correction.JumpToLast -> {
+                        listState.scrollToItem(count - 1)
+                        pinnedOnce = true
+                    }
                     // ONE scroll, not a loop. The loop is what the previous
                     // implementation effectively became via snapshotFlow: scroll
                     // -> relayout -> re-emit -> scroll. `correction` already
                     // guarantees the delta is worth applying, and the next
                     // layoutInfo emission is a *new* measurement rather than the
                     // same one re-read.
-                    is ChatScrollPolicy.Correction.ScrollBy -> listState.scrollBy(correction.deltaPx)
+                    is ChatScrollPolicy.Correction.ScrollBy -> {
+                        listState.scrollBy(correction.deltaPx)
+                        pinnedOnce = true
+                    }
                 }
             }
     }

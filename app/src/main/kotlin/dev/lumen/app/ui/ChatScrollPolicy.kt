@@ -48,8 +48,21 @@ object ChatScrollPolicy {
         viewportEnd: Int,
         scrolling: Boolean,
         tolerancePx: Float,
+        /**
+         * Whether the transcript has ever been pinned to the tail since it opened.
+         *
+         * Until it has, the list is at the TOP simply because nothing has scrolled
+         * it yet — not because the reader chose to be there. Letting the geometric
+         * check flip "follow" off in that state is a trap: the pin effect then
+         * refuses to scroll, so the list stays at the top and the "latest" cue
+         * sticks on screen forever. A fresh chat looks like the reader scrolled up.
+         */
+        pinnedOnce: Boolean = true,
     ): Boolean? {
         if (totalItems == 0) return true
+        // Opening a transcript always starts at the tail, wherever the layout
+        // happens to be before the first pin.
+        if (!pinnedOnce) return true
         // Nothing to scroll: by definition at the tail. This is the only signal
         // that comes from the scroll container rather than from geometry we infer.
         if (!canScrollForward) return true
