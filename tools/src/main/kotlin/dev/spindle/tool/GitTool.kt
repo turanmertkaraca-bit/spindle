@@ -55,6 +55,7 @@ class GitTool(
                 "path": {"type": "string", "description": "For diff/add: a file or directory, relative to the project"},
                 "staged": {"type": "boolean", "description": "For diff: show staged changes (--staged)"},
                 "count": {"type": "integer", "description": "For log: number of commits (default 20, max 100)"},
+                "dir": {"type": "string", "description": "Subdirectory to run git in, relative to the working directory. Use this when the repo is nested (e.g. a project inside a workspace that is itself a repo)."},
                 "remote": {"type": "string", "description": "For fetch/pull/push: remote name (default origin)"},
                 "branch": {"type": "string", "description": "For push: branch name (default: current upstream)"}
               },
@@ -75,8 +76,19 @@ class GitTool(
 
         ctx.checkAborted()
 
+        // Nested repositories are the norm when one project sits inside another
+        // checkout: without this, `git status` in the outer directory reports the
+        // OUTER repo and the agent silently edits/commits the wrong project.
+        val runDir = try {
+            input.stringOrNull("dir")?.trim()?.takeIf { it.isNotBlank() }
+                ?.let { resolveInsideCwd(ctx, it) }
+                ?: ctx.cwd
+        } catch (e: IllegalArgumentException) {
+            return ToolOutcome(e.message ?: "invalid dir", isError = true)
+        }
+
         val command = try {
-            build(op, input, ctx.cwd)
+            build(op, input, runDir)
         } catch (e: IllegalArgumentException) {
             return ToolOutcome(e.message ?: "invalid arguments", isError = true)
         }
@@ -103,9 +115,9 @@ class GitTool(
 
         val result = try {
             if (secret != null) {
-                shell.run(command, ctx.cwd, NETWORK_TIMEOUT_MS, mapOf("GITHUB_TOKEN" to secret))
+                shell.run(command, runDir, NETWORK_TIMEOUT_MS, mapOf("GITHUB_TOKEN" to secret))
             } else {
-                shell.run(command, ctx.cwd, LOCAL_TIMEOUT_MS)
+                shell.run(command, runDir, LOCAL_TIMEOUT_MS)
             }
         } catch (e: Exception) {
             return ToolOutcome("Failed to run git: ${e.message}", isError = true)
@@ -199,13 +211,20 @@ class GitTool(
         return "https://github.com/$clean.git"
     }
 
-    /** Resolve a project-relative path and refuse anything that escapes the cwd. */
+    /**
+     * Resolve a project-relative path and refuse anything that escapes the cwd.
+     *
+     * Delegates to the shared [resolveInsideCwd], which also canonicalises the
+     * deepest existing ancestor: a symlink pointing outside the workspace is the
+     * obvious way to break out of a plain `startsWith` check.
+     */
     private fun insideCwd(cwd: Path, raw: String): String {
         val base = cwd.toAbsolutePath().normalize()
         val resolved = base.resolve(raw).normalize()
         require(resolved == base || resolved.startsWith(base)) {
             "path escapes the working directory: $raw"
         }
+        requireRealInside(base, resolved, raw)
         return resolved.toString()
     }
 
