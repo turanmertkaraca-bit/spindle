@@ -73,10 +73,13 @@ class MotionMetricsTest {
 
     @Test
     fun `a sequence that never settles is not converged`() {
-        // Keeps growing: a runaway spring, the "jitter" the owner reported.
-        val offsets = (0..23).map { it.toDouble() * it }
+        // A spring that keeps oscillating with constant amplitude. Distances to
+        // the final frame do NOT shrink towards it, so this must not be reported
+        // as settled. (A quadratic ramp would not work here: its distances still
+        // decrease relatively, so relative convergence genuinely holds.)
+        val offsets = (0 until 24).map { if (it % 2 == 0) 0.0 else 100.0 }
         val m = fromOffsets(offsets)
-        assertTrue(!m.converged, "a sequence that keeps moving must not report converged: ${m.report()}")
+        assertTrue(!m.converged, "a constant-amplitude oscillation must not report converged: ${m.report()}")
     }
 
     @Test

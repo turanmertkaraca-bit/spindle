@@ -517,6 +517,14 @@ class MainActivity : ComponentActivity() {
                         onCloseEditor = viewModel::closeEditor,
                         onCreateFile = viewModel::createFile,
                         onCreateDir = viewModel::createDir,
+                        onCreateBoundProject = { name ->
+                            val bound = viewModel.createBoundFolder(name)
+                            // Stay on Files so the user lands in the folder the
+                            // agent is now bound to, rather than being thrown back
+                            // to a chat that looks unrelated to what they just made.
+                            viewModel.openFiles("")
+                            if (bound == null) toast("Could not create $name")
+                        },
                         onRename = viewModel::renameEntry,
                         onDelete = viewModel::deleteEntry,
                         onBack = {

@@ -126,4 +126,70 @@ class ProjectStoreTest {
         // The legacy file is moved, not copied, so no duplicate tree is left.
         assertFalse(File(legacy, "src/main.kt").exists())
     }
+
+    // ---- "new folder -> bind the agent to it" ----
+
+    /**
+     * The isolation guarantee behind "new folder, bind the agent to it".
+     *
+     * A new *project* must be a sibling of the other projects, not a
+     * subdirectory of one. If it were a subdirectory, the agent's cwd would
+     * still contain every sibling file — other checkouts, other `AGENTS.md`,
+     * another `.git` — which is exactly how an agent gets side-tracked by other
+     * projects in the same directory.
+     */
+    @Test
+    fun `a bound project is a sibling root, never a subdirectory of another`() {
+        val store = freshStore()
+        val first = store.ensure()
+        val bound = assertNotNull(store.create("bound agent here"))
+
+        assertEquals(
+            first.dir.parentFile?.absolutePath,
+            bound.dir.parentFile?.absolutePath,
+            "a bound project must live directly under the projects root",
+        )
+        assertEquals(
+            first.dir.canonicalFile.parentFile,
+            bound.dir.canonicalFile.parentFile,
+            "siblings, not parent/child",
+        )
+        // And it must NOT be inside the first project.
+        assertFalse(
+            bound.dir.canonicalPath.startsWith(first.dir.canonicalPath + File.separator),
+            "the new project must not be nested inside the existing one",
+        )
+    }
+
+    @Test
+    fun `binding switches the active project so the session cwd follows`() {
+        val store = freshStore()
+        val first = store.ensure()
+        val bound = assertNotNull(store.create("work"))
+
+        assertEquals(first.id, store.activeOrNull()?.id, "creating alone must not rebind")
+        assertNotNull(store.setActive(bound.id))
+        assertEquals(bound.id, store.activeOrNull()?.id, "setActive must persist the binding")
+        assertEquals(bound.dir, store.activeOrNull()?.dir)
+    }
+
+    @Test
+    fun `two bound projects do not see each other's files`() {
+        val store = freshStore()
+        store.ensure()
+        val a = assertNotNull(store.create("alpha"))
+        val b = assertNotNull(store.create("beta"))
+
+        File(a.dir, "only-in-alpha.txt").writeText("a")
+        File(b.dir, "only-in-beta.txt").writeText("b")
+
+        assertEquals(
+            listOf("only-in-alpha.txt"),
+            a.dir.listFiles()!!.map { it.name }.filter { it.endsWith(".txt") },
+        )
+        assertEquals(
+            listOf("only-in-beta.txt"),
+            b.dir.listFiles()!!.map { it.name }.filter { it.endsWith(".txt") },
+        )
+    }
 }

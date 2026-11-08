@@ -2761,6 +2761,36 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * Create a folder inside the active project AND make it the project the agent
+     * works in.
+     *
+     * This is the "new folder → bind the agent to it" request, and the distinction
+     * it draws is the whole point: `createDir` makes a *subdirectory* of the
+     * current project, so the agent still sees every sibling file in that
+     * project — including other checkouts, other `AGENTS.md` files and other
+     * `.git` directories. That is how an agent gets "side-tracked by other
+     * projects in the same directory". This function instead creates a real
+     * **project root**: its own entry in `ProjectStore`, its own
+     * `files/projects/<id>` directory, and it becomes the session cwd so every
+     * path tool is confined to it.
+     *
+     * Returns the new project's display name, or null when it could not be
+     * created (blank or duplicate name).
+     */
+    fun createBoundFolder(name: String): String? {
+        val store = projectStore ?: return null
+        val project = runCatching { store.create(name) }.getOrNull()
+        if (project == null) {
+            surfaceFilesError("cannot create ${name.trim()}")
+            return null
+        }
+        runCatching { store.setActive(project.id) }
+        switchTo(project)
+        diag("project created and bound: ${project.name}")
+        return project.name
+    }
+
     /** Create a folder named [name] inside [dir], refusing bad names/escapes. */
     fun createDir(dir: String, name: String) {
         val trimmed = name.trim()

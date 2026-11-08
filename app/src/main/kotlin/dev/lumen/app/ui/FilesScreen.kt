@@ -63,7 +63,7 @@ import kotlinx.coroutines.flow.first
 private val Mono = FontFamily.Monospace
 
 /** What the "new" header actions are creating. */
-private enum class NewKind { File, Folder }
+private enum class NewKind { File, Folder, BoundProject }
 
 /**
  * The project file cockpit: a breadcrumbed, searchable browser plus an in-place
@@ -86,6 +86,12 @@ fun FilesScreen(
     onCloseEditor: () -> Unit,
     onCreateFile: (String, String) -> Unit,
     onCreateDir: (String, String) -> Unit,
+    /**
+     * Create a NEW project root and bind the agent to it. Distinct from
+     * [onCreateDir], which makes a subdirectory of the current project and so
+     * leaves the agent able to see every sibling file.
+     */
+    onCreateBoundProject: (String) -> Unit = {},
     onRename: (String, String) -> Unit,
     onDelete: (String, Boolean) -> Unit,
     onBack: () -> Unit,
@@ -168,6 +174,9 @@ fun FilesScreen(
                                 items = listOf(
                                     TopMenuAction("New file", "new-file") { newKind = NewKind.File },
                                     TopMenuAction("New folder", "new-folder") { newKind = NewKind.Folder },
+                                    TopMenuAction("New project (bind agent)", "new-project") {
+                                        newKind = NewKind.BoundProject
+                                    },
                                 ),
                             )
                         },
@@ -310,11 +319,27 @@ fun FilesScreen(
     newKind?.let { kind ->
         NameDialog(
             colors = colors,
-            title = if (kind == NewKind.File) "New file" else "New folder",
+            title = when (kind) {
+                NewKind.File -> "New file"
+                NewKind.Folder -> "New folder"
+                NewKind.BoundProject -> "New project"
+            },
             confirm = "Create",
+            // Spell out the difference, because "New folder" and "New project"
+            // look like the same action until you know what the agent can see.
+            detail = if (kind == NewKind.BoundProject) {
+                "A separate project folder. The agent works only inside it, so it " +
+                    "cannot wander into other projects."
+            } else {
+                null
+            },
             onDismiss = { newKind = null },
             onConfirm = { name ->
-                if (kind == NewKind.File) onCreateFile(dir, name) else onCreateDir(dir, name)
+                when (kind) {
+                    NewKind.File -> onCreateFile(dir, name)
+                    NewKind.Folder -> onCreateDir(dir, name)
+                    NewKind.BoundProject -> onCreateBoundProject(name)
+                }
                 newKind = null
             },
         )
@@ -865,6 +890,8 @@ private fun NameDialog(
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
     initial: String = "",
+    /** Optional explanation rendered above the field. */
+    detail: String? = null,
 ) {
     var value by remember { mutableStateOf(initial) }
     val valid = value.isNotBlank() && value != "." && value != ".." &&
@@ -876,6 +903,17 @@ private fun NameDialog(
         textContentColor = colors.dim,
         title = { Text(title, fontFamily = Mono, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
         text = {
+            androidx.compose.foundation.layout.Column {
+            if (detail != null) {
+                Text(
+                    detail,
+                    color = colors.dim,
+                    fontFamily = Mono,
+                    fontSize = LumenType.caption,
+                    lineHeight = LumenType.lineTight,
+                )
+                Spacer(Modifier.height(10.dp))
+            }
             BasicTextField(
                 value = value,
                 onValueChange = { value = it },
@@ -890,6 +928,7 @@ private fun NameDialog(
                     .padding(10.dp)
                     .testTag("name-input"),
             )
+            }
         },
         confirmButton = {
             Text(
