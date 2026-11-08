@@ -4059,9 +4059,15 @@ class ChatViewModel(
         // backgrounded the on-screen hint is invisible, and that is exactly when
         // "it just stopped" happens with no explanation.
         if (reason != null && wasRunning && stoppedSession != null) {
+            // `store.session` is suspend and `stop()` is not, so the title is taken
+            // from the state we already have (the Home list is kept fresh) and the
+            // notification is posted without blocking the caller.
+            val title = _state.value.sessions
+                .firstOrNull { it.id == stoppedSession }
+                ?.title
+                .orEmpty()
+                .ifBlank { "Lumen run" }
             context?.let { ctx ->
-                val title = runCatching { store.session(SessionId(stoppedSession))?.title }
-                    .getOrNull().orEmpty().ifBlank { "Lumen run" }
                 runCatching { RunService.notifyInterrupted(ctx, stoppedSession, title, reason) }
             }
         }
