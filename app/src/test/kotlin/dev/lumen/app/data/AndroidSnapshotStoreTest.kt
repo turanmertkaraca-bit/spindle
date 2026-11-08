@@ -19,6 +19,15 @@ import kotlin.test.assertEquals
 @Config(sdk = [34])
 class AndroidSnapshotStoreTest {
 
+    private val counter = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /**
+     * Snapshot rows live in the same database as sessions, so a shared file would
+     * let one test's snapshots leak into another's assertions. Distinct file per
+     * open, for the same reason as AndroidSessionStoreTest.
+     */
+    private fun nextDbName() = "lumen-snap-${counter.incrementAndGet()}.db"
+
     private fun snap(id: String, session: String, at: Long) =
         snap(id, session, "a.kt", at)
 
@@ -38,7 +47,7 @@ class AndroidSnapshotStoreTest {
 
     @Test
     fun `pruneBounded caps per session, global count and age`() = runTest {
-        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext(), dbName = nextDbName())
         val store = AndroidSnapshotStore(database)
         val now = System.currentTimeMillis()
         store.record(snap("a1", "s1", now - 100))
@@ -63,7 +72,7 @@ class AndroidSnapshotStoreTest {
 
     @Test
     fun `pruneBounded pins the newest snapshot per session and path`() = runTest {
-        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext(), dbName = nextDbName())
         val store = AndroidSnapshotStore(database)
         val now = System.currentTimeMillis()
         store.record(snap("a1", "s1", "src/a.kt", now - 50))
@@ -90,7 +99,7 @@ class AndroidSnapshotStoreTest {
 
     @Test
     fun `pruneBounded enforces the global cap newest first`() = runTest {
-        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext(), dbName = nextDbName())
         val store = AndroidSnapshotStore(database)
         val now = System.currentTimeMillis()
         (0 until 10).forEach { i -> store.record(snap("s$i", "sess", now + i)) }
@@ -104,7 +113,7 @@ class AndroidSnapshotStoreTest {
 
     @Test
     fun `newest follows insertion order even when the clock rolls back`() = runTest {
-        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext(), dbName = nextDbName())
         val store = AndroidSnapshotStore(database)
         val now = System.currentTimeMillis()
         // The later record carries the *older* wall clock; monotonic sequence,
@@ -119,7 +128,7 @@ class AndroidSnapshotStoreTest {
 
     @Test
     fun `identical content across paths and sessions is stored as one blob`() = runTest {
-        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext(), dbName = nextDbName())
         val store = AndroidSnapshotStore(database)
         store.record(snap("a1", "s1", "src/a.kt", 1))
         store.record(snap("a2", "s1", "src/b.kt", 2))
@@ -131,7 +140,7 @@ class AndroidSnapshotStoreTest {
 
     @Test
     fun `different content is stored as separate blobs`() = runTest {
-        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext(), dbName = nextDbName())
         val store = AndroidSnapshotStore(database)
         store.record(Snapshot("a", SessionId("s1"), "a.kt", "one", "h1", 1))
         store.record(Snapshot("b", SessionId("s1"), "b.kt", "two", "h2", 2))
@@ -142,7 +151,7 @@ class AndroidSnapshotStoreTest {
 
     @Test
     fun `removing every snapshot garbage collects orphan blobs`() = runTest {
-        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext(), dbName = nextDbName())
         val store = AndroidSnapshotStore(database)
         store.record(Snapshot("a", SessionId("s1"), "a.kt", "one", "h1", 1))
         store.record(Snapshot("b", SessionId("s1"), "b.kt", "two", "h2", 2))
@@ -156,7 +165,7 @@ class AndroidSnapshotStoreTest {
 
     @Test
     fun `pruning to zero garbage collects orphan blobs`() = runTest {
-        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext(), dbName = nextDbName())
         val store = AndroidSnapshotStore(database)
         store.record(Snapshot("a", SessionId("s1"), "a.kt", "one", "h1", 1))
         store.record(Snapshot("b", SessionId("s1"), "b.kt", "two", "h2", 2))
@@ -169,7 +178,7 @@ class AndroidSnapshotStoreTest {
 
     @Test
     fun `latest and forSession resolve content through the blob join`() = runTest {
-        val database = AndroidDatabase(ApplicationProvider.getApplicationContext())
+        val database = AndroidDatabase(ApplicationProvider.getApplicationContext(), dbName = nextDbName())
         val store = AndroidSnapshotStore(database)
         store.record(Snapshot("a", SessionId("s1"), "a.kt", "alpha", "h1", 1))
         store.record(Snapshot("b", SessionId("s1"), "b.kt", "beta", "h2", 2))

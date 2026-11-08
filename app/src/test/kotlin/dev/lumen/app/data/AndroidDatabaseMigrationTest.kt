@@ -124,7 +124,9 @@ class AndroidDatabaseMigrationTest {
 
         AndroidSessionStore(context).use { it.createSession(Session(SessionId("seed"), "t", "/w", 0, 0)) }
 
-        val database = AndroidDatabase(context) { false }
+        // Named argument: `integrityOverride` is the second parameter, and the
+        // constructor now also takes a `dbName` after it.
+        val database = AndroidDatabase(context, integrityOverride = { false })
         AndroidSessionStore(database).use { store ->
             assertTrue(store.sessions().isEmpty(), "the recreated database starts empty")
             store.createSession(Session(SessionId("fresh"), "t", "/w", 0, 0))
