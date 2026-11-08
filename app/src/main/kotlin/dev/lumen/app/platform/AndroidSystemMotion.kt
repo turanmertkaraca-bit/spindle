@@ -1,5 +1,6 @@
 package dev.lumen.app.platform
 
+import android.content.ContentResolver
 import android.content.Context
 import android.provider.Settings
 import dev.lumen.app.ui.DurationScale
@@ -10,25 +11,23 @@ import dev.lumen.app.ui.SystemMotion
  * scales.
  *
  * The user-facing switch is Accessibility → Remove animations (or Developer
- * options → *duration scale). Either one set to 0 means "no animation", so both
+ * options → *duration scale*). Either one set to 0 means "no animation", so both
  * are read and combined by [DurationScale].
  *
- * The animator scale is exposed as a **string in the settings database** but the
- * live value the system actually uses is the process-wide one. We prefer
- * `Settings.Global.ANIMATOR_DURATION_SCALE`/`TRANSITION_ANIMATION_SCALE` because
- * they are readable without an Activity and survive the app being backgrounded.
- *
- * Every read is wrapped: a SecurityException or a missing row must degrade to
- * "motion allowed", never crash and never silently disable the UI.
+ * The live values live in `Settings.Global`, which is readable without an
+ * Activity and survives the app being backgrounded. Every read is wrapped: a
+ * `SecurityException`, a missing row or a row stored as text must degrade to
+ * "motion allowed" — never crash, and never silently disable the whole UI.
  */
 class AndroidSystemMotion(private val context: Context) : SystemMotion {
 
     override fun reduceMotionEnabled(): Boolean {
-        val global = context.contentResolver
-        val animator = scale(Settings.Global.ANIMATOR_DURATION_SCALE, global::getFloat)
-        val transition = scale(Settings.Global.TRANSITION_ANIMATION_SCALE, global::getFloat)
+        val animator = globalScale(Settings.Global.ANIMATOR_DURATION_SCALE)
+        val transition = globalScale(Settings.Global.TRANSITION_ANIMATION_SCALE)
         // If neither channel could be read, do not claim motion should be
-        // reduced: an unreadable setting is not a user preference.
+        // reduced: an unreadable setting is not a user preference, and defaulting
+        // to "reduce" would strip every animation on a device where the query
+        // merely failed.
         if (animator == null && transition == null) return false
         return DurationScale.reduceMotion(
             animatorScale = animator ?: DEFAULT_SCALE,
@@ -37,23 +36,25 @@ class AndroidSystemMotion(private val context: Context) : SystemMotion {
     }
 
     /**
-     * `getFloat` on these keys throws when the row exists but is stored as a
-     * string (which some OEM builds and older Android versions do), so a failed
-     * float read falls back to parsing the string form.
+     * Read one global duration scale.
+     *
+     * `Settings.Global.getFloat` throws [Settings.SettingNotFoundException] when
+     * the row is absent, and `ClassCastException` when it exists but was written
+     * as a string — which some OEM builds and older Android versions do. Both are
+     * handled here so the caller only ever sees a value or null.
      */
-    private fun scale(key: String, getFloat: (android.content.ContentResolver, String, Float) -> Float): Float? {
-        val resolver = context.contentResolver
+    private fun globalScale(key: String): Float? {
+        val resolver: ContentResolver = context.contentResolver
         return try {
-            getFloat(resolver, key, DEFAULT_SCALE)
+            Settings.Global.getFloat(resolver, key)
         } catch (_: Settings.SettingNotFoundException) {
             null
         } catch (_: SecurityException) {
             null
         } catch (_: Throwable) {
             // Wrong storage type: retry as text before giving up.
-            runCatching {
-                Settings.Global.getString(resolver, key)?.trim()?.toFloatOrNull()
-            }.getOrNull()
+            runCatching { Settings.Global.getString(resolver, key)?.trim()?.toFloatOrNull() }
+                .getOrNull()
         }
     }
 
