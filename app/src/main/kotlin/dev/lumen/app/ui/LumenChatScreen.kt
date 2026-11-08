@@ -389,6 +389,12 @@ fun LumenChatScreen(
     onEditKey: (() -> Unit)? = null,
     onExpandSubagent: (UiStep) -> Unit = {},
     ambient: Boolean = true,
+    /**
+     * Disable every looping animation. Sourced from `MotionPolicy`, which seeds
+     * from Android's animator duration scale; also settable by the user in
+     * Settings. Default false keeps the (now deliberately slow) breathe.
+     */
+    reduceMotion: Boolean = false,
     /** Rolled-up session token/cost totals; the meter hides until non-zero. */
     usage: Usage = Usage(),
     /** Per-session cost ceiling in USD; 0 means no limit (meter shows spend only). */
@@ -552,18 +558,29 @@ fun LumenChatScreen(
     // `read` were rebuilt on every recomposition, making MessageRow/TodoBoard
     // params never-equal and defeating lazy-item skipping.
     val running = busy || steps.any { it.running }
-    val pulse: () -> Float = if (ambient && running) {
+    // MotionPolicy owns the safety rules: a slow, low-amplitude breathe, and a
+    // constant 1f under reduce-motion (Android's "Remove animations"). Under
+    // reduce-motion the transition is never created at all, so no frame callback
+    // is scheduled — a silently looping animation would still burn battery
+    // drawing identical pixels.
+    val pulsePeriod = remember(reduceMotion, ambient, running) {
+        MotionPolicy.streamingPulsePeriodMs(reduceMotion = reduceMotion, ambient = ambient && running)
+    }
+    val pulse: () -> Float = if (pulsePeriod != null) {
+        val (from, to) = remember(reduceMotion) {
+            MotionPolicy.pulseAlphaRange(reduceMotion = reduceMotion, ambient = true)
+        }
         val t = rememberInfiniteTransition(label = "pulse")
         val value = t.animateFloat(
-            initialValue = 0.35f,
-            targetValue = 1f,
-            animationSpec = LumenMotion.pulse,
+            initialValue = from,
+            targetValue = to,
+            animationSpec = LumenMotion.pulse(pulsePeriod),
             label = "pulse",
         )
         // Only the read lambda's identity needs to be stable; the transition
         // itself stays in composition scope because rememberInfiniteTransition
         // is composable.
-        remember(ambient && running) {
+        remember(pulsePeriod) {
             val read: () -> Float = { value.value }
             read
         }

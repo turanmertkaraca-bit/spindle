@@ -7,6 +7,7 @@ import dev.lumen.app.data.AndroidSessionStore
 import dev.lumen.app.data.AndroidSnapshotStore
 import dev.lumen.app.data.KeyStore
 import dev.lumen.app.data.ModelCatalogue
+import dev.lumen.app.platform.AndroidSystemMotion
 import dev.spindle.core.agent.RunRecovery
 import dev.spindle.core.event.EventBus
 import kotlinx.coroutines.CoroutineScope
@@ -100,6 +101,16 @@ class AppContainer(context: Context) : AutoCloseable {
     private val database = AndroidDatabase(context)
 
     val keys = KeyStore(context)
+
+    init {
+        // Seed reduce-motion from the platform's own animator/transition duration
+        // scale, so Android's "Remove animations" actually silences this app.
+        // Installed here (not read per-composition) because the KeyStore is
+        // created once per process; an explicit user toggle still wins, because
+        // the stored value is only seeded on its first read.
+        val motion = AndroidSystemMotion(context)
+        keys.systemReduceMotion = { motion.reduceMotionEnabled() }
+    }
     val store = AndroidSessionStore(database)
     val snapshots = AndroidSnapshotStore(database)
     val catalogue = ModelCatalogue(keys, context)

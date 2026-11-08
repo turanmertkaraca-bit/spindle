@@ -345,6 +345,7 @@ class MainActivity : ComponentActivity() {
                     error = state.error,
                     colors = colors,
                     ambient = !state.reduceMotion,
+                    reduceMotion = state.reduceMotion,
                     modifier = modifier,
                     model = state.model,
                     onModel = { quickSettings = true },

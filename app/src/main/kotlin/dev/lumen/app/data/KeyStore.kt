@@ -189,12 +189,34 @@ class KeyStore(context: Context) {
         set(value) = prefs.edit().putBoolean("terse_replies", value).apply()
 
     /**
-     * When true, disable non-essential motion (the running pulse and the theme
-     * cross-fade). Default false keeps the current animation.
+     * When true, disable all non-essential motion: no looping indicator, no
+     * theme cross-fade, no ambient gradients. See `MotionPolicy`.
+     *
+     * **The default follows the system setting, not `false`.** The owner's
+     * requirement is that enabling Android's "Remove animations" actually
+     * silences this app. A `false` default ignored that entirely.
+     *
+     * An explicit user choice always wins: the first read seeds the stored value
+     * from [systemReduceMotion], and after that the stored value is authoritative.
+     * Seeding happens once rather than on every read so that a user who turns the
+     * app's own toggle back ON is not overridden by the system flag on the next
+     * launch.
      */
     var reduceMotion: Boolean
-        get() = prefs.getBoolean("reduce_motion", false)
-        set(value) = prefs.edit().putBoolean("reduce_motion", value).apply()
+        get() {
+            if (prefs.contains(KEY_REDUCE_MOTION)) return prefs.getBoolean(KEY_REDUCE_MOTION, false)
+            val seeded = systemReduceMotion?.invoke() ?: false
+            prefs.edit().putBoolean(KEY_REDUCE_MOTION, seeded).apply()
+            return seeded
+        }
+        set(value) = prefs.edit().putBoolean(KEY_REDUCE_MOTION, value).apply()
+
+    /**
+     * Platform source for the initial reduce-motion value, installed once by
+     * `LumenApp`. Null (a plain-JVM unit test, or a platform that cannot answer)
+     * means "default to motion allowed".
+     */
+    var systemReduceMotion: (() -> Boolean)? = null
 
     /**
      * Per-session cost ceiling in USD. `0.0` means unlimited (the default), so
@@ -255,6 +277,9 @@ class KeyStore(context: Context) {
     val hasGithubToken: Boolean get() = !githubToken.isNullOrBlank()
 
     companion object {
+        /** Stored key for the reduce-motion preference; see [reduceMotion]. */
+        private const val KEY_REDUCE_MOTION = "reduce_motion"
+
         private const val DEFAULT_PROVIDER = "opencode-go"
 
         /** Unit separator: cannot occur in tool names, commands or paths we store. */

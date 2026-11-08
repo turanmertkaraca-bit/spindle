@@ -32,7 +32,21 @@ object LumenMotion {
     val press: FiniteAnimationSpec<Float> =
         spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessHigh)
 
-    /** The slow prism breathe while a run is live. */
-    val pulse: InfiniteRepeatableSpec<Float> =
-        infiniteRepeatable(tween(1400, easing = FastOutSlowInEasing), RepeatMode.Reverse)
+    /**
+     * The slow prism breathe while a run is live.
+     *
+     * A **function, not a `val`, on purpose.** Every caller must pass the period
+     * it wants, and [MotionPolicy.safeLoopPeriod] raises it to the 1 Hz floor —
+     * so no call site can reintroduce a fast strobe by choosing a small number.
+     * The old `val` was a bare 1400 ms spec that looped for the entire duration
+     * of a run, which is exactly what the owner reported as seizure-adjacent.
+     *
+     * At 2 s per cycle and a 0.62→1.0 opacity swing this reads as a calm
+     * "working" breath rather than a flash.
+     */
+    fun pulse(periodMs: Int = MotionPolicy.STREAMING_PULSE_PERIOD_MS): InfiniteRepeatableSpec<Float> =
+        infiniteRepeatable(
+            tween(MotionPolicy.safeLoopPeriod(periodMs), easing = FastOutSlowInEasing),
+            RepeatMode.Reverse,
+        )
 }
