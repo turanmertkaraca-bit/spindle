@@ -11,6 +11,8 @@ import dev.lumen.app.data.Project
 import dev.lumen.app.data.ProjectStore
 import dev.lumen.app.data.ProviderCatalogue
 import dev.lumen.app.data.SessionArchive
+import dev.lumen.app.data.StorageChild
+import dev.lumen.app.data.StorageScan
 import dev.lumen.app.platform.AndroidEnvironment
 import dev.lumen.app.platform.AndroidShellExecutor
 import dev.lumen.app.platform.AndroidTerminal
@@ -234,6 +236,25 @@ data class StorageReport(
     val lastCleared: String? = null,
 )
 
+/**
+ * One level of the storage drill-down: the directory being inspected and its
+ * largest children, largest first.
+ *
+ * [parent] is null at the category root, so the screen can render "up" without
+ * knowing how the tree was entered. [truncated] means the scan hit its time
+ * budget, so [children]' sizes are a lower bound — shown to the user rather than
+ * silently under-reporting.
+ */
+data class StorageDrill(
+    val path: String,
+    val label: String,
+    val children: List<StorageChild>,
+    val totalBytes: Long,
+    val truncated: Boolean,
+    val loading: Boolean = false,
+    val parent: String? = null,
+)
+
 /** One timestamped diagnostics line. [at] is epoch milliseconds. [seq] is a process-unique id. */
 data class DiagLine(val seq: Long, val at: Long, val text: String)
 
@@ -361,6 +382,12 @@ data class ChatState(
     val hint: String? = null,
     /** The last storage scan, or null before the first one. */
     val storage: StorageReport? = null,
+    /**
+     * The storage drill-down currently open, if any. The storage screen can show
+     * named categories, but a 10 GB budget needs "which folder", so the user can
+     * descend into any category and see its largest children.
+     */
+    val storageDrill: StorageDrill? = null,
     /** Timestamped diagnostics, oldest first, capped at [MAX_DIAG_LINES]. */
     val diag: List<DiagLine> = emptyList(),
     /** Alpine/Debian readiness and the Debian install progress. */
@@ -1045,6 +1072,9 @@ class ChatViewModel(
 
     private var storageGeneration = 0
 
+    /** Guards the drill-down against a slower, superseded scan overwriting a newer one. */
+    private var storageDrillGeneration = 0
+
     /** Recompute the storage breakdown; always runs on [io], never the main thread. */
     fun scanStorage() {
         val generation = ++storageGeneration
@@ -1082,6 +1112,152 @@ class ChatViewModel(
             val freed = targets.sumOf { clearContents(it) }
             publishStorage(measureStorage(), generation, freed, name)
         }
+    }
+
+    /**
+     * Open or move the storage drill-down.
+     *
+     * [path] null or equal to a category name starts at that category's root
+     * directory; otherwise it descends into the given absolute path. Anything
+     * outside the app's own trees is refused, so this control can never be used
+     * to browse (or delete) arbitrary device storage.
+     */
+    fun openStorageDrill(path: String?, label: String? = null) {
+        val root = storageRootFor(path, label) ?: return
+        val generation = ++storageDrillGeneration
+        _state.value = _state.value.copy(
+            storageDrill = StorageDrill(
+                path = root.absolutePath,
+                label = label ?: root.name,
+                children = emptyList(),
+                totalBytes = 0,
+                truncated = false,
+                loading = true,
+                parent = storageParentOf(root),
+            ),
+        )
+        viewModelScope.launch(io) {
+            val result = StorageScan.children(root)
+            if (generation != storageDrillGeneration) return@launch
+            _state.value = _state.value.copy(
+                storageDrill = StorageDrill(
+                    path = root.absolutePath,
+                    label = label ?: root.name,
+                    children = result.children,
+                    totalBytes = result.totalBytes,
+                    truncated = result.truncated,
+                    loading = false,
+                    parent = storageParentOf(root),
+                ),
+            )
+        }
+    }
+
+    /** Leave the drill-down entirely. */
+    fun closeStorageDrill() {
+        storageDrillGeneration++
+        _state.value = _state.value.copy(storageDrill = null)
+    }
+
+    /** Descend into a subdirectory of the open drill-down. */
+    fun enterStorageDrill(child: StorageChild) {
+        if (!child.isDirectory) return
+        openStorageDrill(child.path, child.name)
+    }
+
+    /** Go up one level inside the drill-down, or close it at a category root. */
+    fun storageDrillUp() {
+        val current = _state.value.storageDrill ?: return
+        val parent = current.parent ?: return closeStorageDrill()
+        openStorageDrill(parent, File(parent).name)
+    }
+
+    /**
+     * Delete one drill-down entry, precisely.
+     *
+     * This is the "delete precisely" half of the owner's request, so the rules are
+     * explicit:
+     *  - the target must be inside one of the app's own storage roots;
+     *  - it must not be a symlink (deleting through one would escape the sandbox);
+     *  - it must not BE a root (a root's *contents* are cleared via the category
+     *    clear, never the root itself, because proot and Android both expect
+     *    those directories to exist).
+     *
+     * Rescans the current level afterwards so the screen shows the new truth
+     * rather than a stale number.
+     */
+    fun deleteStorageEntry(child: StorageChild) {
+        val target = File(child.path)
+        if (!isInsideAppStorage(target) || StorageScan.isSymlink(target) || isStorageRoot(target)) return
+        val generation = ++storageDrillGeneration
+        viewModelScope.launch(io) {
+            val freed = if (target.isDirectory) {
+                clearContents(target).also { runCatching { target.delete() } }
+            } else {
+                val n = runCatching { target.length() }.getOrDefault(0L)
+                if (runCatching { target.delete() }.getOrDefault(false)) n else 0L
+            }
+            diag("deleted ${if (child.isDirectory) "folder" else "file"} ${child.name}: freed ${freed / 1024} KiB")
+            val current = _state.value.storageDrill ?: return@launch
+            val result = StorageScan.children(File(current.path))
+            if (generation != storageDrillGeneration) return@launch
+            _state.value = _state.value.copy(
+                storageDrill = current.copy(
+                    children = result.children,
+                    totalBytes = result.totalBytes,
+                    truncated = result.truncated,
+                    loading = false,
+                ),
+            )
+            // Refresh the category totals too: the user just changed them.
+            publishStorage(measureStorage(), ++storageGeneration, freed, child.name)
+        }
+    }
+
+    /** Map a drill request to a real root directory, refusing anything else. */
+    private fun storageRootFor(path: String?, label: String?): File? {
+        val named = path ?: label
+        if (named != null) {
+            when (named) {
+                STORAGE_WORKSPACE -> return workspace.toFile()
+                STORAGE_STORES -> return context?.let { File(it.getDatabasePath(DB_NAME).path).parentFile }
+                STORAGE_LOGS -> return context?.filesDir
+                STORAGE_CACHE -> return context?.cacheDir
+                STORAGE_ALPINE, STORAGE_ALPINE_CACHE -> return environment?.rootfs
+                STORAGE_DEBIAN, STORAGE_DEBIAN_CACHE -> return debian?.rootfs
+                STORAGE_WRAPPERS -> return environment?.wrappersDir
+            }
+        }
+        val candidate = named?.let { File(it) } ?: return null
+        return if (isInsideAppStorage(candidate)) candidate else null
+    }
+
+    /** Every directory the app owns; a delete or drill outside these is refused. */
+    private fun appStorageRoots(): List<File> = buildList {
+        add(workspace.toFile())
+        context?.let { add(it.filesDir); add(it.cacheDir) }
+        environment?.let { add(it.rootfs); add(it.wrappersDir) }
+        debian?.let { add(it.rootfs); add(it.tmpDir) }
+    }
+
+    private fun isInsideAppStorage(target: File): Boolean {
+        val canonical = runCatching { target.canonicalPath }.getOrNull() ?: return false
+        return appStorageRoots().any { root ->
+            val rootPath = runCatching { root.canonicalPath }.getOrNull() ?: return@any false
+            canonical == rootPath || canonical.startsWith(rootPath + File.separator)
+        }
+    }
+
+    private fun isStorageRoot(target: File): Boolean {
+        val canonical = runCatching { target.canonicalPath }.getOrNull() ?: return true
+        return appStorageRoots().any { runCatching { it.canonicalPath }.getOrNull() == canonical }
+    }
+
+    /** The parent directory to show "up" for, or null when already at a root. */
+    private fun storageParentOf(dir: File): String? {
+        if (isStorageRoot(dir)) return null
+        val parent = dir.parentFile ?: return null
+        return if (isInsideAppStorage(parent)) parent.absolutePath else null
     }
 
     private fun publishStorage(report: StorageReport, generation: Int, freed: Long = 0, label: String? = null) {

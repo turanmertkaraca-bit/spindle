@@ -33,7 +33,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.lumen.app.StorageCategory
+import dev.lumen.app.StorageDrill
 import dev.lumen.app.StorageReport
+import dev.lumen.app.data.StorageChild
 import java.util.Locale
 
 private val Mono = FontFamily.Monospace
@@ -53,7 +55,28 @@ fun StorageScreen(
     onClearAll: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    /** The open drill-down, or null for the category list. */
+    drill: StorageDrill? = null,
+    /** Descend into a category (or a folder). */
+    onOpenCategory: (String) -> Unit = {},
+    onEnterFolder: (StorageChild) -> Unit = {},
+    onDrillUp: () -> Unit = {},
+    onCloseDrill: () -> Unit = {},
+    /** Delete one folder/file precisely, after the confirm dialog. */
+    onDeleteEntry: (StorageChild) -> Unit = {},
 ) {
+    if (drill != null) {
+        StorageDrillView(
+            colors = colors,
+            drill = drill,
+            onUp = onDrillUp,
+            onClose = onCloseDrill,
+            onEnter = onEnterFolder,
+            onDelete = onDeleteEntry,
+            modifier = modifier,
+        )
+        return
+    }
     var confirmClearAll by remember { mutableStateOf(false) }
     val scanning = storage?.scanning == true
 
@@ -169,7 +192,12 @@ fun StorageScreen(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 items(categories, key = { it.name }) { category ->
-                    CategoryRow(colors = colors, category = category, onClear = { onClear(category.name) })
+                    CategoryRow(
+                        colors = colors,
+                        category = category,
+                        onOpen = { onOpenCategory(category.name) },
+                        onClear = { onClear(category.name) },
+                    )
                 }
             }
         }
@@ -247,6 +275,7 @@ fun StorageScreen(
 private fun CategoryRow(
     colors: LumenColors,
     category: StorageCategory,
+    onOpen: () -> Unit,
     onClear: () -> Unit,
 ) {
     Row(
@@ -255,6 +284,9 @@ private fun CategoryRow(
             .clip(LumenShapes.row)
             .background(colors.surface)
             .border(1.dp, colors.outline, LumenShapes.row)
+            // Tapping the row inspects what is inside; the Clear button stays a
+            // separate target, so inspecting can never accidentally delete.
+            .clickable(onClick = onOpen)
             .padding(horizontal = 14.dp, vertical = 13.dp)
             .testTag("storage-row-${category.name}"),
         verticalAlignment = Alignment.CenterVertically,
@@ -268,7 +300,7 @@ private fun CategoryRow(
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                if (category.clearable) "Clearable" else "Kept",
+                (if (category.clearable) "Clearable" else "Kept") + " \u00b7 tap to inspect",
                 color = if (category.clearable) colors.water else colors.dim,
                 fontFamily = Mono,
                 fontSize = LumenType.micro,
@@ -316,4 +348,253 @@ private fun humanBytes(bytes: Long): String {
     val mb = kb / 1024.0
     if (mb < 1024.0) return String.format(Locale.US, "%.1f MB", mb)
     return String.format(Locale.US, "%.2f GB", mb / 1024.0)
+}
+
+/**
+ * The drill-down: what is actually inside one storage area, largest first.
+ *
+ * This is the half of the storage manager the owner asked for — *"I need to
+ * inspect and delete precisely"*. The category list answers "which area is
+ * big"; this answers "which folder inside it", down to individual files, with a
+ * per-entry delete that confirms first.
+ */
+@Composable
+private fun StorageDrillView(
+    colors: LumenColors,
+    drill: StorageDrill,
+    onUp: () -> Unit,
+    onClose: () -> Unit,
+    onEnter: (StorageChild) -> Unit,
+    onDelete: (StorageChild) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var pendingDelete by remember { mutableStateOf<StorageChild?>(null) }
+
+    Column(
+        modifier
+            .fillMaxSize()
+            .background(colors.bg)
+            .imePadding()
+            .padding(start = LumenSpacing.page, end = LumenSpacing.page, top = 8.dp, bottom = 24.dp),
+    ) {
+        LumenTopBar(
+            colors = colors,
+            title = drill.label,
+            titleSize = LumenType.title,
+            onBack = onClose,
+            backTag = "storage-drill-close",
+            actions = {
+                LumenBarAction(
+                    colors = colors,
+                    label = "Up",
+                    tag = "storage-drill-up",
+                    onClick = onUp,
+                    enabled = drill.parent != null,
+                )
+            },
+        )
+        Spacer(Modifier.height(LumenSpacing.lg))
+
+        Text(
+            humanBytes(drill.totalBytes),
+            color = colors.fg,
+            fontFamily = Mono,
+            fontSize = 30.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.testTag("storage-drill-total"),
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            when {
+                drill.loading -> "Measuring\u2026"
+                drill.children.isEmpty() -> "Empty"
+                drill.truncated -> "${drill.children.size} entries \u00b7 at least this much"
+                else -> "${drill.children.size} entries \u00b7 largest first"
+            } + " \u00b7 ${drill.path.substringAfterLast('/')}",
+            color = colors.dim,
+            fontFamily = Mono,
+            fontSize = LumenType.caption,
+        )
+        Spacer(Modifier.height(LumenSpacing.lg))
+
+        if (drill.children.isEmpty()) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center,
+            ) {
+                StateHint(
+                    colors = colors,
+                    text = if (drill.loading) "Measuring this folder\u2026" else "Nothing stored here",
+                    detail = if (drill.loading) "Large folders can take a moment" else "This area is empty",
+                    tag = "storage-drill-empty",
+                )
+            }
+        } else {
+            LazyColumn(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .testTag("storage-drill-list"),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(drill.children, key = { it.path }) { child ->
+                    DrillRow(
+                        colors = colors,
+                        child = child,
+                        onEnter = { onEnter(child) },
+                        onDelete = { pendingDelete = child },
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "Only this app's own files can be deleted. Deleting is permanent.",
+            color = colors.dim,
+            fontFamily = Mono,
+            fontSize = LumenType.micro,
+            letterSpacing = 0.3.sp,
+        )
+    }
+
+    val target = pendingDelete
+    if (target != null) {
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            containerColor = colors.surface,
+            titleContentColor = colors.fg,
+            textContentColor = colors.dim,
+            title = {
+                Text(
+                    "Delete ${if (target.isDirectory) "folder" else "file"}?",
+                    fontFamily = Mono,
+                    fontSize = LumenType.heading,
+                    fontWeight = FontWeight.Medium,
+                )
+            },
+            text = {
+                Text(
+                    "${target.name} \u00b7 ${humanBytes(target.bytes)}" +
+                        if (target.isDirectory) {
+                            "\nEverything inside it will be removed. This cannot be undone."
+                        } else {
+                            "\nThis cannot be undone."
+                        },
+                    fontFamily = Mono,
+                    fontSize = LumenType.body,
+                    lineHeight = LumenType.lineTight,
+                )
+            },
+            confirmButton = {
+                Box(
+                    Modifier
+                        .heightIn(min = LumenSize.touchMin)
+                        .clip(LumenShapes.small)
+                        .clickable {
+                            onDelete(target)
+                            pendingDelete = null
+                        }
+                        .padding(horizontal = 8.dp)
+                        .testTag("storage-delete-confirm"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Delete",
+                        color = alertOn(colors),
+                        fontFamily = Mono,
+                        fontSize = LumenType.body,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            },
+            dismissButton = {
+                Box(
+                    Modifier
+                        .heightIn(min = LumenSize.touchMin)
+                        .clip(LumenShapes.small)
+                        .clickable { pendingDelete = null }
+                        .padding(horizontal = 8.dp)
+                        .testTag("storage-delete-cancel"),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("Cancel", color = colors.dim, fontFamily = Mono, fontSize = LumenType.body)
+                }
+            },
+        )
+    }
+}
+
+/** One drill-down row: size, name, file count, and a delete target. */
+@Composable
+private fun DrillRow(
+    colors: LumenColors,
+    child: StorageChild,
+    onEnter: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(LumenShapes.row)
+            .background(colors.surface)
+            .border(1.dp, colors.outline, LumenShapes.row)
+            .clickable(onClick = onEnter)
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .testTag("storage-entry-${child.name}"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                child.name.ifBlank { "(unnamed)" },
+                color = colors.fg,
+                fontFamily = Mono,
+                fontSize = LumenType.bodyLarge,
+                maxLines = 2,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                buildString {
+                    append(if (child.isDirectory) "folder" else "file")
+                    if (child.isDirectory && child.fileCount > 0) {
+                        append(" \u00b7 ${child.fileCount} file")
+                        if (child.fileCount != 1L) append('s')
+                    }
+                },
+                color = colors.dim,
+                fontFamily = Mono,
+                fontSize = LumenType.micro,
+                letterSpacing = 0.4.sp,
+            )
+        }
+        Text(
+            humanBytes(child.bytes),
+            color = colors.fg,
+            fontFamily = Mono,
+            fontSize = LumenType.bodyLarge,
+            fontWeight = FontWeight.Medium,
+        )
+        Spacer(Modifier.width(10.dp))
+        Box(
+            Modifier
+                .heightIn(min = LumenSize.touchMin)
+                .clip(LumenShapes.small)
+                .background(colors.surface)
+                .border(1.dp, LumenAlert.copy(alpha = 0.55f), LumenShapes.small)
+                .clickable(onClick = onDelete)
+                .padding(horizontal = 10.dp)
+                .testTag("storage-delete-${child.name}"),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "Delete",
+                color = alertOn(colors),
+                fontFamily = Mono,
+                fontSize = LumenType.body,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+    }
 }

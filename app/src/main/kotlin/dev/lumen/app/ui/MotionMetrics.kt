@@ -1,7 +1,5 @@
 package dev.lumen.app.ui
 
-import android.graphics.Bitmap
-
 /**
  * Frame-sequence metrics for the animation harness.
  *
@@ -77,15 +75,6 @@ data class MotionMetrics(
 
         /** How many trailing frames must look settled. */
         const val CONVERGENCE_TAIL = 8
-
-        /**
-         * Compute metrics from a captured frame sequence.
-         *
-         * [diff] is injected so the maths is testable without bitmaps.
-         */
-        fun from(frames: List<Bitmap>): MotionMetrics = from(frames.size) { a, b ->
-            ScreenshotSupport.meanAbsDiff(frames[a], frames[b])
-        }
 
         /**
          * [diff] returns the mean absolute difference between frame `a` and `b`.

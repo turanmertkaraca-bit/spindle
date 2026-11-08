@@ -282,6 +282,14 @@ class MainActivity : ComponentActivity() {
                         viewModel.closeTerminal()
                         route = terminalReturn
                     }
+                    // Back inside the storage drill-down goes UP one level before
+                    // it leaves the screen: with a 10 GB budget the user is often
+                    // several folders deep, and popping straight to Settings loses
+                    // their place.
+                    route == "storage" && state.storageDrill != null -> {
+                        if (state.storageDrill.parent != null) viewModel.storageDrillUp()
+                        else viewModel.closeStorageDrill()
+                    }
                     route == "storage" || route == "diagnostics" -> route = "settings"
                     route == "projects" -> route = projectsReturn
                     route == "github" -> {
@@ -567,6 +575,12 @@ class MainActivity : ComponentActivity() {
                         onClearAll = viewModel::clearCache,
                         onBack = { route = "settings" },
                         modifier = modifier,
+                        drill = state.storageDrill,
+                        onOpenCategory = { viewModel.openStorageDrill(it, it) },
+                        onEnterFolder = viewModel::enterStorageDrill,
+                        onDrillUp = viewModel::storageDrillUp,
+                        onCloseDrill = viewModel::closeStorageDrill,
+                        onDeleteEntry = viewModel::deleteStorageEntry,
                     )
                 }
                 route == "diagnostics" -> {

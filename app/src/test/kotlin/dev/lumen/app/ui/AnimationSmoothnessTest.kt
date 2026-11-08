@@ -105,7 +105,7 @@ class AnimationSmoothnessTest {
                 ScreenshotSupport.writePng(frame, File(dir, "think_%02d.png".format(i)))
             }
 
-            val m = MotionMetrics.from(frames)
+            val m = metricsOf(frames)
             println("[anim] ${m.summary()}")
             File(dir, "metrics.txt").writeText(m.report())
 
@@ -180,7 +180,7 @@ class AnimationSmoothnessTest {
             }
             ScreenshotSupport.writePng(frames.last(), File(dir, "todo_expanded.png"))
 
-            val m = MotionMetrics.from(frames)
+            val m = metricsOf(frames)
             println("[anim] todo ${m.summary()}")
 
             check(frames.size >= 2 && m.distinctPairs >= 1) {
@@ -194,4 +194,14 @@ class AnimationSmoothnessTest {
             compose.mainClock.autoAdvance = true
         }
     }
+
+    /**
+     * Frame metrics for a captured sequence.
+     *
+     * The bitmap-diffing overload lives here rather than on [MotionMetrics]
+     * because `ScreenshotSupport` is test-only, and production code must not
+     * depend on it. The maths it feeds is the same `MotionMetrics.from`.
+     */
+    private fun metricsOf(frames: List<Bitmap>): MotionMetrics =
+        MotionMetrics.from(frames.size) { a, b -> ScreenshotSupport.meanAbsDiff(frames[a], frames[b]) }
 }
