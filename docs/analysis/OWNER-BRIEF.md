@@ -3,7 +3,7 @@
 This is the acceptance spec for the goal-mode run. It is the owner's own
 definition of done, written down so it does not have to be re-explained.
 
-**Status as of `b5eb7f9` / v0.2.9.** Update this file when a section lands.
+**Status as of `e206d71` (CI green, both jobs).** Update this file when a section lands.
 
 The owner's words, condensed: *"a completely finished and polished bot, UI-wise
 and backend-wise, optimised to be smooth as hell so it won't trigger some
@@ -27,19 +27,20 @@ that has all the features a phone developer will ever need."*
   `ANIMATOR_DURATION_SCALE`; when a user enables "Remove animations" they expect
   every app to respect it. We do not read it.
 
-**Done means:**
+**Done means:** ✅ **LANDED `40bae2c`**
 
-1. `reduceMotion` defaults to **the system's** animation scale == 0, not `false`.
-   Read `Settings.Global.ANIMATOR_DURATION_SCALE` / `TRANSITION_ANIMATION_SCALE`
-   and seed the existing KeyStore value from it (an explicit user choice wins).
-2. Every looping animation stops under reduce-motion. Audit:
-   `LumenMotion.pulse`, `rememberInfiniteTransition` uses, the `Bloom`/water
-   gradients on Home, anything with `RepeatMode.Reverse`.
-3. The **streaming indicator** must not be a fast strobe. If the pulse stays at
-   all, it should be a slow, low-amplitude opacity change (≥1.4 s per cycle,
-   small delta), never a flash.
-4. Document the rule in `docs/guide/06-ui.md`: *no animation may loop faster than
-   1 cycle/second, and all loops must be disabled by reduce-motion.*
+1. ✅ `reduceMotion` seeds from `ANIMATOR_DURATION_SCALE` + `TRANSITION_ANIMATION_SCALE`
+   (`AndroidSystemMotion` → `DurationScale`, which takes the minimum because either
+   channel being 0 means "no motion"). Seeded **once**, so an explicit user choice
+   still wins on later launches.
+2. ✅ Every looping animation stops under reduce-motion. Audit result: exactly ONE
+   loop remained in the app (`LumenChatScreen` pulse); `Bloom` and `WaterShapes`
+   are static geometry, not animations. Under reduce-motion the transition is
+   never even created, so no frame callback is scheduled.
+3. ✅ Streaming pulse is **2000 ms, opacity 0.62 → 1.0**. `LumenMotion.pulse` is
+   now a *function* and `MotionPolicy.safeLoopPeriod` clamps to a 1 s floor, so a
+   future caller cannot reintroduce a strobe by choosing a smaller number.
+4. ✅ Documented in `docs/guide/06-ui.md` §"Motion: the safety rule".
 
 ## B. Smoothness while streaming (SHIP-BLOCKER)
 
@@ -49,6 +50,13 @@ The transcript re-renders per token. Findings and status live in
 
 **Done means:** scrolling stays at frame rate while a long answer streams, and a
 streaming token does not re-execute the top bar, notice cards or sheets.
+
+**Partial — `ede1984`.** The measurement was itself broken and is now trustworthy:
+the CI artefact reported `hitchRatio` as a 309-digit `Double.MAX_VALUE` on a
+**green** run, then warned "possible hitch" on a smooth animation. `MotionMetrics`
+fixes that and two checks are now real assertions (the expansion must move, and
+must come to rest). The transcript decomposition itself (`CHAT-SCREEN.md`
+#2/#10/#11/#14) is still open.
 
 ## C. File manager — "a phone developer will ever need"
 
@@ -75,6 +83,14 @@ streaming token does not re-execute the top bar, notice cards or sheets.
 4. **Archive**: `.zip`/`.tar.gz` at least *identify*; extraction is optional.
 5. Unknown types: show the type and offer "open with", never a dead tap.
 
+**Storage half: LANDED `7084dd2`.** "The app uses 10GB, I need to inspect and
+delete precisely" — the screen could only show named categories. It is now
+drillable: tap any category to see its largest folders/files (with file counts),
+descend, and delete a single entry after a confirm. `StorageScan` never follows
+symlinks (a guest rootfs is full of them) and reports `truncated` when its
+deadline hits rather than under-reporting. **The type-routing/APK/PDF half above is
+still open.**
+
 ## D. Terminal — "I can see the terminal the AI uses"
 
 `TerminalScreen` exists and is wired (`MainActivity:525`) as an interactive pty.
@@ -84,6 +100,13 @@ The owner additionally wants **visibility into what the agent itself is running*
 just open your own shell. The `bash` tool already streams output; surface a
 read-only "agent terminal" view (or a filter in the existing terminal) showing
 the current/last commands and their output.
+
+**Related, LANDED `144d108`:** *"New folder → bind the agent to it"*. A new Files
+action creates a real **project root** (join `ProjectStore.create` + `setActive` +
+`switchTo`) rather than a subdirectory, so the agent's cwd — and therefore every
+path tool, the shell, the terminal and the git runner — is confined to it. A
+subdirectory could not do this: the agent still sees every sibling file and every
+other `.git`, which is exactly how it gets side-tracked.
 
 ## E. Optional web mode — "the AI can control a web browser"
 
@@ -132,3 +155,38 @@ and rebuild a whole screen.
 3. **F** (GitHub) — owner's most-complained-about feature.
 4. **E** (web mode) — largest, do last, optional.
 5. **G** — after the screenshots are reviewed with the owner.
+
+---
+
+## Execution log (append-only, with shas)
+
+Every entry is CI-green on both jobs unless stated.
+
+| sha | what |
+|---|---|
+| `c391e20` | Budget exhaustion takes a wind-down turn (never ends with no answer); subagent reports survive a final tool call; subagent concurrency capped at 7. |
+| `8181f73` | `git` gains a `dir` param — nested repos are no longer mistaken for the outer one. Reverted a local-only `gradle.properties` tuning that broke CI metaspace. |
+| `0481ef7` | Goal mode renews its budget window while todos remain (was one 60-min window and stop). |
+| `40bae2c` | **§A** Motion safety: 1 Hz floor, 2 s / 0.62→1.0 pulse, system-derived reduce-motion. |
+| `b74cfc9`, `9def27f`, `cbe6e07` | Test isolation: each store test gets its own DB **file** (deleting the shared one corrupts Robolectric's pooled handle). |
+| `ede1984` | `MotionMetrics`: the smoothness artefact reported a 309-digit infinite "hitch" on green runs. Two warnings became assertions. |
+| `7084dd2` | **§C storage** StorageScan drill-down + precise delete. |
+| `144d108` | **§C files** "New project (bind agent)" — a real project root, not a subdirectory. |
+| `efcea8f` | **Composer** context gauge fused with a readable `used / window` label, filling left-to-right. |
+| `e206d71` | Test hygiene: context-label expectations; de-raced `ComposerCompletionTest`. |
+
+### Verified facts worth keeping
+
+- **Local Gradle is unreliable on this host.** The box is memory-overcommitted
+  (`Committed_AS` ~116–125 GB against a `CommitLimit` of 7.6 GB) and the shell
+  carries a hard `ulimit -v 2097152` that `prlimit` cannot raise. The Gradle
+  daemon frequently dies during startup before running a single task. Use **CI as
+  the build server**; that is also the project's own rule for `:app`.
+- **Never commit local memory tuning to `gradle.properties`.** CI reads the same
+  file; `MaxMetaspaceSize=224m` + `in-process` Kotlin made
+  `:core:compileTestKotlin` die with `OutOfMemoryError: Metaspace` (`c391e20`).
+  Keep sandbox tuning outside the repo.
+- **A test that passes by ordering luck is a flake.** Two separate shared-state
+  bugs hid for weeks in `:app` tests; both only surfaced as one-failure CI runs.
+- Reading the `lumen-screenshots` artefact found a real bug (`ede1984`) that no
+  test caught. Keep doing it.
