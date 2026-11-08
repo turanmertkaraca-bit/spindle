@@ -190,3 +190,31 @@ Every entry is CI-green on both jobs unless stated.
   bugs hid for weeks in `:app` tests; both only surfaced as one-failure CI runs.
 - Reading the `lumen-screenshots` artefact found a real bug (`ede1984`) that no
   test caught. Keep doing it.
+
+---
+
+## Wave 2 — silence and the release
+
+| sha | what |
+|---|---|
+| `347270d` | A subagent's short mid-run narration is no longer passed off as its report; child step budget 12→24. |
+| `495c83d` | **Silence:** `stop(reason)`, a run watchdog, and `RunEndPolicy` (14 JVM tests). |
+| `8a75bea` | `stop()` reads the notification title from state (it cannot await the store). |
+| `2e854fd` | **Root cause:** `EventBus` retried publishing, so a terminal `StateChanged` can no longer be dropped by a saturated buffer. |
+| `1066e0a` | **Released `v0.2.13`** (versionCode 18) — `lumen-0.2.13-debug.apk`. CI + release both green. |
+
+### The lesson from this wave
+
+Every fix below `2e854fd` was correct and CI-green, and **the owner kept seeing
+the old behaviour** — because the device was running 0.2.12. A fix that is not
+released is not a fix. When a report says "it happened again", check the installed
+`versionName` first: `git log -1 --format=%h` on `main` says nothing about what is
+on the phone.
+
+### What "never silent" now means
+
+`RunEndPolicy` enumerates every way a run can end and decides what the user is
+told. Only two causes may be silent — `USER_STOP` (they did it) and `SUPERSEDED`
+(the new run's outcome is the news). Every other cause must produce a non-blank
+message, and a JVM test asserts that for `Cause.entries`. The ViewModel cannot
+end a run without going through it.

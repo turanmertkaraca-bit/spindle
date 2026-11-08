@@ -10,10 +10,35 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[—]` deferred
 > what "finished" means in the owner's terms. This queue is the ordered
 > implementation of it.
 
-**Last CI-green sha: `e206d71`** (both jobs: `jvm backend`, `android app
-(robolectric)`; 576 `:app` tests, 259 `:core`, 105 `:tools`).
+**Last CI-green sha: `1066e0a`** (both jobs green) — **released as `v0.2.13`**
+(`lumen-0.2.13-debug.apk`, versionCode 18).
+
+> **Install 0.2.13 before re-testing anything.** The device was on 0.2.12, which
+> predates every fix below — that is why subagents and goal mode kept failing
+> live *after* they were fixed in source.
 
 ---
+
+### [x] SILENCE-01 · A run can no longer end without telling the user — FIXED `2e854fd`
+Owner: *"it dropped the chat without an interrupt alert, it just stopped."*
+Three independent causes:
+1. **`EventBus` dropped the terminal `StateChanged`.** `emit` used a bare
+   `tryEmit`; when the buffer refused an element — possible for the one event the
+   UI cannot live without, racing a delta burst on a slow collector — the run
+   ended with no state change. `publish()` now retries briefly (≤40 ms).
+2. **`stop()` was silent about why.** It is also called by `switchTo` (project
+   switch), so cancelling a live run looked identical to the user pressing Stop.
+   `stop(reason)` records the cause, sets a visible hint, and notifies when the
+   stop was not the user's own.
+3. **Nothing watched the run coroutine.** A run that ended without
+   `AgentLoop.prompt` returning left the UI idle with no explanation. A watchdog
+   joins the job, clears `busy`, resyncs from the store and reports
+   "the run stopped unexpectedly before it finished its answer".
+   `RunEndPolicy` (pure, 14 JVM tests) owns the decision, including the property
+   that only `USER_STOP` and `SUPERSEDED` may be silent.
+Plus: `RunRecovery` wrote "aborted" (indistinguishable from a user stop) — it now
+writes "interrupted — the app was closed or stopped before this answer finished",
+and startup reports how many runs it repaired.
 
 ## Tier 0 — ship-blockers (owner's core complaint)
 
