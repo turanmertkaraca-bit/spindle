@@ -50,7 +50,16 @@ class SubagentSpawner(
     private val loop: AgentLoop,
     private val store: SessionStore,
     private val bus: EventBus,
-    private val maxChildSteps: Int = 12,
+    /**
+     * Tool-work steps a child may take.
+     *
+     * 12 was too few in practice: a child asked to map a subsystem spends its
+     * budget on reads/greps and then ends mid-investigation with no written
+     * report, which reads to the parent as "the subagent failed". 24 is enough
+     * for a focused exploration, and the wind-down turn (see `AgentLoop`) means
+     * the run still ends with prose when it does trip.
+     */
+    private val maxChildSteps: Int = DEFAULT_MAX_CHILD_STEPS,
     /** Ceiling on concurrently RUNNING child runs. 0 or less disables the gate. */
     private val maxConcurrent: Int = DEFAULT_MAX_CONCURRENT,
 ) {
@@ -186,21 +195,46 @@ class SubagentSpawner(
         finalMessage: Message,
     ): String {
         val own = finalMessage.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
-        if (own.isNotBlank()) return own
+        if (own.length >= SUBSTANTIAL_REPORT_CHARS) return own
 
-        val previous = store.messages(childId)
-            .asReversed()
-            .firstOrNull { it.role == Role.ASSISTANT && it.id != finalMessage.id }
-            ?.parts
-            ?.filterIsInstance<Part.Text>()
-            ?.joinToString("") { it.text }
-        if (!previous.isNullOrBlank()) {
-            return "(the subagent's last turn called a tool instead of writing a final " +
-                "answer — this is its most recent written output)\n\n$previous"
+        // Gather every assistant text the child produced this run, newest first,
+        // including its final message (which may hold a short narration).
+        //
+        // Newest-first alone is not enough. A child that runs out of steps
+        // mid-investigation typically ends on one line like "Let me check the rest
+        // of KeyStoreTest", and handing that back as "the report" is
+        // indistinguishable from the child having failed — the owner's exact
+        // complaint. So among the candidates we prefer the most SUBSTANTIAL text:
+        // a real report is long, a progress line is not. If nothing is long
+        // enough we still return the longest, clearly labelled as incomplete,
+        // because a partial answer beats an empty one.
+        val candidates = buildList {
+            if (own.isNotBlank()) add(own)
+            addAll(
+                store.messages(childId)
+                    .asReversed()
+                    .filter { it.role == Role.ASSISTANT && it.id != finalMessage.id }
+                    .mapNotNull { m ->
+                        m.parts.filterIsInstance<Part.Text>()
+                            .joinToString("") { it.text }
+                            .takeIf { it.isNotBlank() }
+                    },
+            )
         }
 
-        // Nothing was ever written. Say why, so the parent can act on it instead
-        // of guessing at an unexplained empty result.
+        val best = candidates.firstOrNull { it.length >= SUBSTANTIAL_REPORT_CHARS }
+            ?: candidates.maxByOrNull { it.length }
+        if (!best.isNullOrBlank()) {
+            return if (best.length >= SUBSTANTIAL_REPORT_CHARS) {
+                "(the subagent stopped before writing a final answer — " +
+                    "this is its most substantial output from the run)\n\n$best"
+            } else {
+                "(the subagent stopped without a written report — this is all it produced)\n\n$best"
+            }
+        }
+
+        // Nothing substantial was ever written. Say why, so the parent can act on
+        // it instead of guessing at an unexplained empty result.
         val why = finalMessage.error
             ?: finalMessage.parts.filterIsInstance<Part.Tool>().lastOrNull()?.result?.output
             ?: "it produced no text before stopping"
@@ -240,6 +274,16 @@ class SubagentSpawner(
     }
 
     companion object {
+        /**
+         * How long a child's text must be to count as a real report rather than a
+         * progress narration ("Let me check X"). 200 chars is roughly one
+         * sentence plus a file path — below that it is almost always narration.
+         */
+        internal const val SUBSTANTIAL_REPORT_CHARS = 200
+
+        /** Default tool-work steps for a child run; see [maxChildSteps]. */
+        const val DEFAULT_MAX_CHILD_STEPS = 24
+
         /**
          * Owner's requested ceiling. Seven concurrent children is enough to fan
          * a review across a repo while staying inside provider rate limits and

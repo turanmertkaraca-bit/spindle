@@ -375,4 +375,67 @@ class SubagentTest {
         assertEquals(7, SubagentSpawner.DEFAULT_MAX_CONCURRENT)
         assertEquals(7, SubagentSpawner.sharedGate.capacity)
     }
+
+    /**
+     * The real-world shape that produced "subagent returned no text" in the
+     * owner's screenshot: the child narrates between tool calls, then its step
+     * budget ends the run on a one-liner like "Let me check the rest of X".
+     * Returning that one-liner as "the report" is indistinguishable from failure.
+     */
+    @Test
+    fun `a child that stops on a short narration reports its substantial output instead`() = runTest {
+        val realReport = "FINDING: the retry path is in Retry.kt:44. " +
+            "It caps the backoff at 2 minutes and drops the usage of the failed attempt. " +
+            "Two callers rely on it: AgentLoop and SubagentSpawner."
+        val provider = ScriptedProvider(
+            // parent asks for the task tool
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_task", "task"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"description\":\"x\",\"prompt\":\"investigate\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            // child: writes the real findings, then a tool call
+            listOf(
+                ProviderEvent.TextDelta(realReport),
+                ProviderEvent.ToolCallStart(0, "c1", "grep"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"pattern\":\"retry\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            // child: only a short narration, then the budget ends the run
+            listOf(
+                ProviderEvent.TextDelta("Let me check the rest of KeyStoreTest."),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+            // parent's closing turn
+            listOf(ProviderEvent.TextDelta("parent done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = InMemorySessionStore()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(TaskTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val parentId = SessionId("ses_parent")
+        newSession(store, parentId.value, model = "fake-1", provider = "fake")
+
+        loop.prompt(parentId, "delegate", "fake/fake-1")
+
+        val output = store.messages(parentId)
+            .flatMap { it.parts }
+            .filterIsInstance<Part.Tool>()
+            .single { it.call.name == "task" }
+            .result?.output ?: ""
+
+        assertTrue(
+            output.contains("Retry.kt:44"),
+            "the child's substantial findings were not reported: $output",
+        )
+        assertTrue(
+            !output.trim().endsWith("Let me check the rest of KeyStoreTest."),
+            "a bare progress narration must not be passed off as the report: $output",
+        )
+    }
 }
