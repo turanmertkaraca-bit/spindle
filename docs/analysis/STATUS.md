@@ -10,12 +10,15 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[—]` deferred
 > what "finished" means in the owner's terms. This queue is the ordered
 > implementation of it.
 
-**Last CI-green sha: `1066e0a`** (both jobs green) — **released as `v0.2.13`**
-(`lumen-0.2.13-debug.apk`, versionCode 18).
+**Last CI-green sha: `59809b9`** (both jobs green) — **released as `v0.2.14`**
+(`lumen-0.2.14-debug.apk`, versionCode 19). `v0.2.13` (versionCode 18) was also
+published; 0.2.14 supersedes it.
 
-> **Install 0.2.13 before re-testing anything.** The device was on 0.2.12, which
-> predates every fix below — that is why subagents and goal mode kept failing
-> live *after* they were fixed in source.
+> **The device is now on 0.2.14 (owner confirmed "much nicer").** Everything below
+> is in it. Before this, the device ran 0.2.12, which predates every fix — that is
+> why subagents, goal mode and the silent stops kept failing live *after* they were
+> fixed in source. **When a report says "it happened again", check the installed
+> `versionName` first.**
 
 ---
 
@@ -81,13 +84,21 @@ must move, and it must come to rest.
 
 ### [x] BUG-01 · Every model shows "free" — FIXED `c4408c6`
 ### [x] BUG-02 · Large tool output crashed the app — FIXED `57c3395`
-### [x] BUG-03 · Subagents lose their entire report — FIXED `c391e20`
+### [x] BUG-03 · Subagents lose their entire report — FIXED `c391e20` + `347270d`
 **Detail:** `docs/analysis/bugs/BUG-03-subagent-output-lost.md`
-The child's last turn is normally a **tool call** (that is how `maxChildSteps`
-ends), so `finalMessage.parts.filterIsInstance<Part.Text>()` was empty and the
-parent received the literal string "(subagent produced no text)" after 250k
-tokens of real work. Now falls back to the newest earlier assistant text; a
-throwing child's findings are salvaged too.
+
+Three defects, all shipped in `v0.2.14`:
+1. The child's last turn is normally a **tool call** (that is how `maxChildSteps`
+   ends), so `finalMessage.parts.filterIsInstance<Part.Text>()` was empty and the
+   parent received the literal string "(subagent produced no text)" after 250k
+   tokens of real work.
+2. Newest-text fallback still failed live: a child narrates between reads and ends
+   on a line like "Let me check the rest of KeyStoreTest", which was passed off as
+   the report. Now the **most substantial** text (≥200 chars) wins, labelled when
+   incomplete.
+3. A throwing child discarded everything it had written; its findings are salvaged.
+Child step budget 12 → 24, and the wind-down turn guarantees a child that does hit
+the cap still ends with prose.
 
 ### [x] GOAL-01 · Goal mode "keeps stopping" — FIXED `0481ef7`
 The goal prompt promises "work until the goal is met"; the code gave it one
@@ -141,6 +152,41 @@ already spent tokens. Now: "context" + "12.4k / 200k" above a 4dp fill that grow
 left-to-right and warms water→accent→alert. The duplicate `ctx N` in the floating
 usage line is gone. Formatting lives in `ui/ContextLabel` (12 JVM tests).
 
+### [x] FREEZE-01 · The chat froze (ANR) and teleported mid-transcript — FIXED `5e90bfc`
+Owner: *"the app just froze on me android said the app stoped working"* and
+*"teleporting me to some the middle of the chat"*. **One root cause for both, and
+it is a main-thread infinite loop:**
+
+```kotlin
+snapshotFlow { listState.layoutInfo }.collect { info ->
+    if (gap > 0) listState.scrollBy(gap.toFloat())   // <-- scroll INSIDE the collector
+    else if (gap < 0) listState.scrollBy((-gap).toFloat())
+}
+```
+
+`scrollBy` invalidates layout → layout changes `layoutInfo` → the collector fires
+again → scrolls again. It never settles: that is the ANR, and every partial layout
+pass issued another corrective scroll, which is the teleporting. Worse, `gap > 0`
+means **empty space below a short tail**, which no scroll can remove, so one branch
+could never converge at all.
+
+Fix: `ui/ChatScrollPolicy` splits the decision from the action.
+- `correction(...)` returns `None` / `JumpToLast` / `ScrollBy`. `None` covers both
+  "already aligned" and "empty space below", so a settled transcript does not
+  scroll at all.
+- `shouldFollow(...)` is **tri-state** (`Boolean?`); `null` means inconclusive and
+  the caller keeps its previous value. Collapsing that to a plain `Boolean` was my
+  own regression (`e487e6b`) which re-broke following — a reminder that the
+  tri-state exists for a reason.
+- It takes `pinnedOnce`: before the first pin the list sits at the top only because
+  nothing has scrolled it, so it counts as at the tail. Without that the decision
+  **latches**: not following → won't pin → stays at top → still "not following".
+- The pin effect keys on `(listState, count, lastBodyLength)` so a *growing* answer
+  re-arms it; sub-pixel gaps are ignored so rounding cannot keep it alive.
+
+15 JVM tests in `ChatScrollPolicyTest`: the exact freeze case, the latch, the
+tall-row case, and "repeatedly measuring a settled list always says None".
+
 ### [ ] UI-02 · `LumenChatScreen` decomposition + remaining perf items
 **Detail:** `docs/analysis/ui/CHAT-SCREEN.md`
 
@@ -181,38 +227,3 @@ an analysis file. If it is non-trivial, write the analysis file first — an ite
 without a detail file forces the next agent to start from scratch, which is the
 exact problem these docs exist to prevent.
 
-### [x] FREEZE-01 · The chat froze (ANR) and teleported mid-transcript — FIXED `5e90bfc`
-Owner: *"the app just froze on me android said the app stoped working"* and
-*"teleporting me to some the middle of the chat"*. **One root cause, and it is a
-main-thread infinite loop:**
-
-```kotlin
-snapshotFlow { listState.layoutInfo }.collect { info ->
-    if (gap > 0) listState.scrollBy(gap.toFloat())   // <-- scroll inside the collector
-    else if (gap < 0) listState.scrollBy((-gap).toFloat())
-}
-```
-
-`scrollBy` invalidates layout → layout changes `layoutInfo` → the collector fires
-again → scrolls again. It never settles: that is the ANR, and every partial layout
-pass issued another corrective scroll, which is the teleporting. Worse, `gap > 0`
-means **empty space below a short tail**, which no scroll can remove — so one
-branch could never converge.
-
-Fix: `ChatScrollPolicy` splits the decision from the action.
-- `correction(...)` returns `None` / `JumpToLast` / `ScrollBy`, and `None` covers
-  both "already aligned" and "empty space below" → a settled transcript scrolls
-  not at all.
-- `shouldFollow(...)` is **tri-state** (`Boolean?`): `null` means inconclusive, and
-  the caller keeps its previous value. Collapsing that to a plain `Boolean` was my
-  own regression (`e487e6b`) and it re-broke following.
-- It takes `pinnedOnce`: before the first pin the list is at the top only because
-  nothing has scrolled it yet, so it counts as "at the tail". Without that the
-  decision latches: not following → won't pin → stays at the top → still "not
-  following".
-- The pin effect keys on `(listState, count, lastBodyLength)` so a *growing* answer
-  re-arms it, and sub-pixel gaps are ignored so layout rounding cannot keep it
-  alive.
-
-15 JVM tests in `ChatScrollPolicyTest`, including the exact freeze case, the
-latch, and "repeatedly measuring a settled list always says None".

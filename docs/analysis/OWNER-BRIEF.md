@@ -3,7 +3,8 @@
 This is the acceptance spec for the goal-mode run. It is the owner's own
 definition of done, written down so it does not have to be re-explained.
 
-**Status as of `e206d71` (CI green, both jobs).** Update this file when a section lands.
+**Status as of `59809b9` — released as `v0.2.14` (versionCode 19), CI green on
+both jobs, and installed by the owner.** Update this file when a section lands.
 
 The owner's words, condensed: *"a completely finished and polished bot, UI-wise
 and backend-wise, optimised to be smooth as hell so it won't trigger some
@@ -218,3 +219,54 @@ told. Only two causes may be silent — `USER_STOP` (they did it) and `SUPERSEDE
 (the new run's outcome is the news). Every other cause must produce a non-blank
 message, and a JVM test asserts that for `Cause.entries`. The ViewModel cannot
 end a run without going through it.
+
+---
+
+## Wave 3 — the freeze, and a working release
+
+| sha | what |
+|---|---|
+| `91407ea` | **FREEZE-01:** the transcript scrolled from inside its `layoutInfo` collector — a main-thread infinite loop (ANR) and the cause of the "teleport to the middle". Split into `ChatScrollPolicy`. |
+| `54ca4be` | Geometry beats the row-index heuristic when deciding "at the tail" (tall rows). |
+| `e487e6b` | Restored the **tri-state** decision my rewrite had collapsed (an inconclusive pass was flipping the reader to "not following"). |
+| `5e90bfc` | `pinnedOnce`: a transcript that has never been pinned is not "scrolled up". Without this the decision latches and the chat never follows the answer. |
+| `59809b9` | **Released `v0.2.14`** — `lumen-0.2.14-debug.apk`. Owner: *"this is much nicer"*. |
+
+### Why this took three attempts, honestly
+
+`54ca4be`, `e487e6b` and `5e90bfc` were all attempts at the same two failing
+tests. Each one was a *partial* reading of the same underlying omission:
+
+1. the index heuristic fired before the geometry, so a tall row looked like "scrolled up";
+2. my rewrite flattened a deliberate `Boolean?` into `Boolean`, so an inconclusive
+   first layout pass flipped the state;
+3. there was no notion of "this list has not started following yet", so a list at
+   the top *by default* was read as a list the user had scrolled.
+
+The lesson is worth keeping: when a tri-state exists in existing code, it is
+usually load-bearing. And when a fix for a UI latch keeps moving the failure
+rather than removing it, the missing concept is usually a **lifecycle flag**
+(`pinnedOnce`), not a better predicate.
+
+### Confirmed working on device (0.2.14)
+
+- No freeze on send or after a tool call.
+- Stays at the latest bubble while not scrolling up; no teleporting.
+- Subagent reports arrive with content (all three `BUG-03` defects fixed).
+
+### Still open (next session)
+
+- `OWNER-BRIEF` §C **type routing**: one mime/action map shared by Files and mention
+  taps; APK install from Files with a confirm; PDF hand-off to the system viewer;
+  archive identification. (The *storage* half of §C is done.)
+- `OWNER-BRIEF` §D: surface the agent's own commands in the terminal view.
+- `OWNER-BRIEF` §E: optional web mode (largest item).
+- `OWNER-BRIEF` §F: GitHub breadth (issues/PRs/releases/actions) and the `git` tool.
+- `ARCH-02` context waste; `UI-02` `LumenChatScreen` decomposition.
+- Bug waves 2–5 (wave 1 is the work above; none of the 5 planned waves have been
+  run as *deliberate* bug-hunts yet — they have been reactive to owner reports).
+- GPU access / custom drivers (panvk, Mali) and emulation support — owner asked;
+  not started, and it needs a design note before code: the guest is proot without
+  root, so real GPU passthrough is not available; what *is* achievable is exposing
+  `libvulkan`/`libEGL` from the host to the guest bind-mounts plus a driver-swap UI,
+  which needs verifying against this device's actual `/vendor/lib64` layout first.

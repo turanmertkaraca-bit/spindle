@@ -6,11 +6,23 @@ point. Everything you need is in this repo; nothing here is guesswork.
 - **Repo:** `turanmertkaraca-bit/spindle` (Android app `dev.lumen.app`, engine
   codename "spindle")
 - **Working dir:** `spindle/` (the repo root — you are already in it)
-- **Branch:** `main` — **in sync with origin, clean tree**
-- **Version:** `0.2.8` (`versionCode 13`)
-- **Published release:** https://github.com/turanmertkaraca-bit/spindle/releases/tag/v0.2.8
-- **State as of this handoff:** all stability/perf waves (Runs C–F) are
-  **complete, CI-green, and released**. The app installs and runs.
+- **Branch:** `main` — in sync with origin, clean tree
+- **Version:** `0.2.14` (`versionCode 19`)
+- **Published release:** https://github.com/turanmertkaraca-bit/spindle/releases/tag/v0.2.14
+- **Last CI-green sha:** `59809b9` (both jobs)
+- **Installed on the owner's device:** 0.2.14 (owner confirmed "much nicer")
+
+---
+
+## 0. Read this before you conclude anything is broken
+
+**Check the installed `versionName` first.** During the last session, three
+separate "it happened again" reports were the owner still running **0.2.12**
+while the fixes were sitting CI-green on `main`. `git log -1` says nothing about
+what is on the phone. `Settings` shows the version; so does
+`aapt`-free inspection of the installed APK.
+
+The second half of those reports were genuine. Assume neither.
 
 ---
 
@@ -22,82 +34,97 @@ Compose UI (`:app`) is a thin consumer of the event stream — there is no HTTP
 server between them and no second state model.
 
 Read `docs/analysis/OWNER-BRIEF.md` (what "finished" means, measured against the
-code) and `docs/analysis/STATUS.md` (the ordered queue).
+code, with shas) and `docs/analysis/STATUS.md` (the ordered queue + execution log).
 
 `docs/guide/README.md` is the **per-subsystem developer guide**, one file per
-area, written against this exact HEAD.
+area.
 
 ---
 
-## 2. Your mission (owner's words, condensed)
+## 2. State at this handoff
 
-> Turn this app into a **completely finished, easy-to-use app** — all features
-> present, the UI fixed where it is bad, the tools made genuinely useful, and
-> bug-fix waves run with subagents.
+Shipped in 0.2.14 and verified on device:
 
-Specifically the owner has said:
+- **Motion safety** (`40bae2c`): no animation loops faster than 1 Hz, the
+  streaming pulse is 2 s at 0.62→1.0, and reduce-motion is derived from Android's
+  own animator/transition duration scale.
+- **Goal mode** (`0481ef7`): renews its budget window while todos remain instead
+  of stopping at one 60-minute boundary.
+- **Subagents** (`c391e20`, `347270d`): a child that ends on a tool call, or on a
+  mid-run narration, now reports its substantial findings; child step budget 24;
+  concurrency capped at 7.
+- **No silent stops** (`2e854fd`, `495c83d`): `EventBus` retries a refused
+  publish so a terminal `StateChanged` cannot be dropped; `stop(reason)` says why;
+  a watchdog reports a run that vanishes; `RunEndPolicy` is pure and tested.
+- **Storage** (`7084dd2`): drill into any category, see the biggest folders and
+  files, delete one entry precisely.
+- **Files** (`144d108`): "New project (bind agent)" creates a real project root so
+  the agent cannot wander into sibling projects.
+- **Composer** (`efcea8f`): the context limit is a labelled bar inside the card.
+- **Freeze/teleport** (`5e90bfc`): the transcript no longer scrolls from inside
+  its own `layoutInfo` collector (that was a main-thread ANR).
 
-1. **The UI has bad parts.** Settings is fine; much of the rest is not. Use the
-   screenshot harness + a vision model to judge each screen, then fix it.
-2. **The GitHub story is weak.** "Almost everything on GitHub" should work
-   (issues, PRs, releases, actions…), and the agent's `git` tool is not good
-   enough to do real work.
-3. **A concrete bug: every model shows "free"** even when it is not. Root cause
-   is already diagnosed — see `docs/analysis/bugs/BUG-01-models-show-free.md`.
-4. **Context is being wasted.** Analyse and fix anything that burns context.
-5. **Subagents must be capped at 7 concurrent.** There is currently **no cap at
-   all** — see `docs/analysis/arch/SUBAGENTS.md`.
-
-Do not invent a different mission. Do not rewrite the app from scratch. Work in
-**waves**, each wave shippable.
+Open work is listed at the bottom of `OWNER-BRIEF.md` §"Still open" and in
+`STATUS.md` tiers.
 
 ---
 
 ## 3. How to work — non-negotiable
 
-These rules exist because breaking them has burned this project before.
-
 ### 3.1 Verification
 
 - **`:core`, `:tools`, `:sandbox`, `:store-sqlite` tests run locally** and are
-  authoritative. Run them before every commit.
-- **`:app` Robolectric tests do NOT run in this environment** (no aarch64
-  conscrypt native). `:app` **compiles** locally; its behaviour is verified
-  **only by CI**. A local `:app` build is a compile check, never a pass.
-- **Always push and wait for CI to go green on the sha** before claiming done.
-  Five real regressions shipped during earlier waves by trusting a local `:app`
-  build.
+  authoritative. Run them before every commit **if the host lets you**.
+- **`:app` Robolectric tests do NOT run in this environment.** `:app` **compiles**
+  locally; its behaviour is verified **only by CI**.
+- **Always push and wait for CI green on the sha** before claiming done. Many real
+  regressions shipped during earlier waves by trusting a local `:app` build.
 - Fetch the `lumen-screenshots` CI artifact and **look at the PNGs** for any UI
-  change.
+  change. Reading it found a real bug (`ede1984`): the smoothness artefact
+  reported an infinite hitch on a smooth animation.
 
-Exact commands: `docs/guide/07-testing.md`.
+**CI is also the build server.** On this host the Gradle daemon frequently dies
+during startup before running a single task:
+
+- the shell carries a hard `ulimit -v 2097152` (2 GiB of *virtual* address space)
+  and `prlimit` cannot raise it;
+- the box is memory-overcommitted (`Committed_AS` ~116–125 GB against a
+  `CommitLimit` of 7.6 GB).
+
+Do not "fix" this by committing memory tuning to `gradle.properties` — **CI reads
+that file too**, and `MaxMetaspaceSize=224m` with in-process Kotlin made
+`:core:compileTestKotlin` die with `OutOfMemoryError: Metaspace` (`c391e20`).
+Keep sandbox tuning outside the repo.
 
 ### 3.2 Subagents
 
-You have **unlimited subagent use**, but a hard **7 concurrent** cap is wanted
-(and must be implemented — it does not exist yet). Rules:
+The app's own `task` tool is now fixed and released, so subagents are usable.
+Rules still apply:
 
 - **One writer per file per round.** Parallel writers to the same file corrupt
-  each other. Sequence them.
-- Read-only `explore` agents can run freely in parallel — they cannot collide.
-- Give every writer a **frozen interface contract** (exact signatures) plus the
-  **test tags it must preserve**.
-- Point each agent at the specific `docs/analysis/**` file for its area instead
-  of letting it re-derive the codebase.
+  each other.
+- Read-only `explore` agents can run freely in parallel.
+- Give every writer a **frozen interface contract** plus the **test tags** it must
+  preserve.
+- Point each agent at the specific `docs/analysis/**` file for its area instead of
+  letting it re-derive the codebase.
+- **Check the returned report is real.** A subagent that answers with one
+  narration line is a bug to report, not a result to trust.
 
 Full protocol: `docs/analysis/PROTOCOL.md`.
 
 ### 3.3 Never regress
 
-`docs/HANDOFF.md` §5 lists invariants that must not break. The ones most easily
-broken by well-meaning edits:
+`docs/HANDOFF.md` §5 lists invariants. The ones most easily broken:
 
 - No tool part may stay `PENDING` after a run ends.
 - Cancellation must never be reported as a timeout.
+- A run must **never** end without telling the user (`RunEndPolicy`).
 - `START_NOT_STICKY`; a failed `startForeground` tears the run down.
 - Path arguments always go through `resolveInsideCwd`.
 - The guest `ulimit` guards go on the guest **script**, not on proot.
 - Identity is the id, never the normalised name.
+- **Never scroll from inside a `layoutInfo` collector** (see FREEZE-01).
 
 ---
 
@@ -106,13 +133,13 @@ broken by well-meaning edits:
 | Path | What it is | Update when |
 |---|---|---|
 | `docs/HANDOFF.md` | Long-form session history, build/CI recipe, invariants | At the end of a wave |
-| `docs/guide/*.md` | **Per-subsystem developer guide** (9 files) | When you change a subsystem's behaviour |
-| `docs/PROJECT-STATUS.md` | The live board (what's done / left) | Every wave |
-| `docs/analysis/bugs/*.md` | **Confirmed bugs with root cause + fix sketch** | When you fix one — mark it FIXED with the sha |
-| `docs/analysis/ui/*.md` | Per-screen UI assessment + known problems | After a UI wave |
+| `docs/guide/*.md` | Per-subsystem developer guide (9 files) | When you change a subsystem |
+| `docs/PROJECT-STATUS.md` | The live board | Every wave |
+| `docs/analysis/bugs/*.md` | Confirmed bugs with root cause + fix sketch | When you fix one — mark FIXED with the sha |
+| `docs/analysis/ui/*.md` | Per-screen UI assessment | After a UI wave |
 | `docs/analysis/arch/*.md` | Context/subagent/architecture analysis | When the structure changes |
-| `docs/analysis/features/*.md` | Feature-by-feature gap analysis (GitHub etc.) | When a feature lands |
-| `docs/audit/*.md` | The **original** audit, pinned at `d17dbd2` | **Read-only, mostly stale** — many findings are already fixed |
+| `docs/analysis/features/*.md` | Feature gap analysis (GitHub etc.) | When a feature lands |
+| `docs/audit/*.md` | Original audit, pinned at `d17dbd2` | Read-only, mostly stale |
 
 **Rule:** if you learn something a future agent would otherwise re-derive, write
 it into one of these files. That is the entire point of them.
@@ -121,16 +148,16 @@ it into one of these files. That is the entire point of them.
 
 ## 5. First 30 minutes — suggested
 
-1. Read this file, then `docs/guide/README.md`, then
-   `docs/analysis/STATUS.md` (the ranked work queue).
-2. Run the local JVM tests to confirm the baseline is green:
-   see `docs/guide/07-testing.md`.
-3. Pick the **top item** from `docs/analysis/STATUS.md`.
-4. Fix it with a subagent or inline; verify per §3.1; update the analysis file
-   and `PROJECT-STATUS.md`; commit; push; wait for CI.
+1. Read this file, then `docs/analysis/STATUS.md` (ranked queue + execution log),
+   then `OWNER-BRIEF.md` §"Still open".
+2. Confirm what the device is running. If it is older than the latest release,
+   release first — otherwise you will chase already-fixed bugs.
+3. Pick the top open item. Write the plan into its analysis file **before**
+   spawning writers, so it survives a crash.
+4. Verify per §3.1; update the analysis file and `PROJECT-STATUS.md`; commit; push;
+   wait for CI.
 
-**Do not** start by "exploring the codebase". It is already mapped. Start from
-the queue.
+**Do not** start by "exploring the codebase". It is already mapped.
 
 ---
 
@@ -140,23 +167,62 @@ the queue.
 - Android SDK at `/opt/android-sdk` (platforms 34/35).
 - Build needs `-Pandroid.aapt2FromMavenOverride=/opt/aapt2bin/aapt2`.
 - **The HTTPS proxy port changes between sessions.** Read it from the live
-  `$https_proxy` env var; do not hardcode a remembered port. A stale port shows
-  up as Gradle failing to download a random jar.
-- The SDK's `aapt`/`aapt2` binaries are x86 and **crash with `Illegal
-  instruction`** on this aarch64 host. To inspect an APK, use Python
-  (`zipfile`) or the pure-Java `apksig` jar in the Gradle cache — not the SDK
-  tools.
-- Git remote already has credentials; `git push` works without extra setup.
+  `$https_proxy`; do not hardcode a remembered port. A stale port shows up as
+  Gradle failing to download a random jar.
+- The SDK's `aapt`/`aapt2` are x86 and **crash with `Illegal instruction`** on this
+  aarch64 host. Inspect APKs with Python (`zipfile`) or the pure-Java `apksig` jar.
+- Push works with the GitHub token. The app's own `git` **tool** runs in the
+  *session* cwd, which is `projects/playground/` — a **different repo**
+  (`fnportandroid`). Work in `spindle/` and push from there; a raw
+  `git push` in this shell has no credentials, so use the token (see below).
+
+### Pushing from a shell (no credential helper is configured)
+
+```sh
+cd spindle
+cat > /tmp/gh-askpass.sh <<'EOF'
+#!/bin/sh
+case "$1" in
+  *Username*) echo "x-access-token" ;;
+  *Password*) echo "$GITHUB_TOKEN" ;;
+esac
+EOF
+chmod +x /tmp/gh-askpass.sh
+GIT_ASKPASS=/tmp/gh-askpass.sh GITHUB_TOKEN=<token> GIT_TERMINAL_PROMPT=0 \
+  git push origin main
+```
+
+The token is the one the owner supplied; it is not in the repo and must not be
+committed.
+
+### CI helpers used last session
+
+```sh
+TOKEN=<token>
+# latest run for a sha
+curl -s "https://api.github.com/repos/turanmertkaraca-bit/spindle/actions/runs?per_page=1" \
+  -H "Authorization: Bearer $TOKEN"
+# jobs for a run
+curl -s ".../actions/runs/<RUN>/jobs" -H "Authorization: Bearer $TOKEN"
+# a job's log, then grep for "e: file" / FAILED / "tests completed"
+curl -sL ".../actions/jobs/<JOB>/logs" -H "Authorization: Bearer $TOKEN"
+# an artifact
+curl -sL ".../actions/artifacts/<ID>/zip" -H "Authorization: Bearer $TOKEN" -o a.zip
+```
 
 ---
 
 ## 7. Known traps
 
-- `.git/objects/**` may contain **broken symlinks** (proot link2symlink
-  artifacts) pointing at a deleted path. If git says `bad object HEAD`, the
-  fix is in `docs/analysis/arch/ENVIRONMENT.md` — do not `git clone` over the
-  repo, you will lose local refs.
-- `projects/playground/` also contains an **unrelated repo**
-  (`fnportandroid`). Ignore it. Work only in `spindle/`.
-- The `dist/` directory is gitignored; release APKs are published by CI, not
-  committed.
+- `.git/objects/**` may contain **broken symlinks** (proot link2symlink artifacts).
+  If git says `bad object HEAD`, the repair is in
+  `docs/analysis/arch/ENVIRONMENT.md` §1 — do not `git clone` over the repo.
+- `projects/playground/` also contains an **unrelated repo** (`fnportandroid`).
+  Work only in `spindle/`.
+- `dist/` is gitignored; release APKs are published by CI, not committed.
+- **A test that passes by ordering luck is a flake.** Two shared-state bugs hid in
+  `:app` tests for weeks; both surfaced only as isolated CI failures. Each store
+  test now gets its own database **file** (deleting the shared one corrupts
+  Robolectric's pooled handle).
+- **A fix that is not released is not a fix.** Tag and publish before asking the
+  owner to re-test.
