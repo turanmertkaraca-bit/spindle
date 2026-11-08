@@ -35,20 +35,29 @@ import kotlin.test.assertTrue
 @Config(sdk = [34])
 class AndroidSessionStoreTest {
 
+    private val counter = java.util.concurrent.atomic.AtomicInteger(0)
+
     /**
-     * Each test gets a **fresh** on-disk database.
+     * Each test gets its own database **file**.
      *
      * Robolectric gives every test in the class the same application context, so
      * `openOrCreateDatabase("lumen.db")` reuses one file across the whole class.
      * Rows written by an earlier test then leak into a later one: `prune` counts
      * sessions it never created, and retention assertions fail for reasons that
-     * have nothing to do with the code under test. Deleting the file before each
-     * open makes every test hermetic.
+     * have nothing to do with the code under test (this is what broke CI on
+     * 0481ef7).
+     *
+     * Deleting the shared file is NOT a fix — Robolectric's connection pool keeps
+     * the handle and the next open raises `SQLiteDatabaseCorruptException`. A
+     * distinct file name per test is the isolation that actually works.
      */
     private fun newStore(): AndroidSessionStore {
-        ApplicationProvider.getApplicationContext<Context>()
-            .deleteDatabase(AndroidDatabase.DB_NAME)
-        return AndroidSessionStore(ApplicationProvider.getApplicationContext())
+        // A distinct file per test. See the note on AndroidSessionStore's
+        // (Context, dbName) constructor: Robolectric shares one application
+        // context across the class, and deleting the shared file corrupts the
+        // pooled connection.
+        val name = "lumen-test-${counter.incrementAndGet()}.db"
+        return AndroidSessionStore(ApplicationProvider.getApplicationContext(), name)
     }
 
     @Test

@@ -16,7 +16,20 @@ import java.io.File
  * its own transaction and only bumps the stored version on success, so a crash
  * mid-upgrade leaves the previous version intact rather than a half-migrated DB.
  */
-internal class AndroidDatabase(context: Context, private val integrityOverride: ((SQLiteDatabase) -> Boolean)? = null) : AutoCloseable {
+internal class AndroidDatabase(
+    context: Context,
+    private val integrityOverride: ((SQLiteDatabase) -> Boolean)? = null,
+    /**
+     * Database file name. Overridable **only** so a test can get its own file:
+     * Robolectric reuses one application context across a test class, and every
+     * test opening `lumen.db` shares state with every other test. Deleting the
+     * file is not an option — Robolectric's connection pool keeps the handle and
+     * the next open raises SQLiteDatabaseCorruptException — so isolation has to
+     * come from using a distinct file per test. Production always uses
+     * [DB_NAME].
+     */
+    private val dbName: String = DB_NAME,
+) : AutoCloseable {
 
     private val appContext = context.applicationContext
 
@@ -88,7 +101,7 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
      */
     private fun openHealthy(): SQLiteDatabase {
         val candidate = runCatching {
-            appContext.openOrCreateDatabase(DB_NAME, Context.MODE_PRIVATE, null)
+            appContext.openOrCreateDatabase(dbName, Context.MODE_PRIVATE, null)
         }.getOrNull()
 
         // A null handle means the open itself failed (disk pressure, a transient
@@ -97,7 +110,7 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
         // distinguishable "unavailable" error and let the caller retry — the
         // handle cache is left null by [db] so the next attempt opens afresh.
         if (candidate == null) {
-            throw IllegalStateException("storage unavailable: could not open $DB_NAME")
+            throw IllegalStateException("storage unavailable: could not open $dbName")
         }
 
         // Wait out a transient writer lock before the check so a mere BUSY is not
@@ -111,7 +124,7 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
         }
         runCatching { candidate.close() }
         quarantine()
-        val fresh = appContext.openOrCreateDatabase(DB_NAME, Context.MODE_PRIVATE, null)
+        val fresh = appContext.openOrCreateDatabase(dbName, Context.MODE_PRIVATE, null)
         configure(fresh)
         return fresh
     }
@@ -416,7 +429,7 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
     /** Rename `lumen.db` and its WAL/SHM sidecars to `.corrupt-<ts>` siblings. */
     private fun quarantine() {
         val stamp = System.currentTimeMillis()
-        val base = appContext.getDatabasePath(DB_NAME)
+        val base = appContext.getDatabasePath(dbName)
         for (suffix in listOf("", "-wal", "-shm")) {
             val file = File(base.path + suffix)
             if (file.exists()) {

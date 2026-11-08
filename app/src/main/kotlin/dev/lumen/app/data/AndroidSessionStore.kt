@@ -65,6 +65,18 @@ class AndroidSessionStore internal constructor(private val shared: AndroidDataba
 
     constructor(context: Context) : this(AndroidDatabase(context))
 
+    /**
+     * Test-only: a store backed by its OWN database file.
+     *
+     * Robolectric reuses one application context for a whole test class, so every
+     * test that opens the default `lumen.db` shares rows with every other test —
+     * retention assertions then fail on data they never created. Deleting the
+     * file is not a fix: Robolectric's connection pool still holds the handle and
+     * the next open throws SQLiteDatabaseCorruptException. A distinct file name
+     * per test is the only isolation that actually works.
+     */
+    internal constructor(context: Context, dbName: String) : this(AndroidDatabase(context, dbName = dbName))
+
     private val mutex = Mutex()
 
     /** The shared, lazily-opened connection. Only touch from [locked]. */
