@@ -23,6 +23,7 @@ import dev.spindle.core.tool.ToolOutcome
 import dev.spindle.core.tool.ToolRegistry
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -229,5 +230,149 @@ class SubagentTest {
             },
             "child never ran with the inherited model: ${store.messages(child.id)}",
         )
+    }
+
+    // ---- regression: a child that stops on a tool call must not lose its work ----
+
+    @Test
+    fun `child that ends on a tool call still reports its last written text`() = runTest {
+        // Turn 1: the child writes findings then calls a tool.
+        // Turn 2: the child's step budget trips on that tool call, so its final
+        // message has NO text part. Before the fix the whole report was discarded
+        // and the parent saw "(subagent produced no text)".
+        val provider = ScriptedProvider(
+            // parent: ask for the task tool
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_task", "task"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"description\":\"x\",\"prompt\":\"look\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            // child turn 1: findings, then a tool call
+            listOf(
+                ProviderEvent.TextDelta("FINDING: the bug is in Foo.kt:42"),
+                ProviderEvent.ToolCallStart(0, "call_read", "read"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"path\":\"Foo.kt\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            // child turn 2: budget-exhausted wind-down turn (no tools offered)
+            listOf(
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+            // parent turn 2
+            listOf(
+                ProviderEvent.TextDelta("parent done"),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+        )
+        val store = InMemorySessionStore()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(TaskTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val parentId = SessionId("ses_parent")
+        newSession(store, parentId.value, model = "fake-1", provider = "fake")
+
+        loop.prompt(parentId, "delegate", "fake/fake-1")
+
+        val output = store.messages(parentId)
+            .flatMap { it.parts }
+            .filterIsInstance<Part.Tool>()
+            .single { it.call.name == "task" }
+            .result?.output ?: ""
+        assertTrue(
+            output.contains("FINDING: the bug is in Foo.kt:42"),
+            "the child's written findings were dropped: $output",
+        )
+        assertTrue(
+            !output.contains("produced no text"),
+            "the child's work was still reported as empty: $output",
+        )
+    }
+
+    // ---- regression: budget exhaustion must produce a written report ----
+
+    @Test
+    fun `a run that exhausts its step budget asks the model to wind down and reports`() = runTest {
+        val provider = ScriptedProvider(
+            // The only agent turn: a tool call, which trips maxSteps = 1.
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_read", "read"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"path\":\"a.txt\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            // The wind-down turn must still happen and its text is the report.
+            listOf(
+                ProviderEvent.TextDelta("DONE: nothing; REMAINING: everything"),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+        )
+        val store = InMemorySessionStore()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(TaskTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val id = SessionId("ses_budget")
+        newSession(store, id.value, model = "fake-1", provider = "fake")
+
+        val last = loop.prompt(
+            id,
+            "do a lot of work",
+            "fake/fake-1",
+            AgentConfig.general().copy(maxSteps = 1),
+        )
+
+        assertEquals(
+            "DONE: nothing; REMAINING: everything",
+            last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text },
+            "budget exhaustion returned no report; the user sees the run 'stop randomly'",
+        )
+        // The wind-down turn must be sent with tools disabled, or the model
+        // simply calls another tool and the run still ends with no report.
+        assertEquals(2, provider.requests.size)
+        assertTrue(
+            provider.requests[1].tools.isEmpty(),
+            "the wind-down turn must offer no tools: ${provider.requests[1].tools}",
+        )
+    }
+
+    // ---- regression: the subagent concurrency cap ----
+
+    @Test
+    fun `concurrent children never exceed the cap and none are lost`() = runTest {
+        // The gate is exercised directly: the contract under test is the permit
+        // count, and driving 10 real children would need a scripted provider that
+        // itself had to obey the cap to be meaningful.
+        val gate = SubagentSpawner.Gate(3)
+        val inFlight = java.util.concurrent.atomic.AtomicInteger(0)
+        kotlinx.coroutines.coroutineScope {
+            (1..10).map {
+                launch {
+                    gate.withPermit {
+                        inFlight.incrementAndGet()
+                        kotlinx.coroutines.delay(10)
+                        inFlight.decrementAndGet()
+                    }
+                }
+            }
+        }
+        assertEquals(0, inFlight.get(), "permits leaked")
+        assertTrue(
+            gate.highWaterMark.get() <= 3,
+            "concurrency exceeded the cap: ${gate.highWaterMark.get()}",
+        )
+        assertEquals(3, gate.highWaterMark.get(), "the cap was never actually reached")
+    }
+
+    @Test
+    fun `the default cap is the owner's seven`() {
+        assertEquals(7, SubagentSpawner.DEFAULT_MAX_CONCURRENT)
+        assertEquals(7, SubagentSpawner.sharedGate.capacity)
     }
 }

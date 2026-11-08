@@ -412,13 +412,17 @@ class AgentLoopTest {
     }
 
     @Test
-    fun `maxSteps caps the number of model turns`() = runTest {
+    fun `maxSteps caps working turns, then spends exactly one on a wrap-up report`() = runTest {
         fun alwaysTool() = listOf(
             ProviderEvent.ToolCallStart(0, "call_1", "echo"),
             ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"x\"}"),
             ProviderEvent.Finished(FinishReason.TOOL_CALLS),
         )
-        val provider = ScriptedProvider(alwaysTool(), alwaysTool(), alwaysTool(), alwaysTool())
+        fun report() = listOf(
+            ProviderEvent.TextDelta("wrap-up"),
+            ProviderEvent.Finished(FinishReason.STOP),
+        )
+        val provider = ScriptedProvider(alwaysTool(), alwaysTool(), report())
         val store = store()
         val loop = AgentLoop(
             providers = SimpleProviderRegistry(listOf(provider)),
@@ -428,9 +432,16 @@ class AgentLoopTest {
         )
         newSession(store, "ses_3")
 
-        loop.prompt(SessionId("ses_3"), "go", "fake/fake-1", agent = AgentConfig(maxSteps = 2))
+        val last = loop.prompt(SessionId("ses_3"), "go", "fake/fake-1", agent = AgentConfig(maxSteps = 2))
 
-        assertEquals(2, provider.requests.size)
+        // Two working steps, plus one wind-down turn so the user gets an answer
+        // instead of a run that just stops.
+        assertEquals(3, provider.requests.size)
+        assertEquals("wrap-up", last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+        assertTrue(
+            provider.requests.last().tools.isEmpty(),
+            "the wrap-up turn must not offer tools",
+        )
     }
 
     @Test
@@ -587,7 +598,12 @@ class AgentLoopTest {
             ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"x\"}"),
             ProviderEvent.Finished(FinishReason.TOOL_CALLS),
         )
-        val provider = ScriptedProvider(alwaysTool(), alwaysTool())
+        val provider = ScriptedProvider(
+            alwaysTool(),
+            // The wind-down turn the loop now takes so the run ends with a report
+            // rather than a bare budget error and no answer.
+            listOf(ProviderEvent.TextDelta("out of budget"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
         val store = store()
         val loop = AgentLoop(
             providers = SimpleProviderRegistry(listOf(provider)),

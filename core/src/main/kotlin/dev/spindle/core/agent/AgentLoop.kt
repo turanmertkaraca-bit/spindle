@@ -204,12 +204,28 @@ class AgentLoop(
             var repeatedCalls = 0
             var totalToolCalls = 0
             val runStartedAtMs = System.currentTimeMillis()
+            /**
+             * Why a hard budget stopped normal work, or null while the run is
+             * still within budget.
+             *
+             * When this becomes non-null the loop does NOT simply stop: it takes
+             * exactly one more provider turn with tools disabled and a wind-down
+             * instruction, so the user always gets a written report of what was
+             * done and what remains. Before this existed, hitting the step,
+             * tool-call or wall-clock cap just `break`ed out of the loop, and the
+             * session ended on a bare "budget exhausted" tool error with no
+             * answer at all — which reads as the app "stopping randomly".
+             */
+            var wrapUpReason: String? = null
             var budgetExhausted = false
             while (true) {
                 currentCoroutineContext().ensureActive()
-                if (System.currentTimeMillis() - runStartedAtMs > (agent.maxRunMillis ?: MAX_RUN_WALL_CLOCK_MS)) {
+                if (wrapUpReason == null &&
+                    System.currentTimeMillis() - runStartedAtMs > (agent.maxRunMillis ?: MAX_RUN_WALL_CLOCK_MS)
+                ) {
                     // Backstop for a null `maxSteps`: fail every pending tool part of
-                    // the last turn so nothing is left PENDING, then stop the run.
+                    // the last turn so nothing is left PENDING, then wind down
+                    // instead of returning nothing.
                     store.messages(sessionId).lastOrNull()?.let { last ->
                         for (part in last.parts.filterIsInstance<Part.Tool>().filter { it.state == ToolState.PENDING }) {
                             updatePart(
@@ -222,8 +238,9 @@ class AgentLoop(
                             )
                         }
                     }
-                    budgetExhausted = true
-                    break
+                    wrapUpReason = "the run's wall-clock budget"
+                    bus.emit(AgentEvent.Error(sessionId, "time budget reached — asking for a wrap-up report"))
+                    continue
                 }
                 step++
 
@@ -267,7 +284,10 @@ class AgentLoop(
                 budgetCheck(budget, sessionId, budgetWarning, history, decision.estimatedTokens)
 
                 val wire = Wire.toWire(history)
-                val specs = if (model.supportsTools) active.specs else emptyList()
+                // A wind-down turn must not be offered tools: the budget that
+                // tripped is the one that bounds tool use, and a model that sees
+                // tools will call them again instead of writing the report.
+                val specs = if (model.supportsTools && wrapUpReason == null) active.specs else emptyList()
 
                 val assistant = Message(
                     id = MessageId(Ids.new("msg")),
@@ -295,7 +315,11 @@ class AgentLoop(
                 val request = Wire.request(
                     model = model.id,
                     system = system,
-                    messages = wire,
+                    messages = if (wrapUpReason == null) {
+                        wire
+                    } else {
+                        wire + dev.spindle.core.provider.WireMessage(role = "user", text = WRAP_UP_INSTRUCTION)
+                    },
                     tools = specs,
                     agent = agent,
                     sessionHint = sessionId.value,
@@ -473,8 +497,9 @@ class AgentLoop(
                     // A response cut off by the output-token limit would otherwise
                     // end the run with a silently truncated answer. Ask the model to
                     // resume, bounded so a model that keeps hitting the limit cannot
-                    // loop forever.
-                    if (finish == FinishReason.LENGTH && continuations < MAX_CONTINUATIONS) {
+                    // loop forever. A wind-down turn always ends here: that answer
+                    // *is* the report, so truncation must not restart the loop.
+                    if (finish == FinishReason.LENGTH && continuations < MAX_CONTINUATIONS && wrapUpReason == null) {
                         continuations++
                         store.appendMessage(
                             Message(
@@ -500,7 +525,9 @@ class AgentLoop(
                             ),
                         )
                     }
-                    break
+                    wrapUpReason = "the step budget"
+                    bus.emit(AgentEvent.Error(sessionId, "step budget reached — asking for a wrap-up report"))
+                    continue
                 }
 
                 var doomLoop = false
@@ -539,7 +566,8 @@ class AgentLoop(
                     }
                     if (++totalToolCalls > MAX_TOTAL_TOOL_CALLS) {
                         // Same shape as the step/maxSteps exhaustion: fail this call
-                        // and every remaining call in the turn, then stop the run.
+                        // and every remaining call in the turn, then wind down so the
+                        // user still gets a written report.
                         for (j in index until toolParts.size) {
                             val pending = toolParts[j]
                             updatePart(
@@ -556,8 +584,18 @@ class AgentLoop(
                     }
                     executeTool(sessionId, finalized.id, part, session.cwd, onPermission, agent)
                 }
-                if (budgetExhausted) break
+                if (budgetExhausted) {
+                    wrapUpReason = "the tool-call budget"
+                    bus.emit(AgentEvent.Error(sessionId, "tool-call budget reached — asking for a wrap-up report"))
+                    budgetExhausted = false
+                    continue
+                }
+                // A doom loop is a model bug, not a budget event; the error text
+                // already explains it, and one more turn would just repeat it.
                 if (doomLoop) break
+                // The wind-down turn has now run. Whatever it produced is the
+                // report, so stop here rather than looping on a spent budget.
+                if (wrapUpReason != null) break
             }
 
             terminalState = SessionState.IDLE
@@ -1210,6 +1248,20 @@ class AgentLoop(
         const val CONTINUE_INSTRUCTION =
             "Your previous response was cut off by the output token limit. " +
                 "Continue exactly where you stopped, without repeating any text you already produced."
+
+        /**
+         * Sent instead of the normal turn when a run has spent its step, tool-call
+         * or wall-clock budget. Tools are disabled for this turn, so the only
+         * thing the model can do is write the report. Without it the loop simply
+         * returned and the user saw a bare budget error and no answer — which
+         * reads as the agent "stopping randomly".
+         */
+        const val WRAP_UP_INSTRUCTION =
+            "Your run has reached its budget limit, so no further tool calls will be " +
+                "executed. Stop working and write your final report now, using what you " +
+                "already know from this conversation. State concisely: (1) what was " +
+                "completed, (2) what remains and why it was not done, (3) the exact next " +
+                "step someone should take. Do not call any tools. Do not apologise."
         const val MAX_RULES_CHARS = 8_192
         const val MAX_METADATA_VALUE_CHARS = 8_192
         const val DURATION_KEY = "durationMs"
