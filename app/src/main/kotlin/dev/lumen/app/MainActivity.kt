@@ -287,7 +287,10 @@ class MainActivity : ComponentActivity() {
                     // several folders deep, and popping straight to Settings loses
                     // their place.
                     route == "storage" && state.storageDrill != null -> {
-                        if (state.storageDrill.parent != null) viewModel.storageDrillUp()
+                        // `state.storageDrill` is a delegated property, so it
+                        // cannot be smart-cast; read it once into a local.
+                        val drill = state.storageDrill
+                        if (drill != null && drill.parent != null) viewModel.storageDrillUp()
                         else viewModel.closeStorageDrill()
                     }
                     route == "storage" || route == "diagnostics" -> route = "settings"
