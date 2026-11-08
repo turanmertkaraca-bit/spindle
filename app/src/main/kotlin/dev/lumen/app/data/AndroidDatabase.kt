@@ -442,8 +442,10 @@ internal class AndroidDatabase(context: Context, private val integrityOverride: 
         database = null
     }
 
-    private companion object {
+    internal companion object {
         const val TAG = "AndroidDatabase"
+
+        /** On-device database file name. `internal` so tests can delete it. */
         const val DB_NAME = "lumen.db"
         const val BUSY_TIMEOUT_MS = 5_000
 

@@ -35,7 +35,21 @@ import kotlin.test.assertTrue
 @Config(sdk = [34])
 class AndroidSessionStoreTest {
 
-    private fun newStore() = AndroidSessionStore(ApplicationProvider.getApplicationContext())
+    /**
+     * Each test gets a **fresh** on-disk database.
+     *
+     * Robolectric gives every test in the class the same application context, so
+     * `openOrCreateDatabase("lumen.db")` reuses one file across the whole class.
+     * Rows written by an earlier test then leak into a later one: `prune` counts
+     * sessions it never created, and retention assertions fail for reasons that
+     * have nothing to do with the code under test. Deleting the file before each
+     * open makes every test hermetic.
+     */
+    private fun newStore(): AndroidSessionStore {
+        ApplicationProvider.getApplicationContext<Context>()
+            .deleteDatabase(AndroidDatabase.DB_NAME)
+        return AndroidSessionStore(ApplicationProvider.getApplicationContext())
+    }
 
     @Test
     fun `create, read back a session`() = runTest {
