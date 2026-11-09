@@ -1768,9 +1768,12 @@ class AgentLoopTest {
         assertTrue(
             tools.none { it.result?.output?.contains("doom loop") == true },
             "an identical call in a LATER turn must not be treated as a loop: " +
-                tools.map { it.result?.output },
+                tools.map { it.result?.output }.toString(),
         )
-        assertTrue(tools.all { it.state == ToolState.DONE }, tools.map { it.state })
+        assertTrue(
+            tools.all { it.state == ToolState.DONE },
+            tools.map { it.state }.toString(),
+        )
     }
 
     /**
