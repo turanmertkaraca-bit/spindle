@@ -125,3 +125,67 @@ this session were that, not a new defect.
 
 - `docs/analysis/STATUS.md` GOAL-01 — the same silent-stop defect in goal mode.
 - `docs/analysis/arch/SUBAGENTS.md` — the concurrency cap.
+
+---
+
+## Round 2 — three MORE defects (fixed `b301743`, released `v0.2.15`)
+
+The owner reported subagents still broken after 0.2.14. They were right: the
+round-1 fixes addressed *where the text was read*, not *whether it existed*.
+
+### The bug that hid behind the others
+
+**The collector stored one entry per token, not per message.**
+
+A `TextDelta` carries a single token. The evidence collector appended each delta as
+its own list entry, so:
+
+- `texts.lastOrNull()` was a fragment like `"42"`, not the child's whole finding;
+- every other token landed in the "earlier output" list, where each was far too
+  short to clear the 200-char substantial-report bar;
+- the report therefore concluded the child had written nothing and printed a work
+  summary — which is exactly what CI showed: six `fail read` lines and no prose,
+  about a child that had written a full report.
+
+Text is now accumulated **per part id** (`LinkedHashMap<String, StringBuilder>`).
+Bounding is on the number of *messages*, never their length: an answer has to stay
+whole to be usable.
+
+### The other two
+
+3. **Reasoning-only models produce no `Part.Text` at all.** `deepseek-r1`, `o1`
+   and similar stream `ReasoningDelta` (verified in both provider adapters). A
+   child that thought for 250k tokens then called a tool had *zero* text parts.
+   The report now falls back to the reasoning, labelled as reasoning.
+4. **Compaction erased the evidence before it was read.** `Compaction.compact`
+   replaces head messages' parts with an empty list, so a post-hoc store walk sees
+   only the retained tail — the **longer** a child worked, the **less** it
+   reported. The spawner now subscribes to the child's event stream and captures
+   as it arrives.
+
+Also: **file changes never appear in the transcript at all** (they arrive as
+`AgentEvent.FileEdited`), so a child that wrote the files and said nothing looked
+like it had done nothing. Collected now.
+
+### Structural change
+
+The report logic moved out of the spawner into **`SubagentReport`**, a pure object
+with 15 JVM tests. That is the actual lesson of rounds 1–3: the assembly was
+trapped inline in the spawner, where none of these conditions could be exercised,
+so each fix was reasoned about rather than tested. Every case above now has a test
+that fails without the fix.
+
+### Invariant now enforced
+
+**A report always says what happened**, in this order: substantial prose → any
+prose → reasoning → the work it did (files + tools) → the stop reason. Silence is
+never an answer to a parent that has to decide what to do next.
+
+### Two traps worth remembering
+
+- **`MutableSharedFlow` with `replay = 0` drops anything emitted before a collector
+  subscribes.** A `launch { flow.collect }` is a race; `start = UNDISPATCHED` is
+  not. This bit the production collector *and* the test that was meant to catch it.
+- **Accumulate streams by part/message id, never by delta.** A per-delta store
+  looks like it works (the text is all there) while every read of "the last
+  message" returns one token.

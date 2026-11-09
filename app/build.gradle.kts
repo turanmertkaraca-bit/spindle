@@ -19,8 +19,8 @@ android {
         // The app is sideloaded, so Play policy does not apply.
         minSdk = 28
         targetSdk = 28
-        versionCode = 19
-        versionName = "0.2.14"
+        versionCode = 20
+        versionName = "0.2.15"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

@@ -10,15 +10,17 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[—]` deferred
 > what "finished" means in the owner's terms. This queue is the ordered
 > implementation of it.
 
-**Last CI-green sha: `59809b9`** (both jobs green) — **released as `v0.2.14`**
-(`lumen-0.2.14-debug.apk`, versionCode 19). `v0.2.13` (versionCode 18) was also
-published; 0.2.14 supersedes it.
+**Last CI-green sha: `b301743`** (both jobs green) — **released as `v0.2.15`**
+(`lumen-0.2.15-debug.apk`, versionCode 20). Supersedes 0.2.14 (19) and 0.2.13 (18).
 
-> **The device is now on 0.2.14 (owner confirmed "much nicer").** Everything below
-> is in it. Before this, the device ran 0.2.12, which predates every fix — that is
-> why subagents, goal mode and the silent stops kept failing live *after* they were
-> fixed in source. **When a report says "it happened again", check the installed
-> `versionName` first.**
+> **0.2.15 is the subagent fix that is actually verified.** Rounds 1–2 of the
+> subagent work (`v0.2.13`/`v0.2.14`) were green and still broken in practice: the
+> report path was fixed in three different places before the real defect was found
+> (per-token instead of per-message accumulation). See `bugs/BUG-03`.
+>
+> **When a report says "it happened again", check the installed `versionName`
+> first** — the device sat on 0.2.12 for several rounds while fixes were green on
+> `main`.
 
 ---
 
@@ -84,7 +86,7 @@ must move, and it must come to rest.
 
 ### [x] BUG-01 · Every model shows "free" — FIXED `c4408c6`
 ### [x] BUG-02 · Large tool output crashed the app — FIXED `57c3395`
-### [x] BUG-03 · Subagents lose their entire report — FIXED `c391e20` + `347270d`
+### [x] BUG-03 · Subagents lose their entire report — FIXED `b301743` (v0.2.15)
 **Detail:** `docs/analysis/bugs/BUG-03-subagent-output-lost.md`
 
 Three defects, all shipped in `v0.2.14`:
