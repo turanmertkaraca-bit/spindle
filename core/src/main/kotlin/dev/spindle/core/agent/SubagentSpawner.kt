@@ -205,39 +205,63 @@ class SubagentSpawner(
      * 3. **Reasoning models never emit text.** `deepseek-r1`/`o1` stream
      *    `ReasoningDelta`, so the reasoning *is* the record of the work.
      *
-     * Bounded: at most [MAX_TEXT_PARTS] streamed blobs per channel, so a
-     * pathological child cannot grow the parent's memory without limit.
+     * Bounded: at most [MAX_TEXT_PARTS] streamed messages per channel, so a
+     * pathological child cannot grow the parent's memory without limit. A single
+     * message is never truncated — an answer has to stay whole to be usable.
      */
     private class EvidenceCollector(bus: EventBus, private val childId: SessionId) {
-        private val texts = ArrayDeque<String>()
-        private val reasonings = ArrayDeque<String>()
+        /**
+         * Streamed text/reasoning, keyed by part id and ordered by first arrival.
+         *
+         * Keyed by PART, not by delta. A `TextDelta` carries one token, so storing
+         * one entry per delta made the "final message" a single fragment like `"42"`
+         * instead of the child's whole finding, and pushed every other fragment into
+         * the "earlier output" list where each was too short to count as a report.
+         * That is exactly why a child that wrote a real report was reported as
+         * having written nothing.
+         */
+        private val texts = LinkedHashMap<String, StringBuilder>()
+        private val reasonings = LinkedHashMap<String, StringBuilder>()
         private val toolUses = ArrayList<SubagentReport.ToolUse>()
         private val files = LinkedHashMap<String, SubagentReport.FileChange>()
         private var lastError: String? = null
         private var job: Job? = null
 
         /**
-         * Subscribe before the child run starts, and WAIT for the subscription.
+         * Subscribe before the child run starts.
          *
-         * `launch` alone is a race: `MutableSharedFlow` has `replay = 0`, so any
-         * event emitted before the collector is registered is dropped forever. With
-         * `Dispatchers.Unconfined` that worked only by luck of scheduling — which is
-         * exactly why CI saw the findings vanish while a local run did not. `start`
-         * suspends until the collector is actually subscribed, so the first delta
-         * can never be missed.
+         * `MutableSharedFlow` has `replay = 0`, so any event emitted before the
+         * collector is registered is dropped forever. `launch` alone is a race;
+         * `start = UNDISPATCHED` runs into `collect` synchronously, so the
+         * subscriber exists before `init` returns and the first delta cannot be
+         * missed.
          */
         init {
             job = CoroutineScope(Dispatchers.Unconfined).launch(start = CoroutineStart.UNDISPATCHED) {
                 bus.events.collect { event ->
                     if (event.sessionId != childId) return@collect
                     when (event) {
-                        is AgentEvent.PartDelta -> when (event.kind) {
-                            DeltaKind.TEXT -> append(texts, event.delta)
-                            DeltaKind.REASONING -> append(reasonings, event.delta)
+                        is AgentEvent.PartDelta -> {
+                            val target = when (event.kind) {
+                                DeltaKind.TEXT -> texts
+                                DeltaKind.REASONING -> reasonings
+                            }
+                            target.getOrPut(event.partId.value) { StringBuilder() }.append(event.delta)
+                            trimOldest(target)
                         }
                         is AgentEvent.PartUpdated -> when (val part = event.part) {
-                            is Part.Text -> appendWhole(texts, part.text)
-                            is Part.Reasoning -> appendWhole(reasonings, part.text)
+                            // A completed part carries the full text. Prefer it, but
+                            // only when nothing streamed (some providers send a whole
+                            // part with no deltas), so a streamed answer is not
+                            // duplicated.
+                            is Part.Text -> if (!texts.containsKey(part.id.value)) {
+                                texts[part.id.value] = StringBuilder(part.text)
+                                trimOldest(texts)
+                            }
+                            is Part.Reasoning -> if (!reasonings.containsKey(part.id.value)) {
+                                reasonings[part.id.value] = StringBuilder(part.text)
+                                trimOldest(reasonings)
+                            }
                             is Part.Tool -> toolUses += SubagentReport.ToolUse(
                                 name = part.call.name,
                                 ok = part.result?.isError == false,
@@ -289,24 +313,26 @@ class SubagentSpawner(
             } else {
                 null
             }
+
             // The LIVE CAPTURE IS AUTHORITATIVE for prose, and the store is only a
             // fallback. The store may already have been compacted (which erases the
             // child's findings), so preferring it would resurrect exactly the bug this
-            // class exists to fix. The store is still useful when the child failed
-            // before emitting anything.
-            val capturedFinal = buildList {
-                texts.lastOrNull()?.let { add(Part.Text(PartId("captured-text"), it)) }
-                reasonings.lastOrNull()?.let { add(Part.Reasoning(PartId("captured-reasoning"), it)) }
-            }
-            val finalParts = capturedFinal.ifEmpty { fromStore?.finalParts.orEmpty() }
+            // class exists to fix.
+            val captured = texts.values.map { it.toString() }.filter { it.isNotBlank() }
+            val capturedReasoning = reasonings.values.map { it.toString() }.filter { it.isNotBlank() }
+            val finalParts = buildList {
+                captured.lastOrNull()?.let { add(Part.Text(PartId("captured-text"), it)) }
+                capturedReasoning.lastOrNull()?.let { add(Part.Reasoning(PartId("captured-reasoning"), it)) }
+            }.ifEmpty { fromStore?.finalParts.orEmpty() }
                 .ifEmpty { finalMessage?.parts.orEmpty() }
 
-            // Earlier text is listed NEWEST FIRST, matching how the report picks the
-            // most recent substantial output. Everything captured during the run goes
-            // in before anything read from the store, so live evidence always wins.
+            // Earlier output, NEWEST FIRST, matching how the report picks the most
+            // recent substantial text. Live evidence precedes store evidence so it
+            // always wins.
             val capturedEarlier = buildList {
-                texts.dropLast(1).asReversed().forEach { add(listOf(Part.Text(PartId("t"), it))) }
-                reasonings.dropLast(1).asReversed().forEach { add(listOf(Part.Reasoning(PartId("r"), it))) }
+                captured.dropLast(1).asReversed().forEach { add(listOf(Part.Text(PartId("t"), it))) }
+                capturedReasoning.dropLast(1).asReversed()
+                    .forEach { add(listOf(Part.Reasoning(PartId("r"), it))) }
             }
 
             val merged = SubagentReport.Evidence(
@@ -319,27 +345,16 @@ class SubagentSpawner(
             return SubagentReport.build(merged)
         }
 
-        private fun append(target: ArrayDeque<String>, delta: String) {
-            if (delta.isEmpty()) return
-            if (target.isNotEmpty() && target.size >= MAX_TEXT_PARTS) {
-                // Merge into the newest entry so a streamed answer stays one blob
-                // instead of growing the deque without bound.
-                target[target.size - 1] = target.last() + delta
-            } else {
-                target.addLast(delta)
+        /** Keep the newest [MAX_TEXT_PARTS] messages; a message itself is never cut. */
+        private fun trimOldest(target: LinkedHashMap<String, StringBuilder>) {
+            while (target.size > MAX_TEXT_PARTS) {
+                val oldest = target.keys.first()
+                target.remove(oldest)
             }
         }
 
-        private fun appendWhole(target: ArrayDeque<String>, text: String) {
-            if (text.isBlank()) return
-            // A PartUpdated carries the FULL part text, and the delta stream has
-            // already accumulated it. Only record it when nothing streamed (some
-            // providers send a completed part with no deltas at all).
-            if (target.isEmpty()) target.addLast(text)
-        }
-
         private companion object {
-            /** Bound on retained streamed blobs per channel. */
+            /** Bound on retained streamed MESSAGES (not tokens). */
             const val MAX_TEXT_PARTS = 24
         }
     }

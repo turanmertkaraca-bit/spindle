@@ -96,9 +96,36 @@ object SubagentReport {
      */
     fun build(evidence: Evidence): String {
         prose(evidence)?.let { return it }
+        // Any text at all beats a derived summary. The model chose those words; a
+        // file list is something we inferred. Falling straight from "no substantial
+        // prose" to the tool list would bury a short but real finding — e.g.
+        // "the desync is in make_move" — under six lines of tool names.
+        anyText(evidence)?.let { return it }
         reasoning(evidence)?.let { return it }
         workSummary(evidence)?.let { return it }
         return stopOnly(evidence)
+    }
+
+    /**
+     * The best text available when nothing clears [SUBSTANTIAL_CHARS].
+     *
+     * Prefers the final message (the child's last word), then the newest earlier
+     * text. Labelled so the parent knows it is not a finished report.
+     */
+    private fun anyText(e: Evidence): String? {
+        val own = textOf(e.finalParts)
+        if (own.isNotBlank()) {
+            return "(the subagent stopped before writing a full report — this is all " +
+                "it wrote at the end)\n\n$own"
+        }
+        val earlier = e.earlierAssistantParts.asReversed()
+            .map { textOf(it) }
+            .firstOrNull { it.isNotBlank() }
+        if (!earlier.isNullOrBlank()) {
+            return "(the subagent stopped before writing a full report — this is its " +
+                "most recent written output)\n\n$earlier"
+        }
+        return null
     }
 
     /** Steps 1–2: real prose, labelled when it is not the child's final answer. */

@@ -204,7 +204,7 @@ class AgentLoop(
             val repeatWindow = ((agent.maxRepeatedCalls ?: 3) * 2).coerceAtLeast(2)
             var repeatedCalls = 0
             var totalToolCalls = 0
-            val runStartedAtMs = System.currentTimeMillis()
+            val runStartedAtMs = clock()
             /**
              * Why a hard budget stopped normal work, or null while the run is
              * still within budget.
@@ -233,8 +233,12 @@ class AgentLoop(
             var windowStartedAtMs = runStartedAtMs
             while (true) {
                 currentCoroutineContext().ensureActive()
+                // Uses the injectable [clock], not `System.currentTimeMillis()`.
+                // The direct system call made this branch untestable (a test had to
+                // rely on real elapsed time) and could disagree with the timestamps
+                // the loop persists elsewhere.
                 if (wrapUpReason == null &&
-                    System.currentTimeMillis() - windowStartedAtMs > (agent.maxRunMillis ?: MAX_RUN_WALL_CLOCK_MS)
+                    clock() - windowStartedAtMs > (agent.maxRunMillis ?: MAX_RUN_WALL_CLOCK_MS)
                 ) {
                     // The wall clock is spent. A goal run that still has open work
                     // renews for another window instead of stopping: that is the
@@ -255,7 +259,7 @@ class AgentLoop(
                         windows < agent.maxBudgetWindows
                     if (canRenew) {
                         windows++
-                        windowStartedAtMs = System.currentTimeMillis()
+                        windowStartedAtMs = clock()
                         bus.emit(
                             AgentEvent.Progress(
                                 sessionId,

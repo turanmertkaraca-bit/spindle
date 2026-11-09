@@ -1532,15 +1532,14 @@ class AgentLoopTest {
     // ---- goal mode: a long task must not stop at the window boundary ----
 
     /**
-     * Renewal, asserted directly.
+     * Renewal, asserted directly and deterministically.
      *
      * The point of `renewsBudget` is that the run is EXTENDED instead of stopping
-     * at the window boundary. Counting provider requests is a poor proxy for that
-     * (a wind-down turn also makes a request), so this counts the renewal events
-     * the loop emits and separately asserts the run still ends with a report.
-     *
-     * `maxRunMillis = 0` makes every window immediately spent, so the renewal path
-     * is exercised without waiting on a real clock.
+     * at the window boundary. `maxRunMillis = 0` plus the loop's injectable clock
+     * makes the window expire on the second reading, so this exercises the real
+     * path without depending on elapsed wall time — the previous version asserted
+     * on `provider.requests.size`, which counts turns (a wind-down turn also makes
+     * a request) and could not isolate the behaviour.
      */
     @Test
     fun `a renewing agent extends the run while todos are open, then reports`() = runTest {
@@ -1549,11 +1548,14 @@ class AgentLoopTest {
         )
         val store = store()
         val bus = EventBus()
+        // Monotonic fake clock: each read advances 1 second.
+        var now = 0L
         val loop = AgentLoop(
             providers = SimpleProviderRegistry(listOf(provider)),
             tools = ToolRegistry(listOf(EchoTool())),
             store = store,
             bus = bus,
+            clock = { now += 1_000L; now },
         )
         val sid = SessionId("ses_goal")
         newSession(store, sid.value)
@@ -1561,7 +1563,9 @@ class AgentLoopTest {
         store.setTodos(sid, listOf(TodoItem("t1", "ship the thing", TodoStatus.IN_PROGRESS)))
 
         val renewals = mutableListOf<String>()
-        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+        // UNDISPATCHED: `MutableSharedFlow` has replay = 0, so a collector that has
+        // not subscribed misses the event entirely.
+        val job = backgroundScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
             bus.events.collect { e ->
                 if (e is AgentEvent.Progress && e.message.contains("extending the run")) {
                     renewals += e.message
@@ -1578,8 +1582,6 @@ class AgentLoopTest {
         val last = loop.prompt(sid, "goal", "fake/fake-1", agent)
         job.cancel()
 
-        // Two extra windows were allowed, so the run must have been extended twice
-        // before winding down — not stopped at the first boundary.
         assertEquals(2, renewals.size, "expected two renewals, got: $renewals")
         assertTrue(renewals[0].contains("window 2"), renewals[0])
         assertTrue(renewals[1].contains("window 3"), renewals[1])
