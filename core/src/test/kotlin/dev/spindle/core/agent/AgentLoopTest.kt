@@ -1808,7 +1808,7 @@ class AgentLoopTest {
             tools = ToolRegistry(listOf(GreedyTool())),
             store = store,
             bus = EventBus(),
-            clock = { now += 1 },
+            clock = { now += 1; now },
         )
         val sid = SessionId("ses_greedy")
         newSession(store, sid.value)
@@ -1856,7 +1856,7 @@ class AgentLoopTest {
             store = store,
             bus = EventBus(),
             // Every read advances past a 1 ms window.
-            clock = { now += 1_000 },
+            clock = { now += 1_000; now },
         )
         val sid = SessionId("ses_window")
         newSession(store, sid.value)
