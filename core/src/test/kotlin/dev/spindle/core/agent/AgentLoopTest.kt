@@ -1531,46 +1531,63 @@ class AgentLoopTest {
 
     // ---- goal mode: a long task must not stop at the window boundary ----
 
+    /**
+     * Renewal, asserted directly.
+     *
+     * The point of `renewsBudget` is that the run is EXTENDED instead of stopping
+     * at the window boundary. Counting provider requests is a poor proxy for that
+     * (a wind-down turn also makes a request), so this counts the renewal events
+     * the loop emits and separately asserts the run still ends with a report.
+     *
+     * `maxRunMillis = 0` makes every window immediately spent, so the renewal path
+     * is exercised without waiting on a real clock.
+     */
     @Test
-    fun `a renewing agent keeps going while todos are open, then winds down`() = runTest {
-        fun tool() = listOf(
-            ProviderEvent.ToolCallStart(0, "c1", "echo"),
-            ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"x\"}"),
-            ProviderEvent.ToolCallEnd(0),
-            ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+    fun `a renewing agent extends the run while todos are open, then reports`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(ProviderEvent.TextDelta("final report"), ProviderEvent.Finished(FinishReason.STOP)),
         )
-        fun report() = listOf(
-            ProviderEvent.TextDelta("final report"),
-            ProviderEvent.Finished(FinishReason.STOP),
-        )
-        val provider = ScriptedProvider(tool(), tool(), report())
         val store = store()
+        val bus = EventBus()
         val loop = AgentLoop(
             providers = SimpleProviderRegistry(listOf(provider)),
             tools = ToolRegistry(listOf(EchoTool())),
             store = store,
-            bus = EventBus(),
+            bus = bus,
         )
         val sid = SessionId("ses_goal")
         newSession(store, sid.value)
         // Open work: the goal is explicitly unfinished.
         store.setTodos(sid, listOf(TodoItem("t1", "ship the thing", TodoStatus.IN_PROGRESS)))
 
-        // maxRunMillis = 0 makes every window immediately "spent", so this test
-        // exercises the renewal path without waiting on a clock.
+        val renewals = mutableListOf<String>()
+        val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            bus.events.collect { e ->
+                if (e is AgentEvent.Progress && e.message.contains("extending the run")) {
+                    renewals += e.message
+                }
+            }
+        }
+
         val agent = AgentConfig(
             name = "goal",
-            maxSteps = 1,
             maxRunMillis = 0L,
             renewsBudget = true,
             maxBudgetWindows = 2,
         )
         val last = loop.prompt(sid, "goal", "fake/fake-1", agent)
+        job.cancel()
 
-        // Two renewals were allowed, so the run went past both windows and
-        // finished with a report instead of stopping on the first boundary.
-        assertEquals(3, provider.requests.size)
-        assertEquals("final report", last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+        // Two extra windows were allowed, so the run must have been extended twice
+        // before winding down — not stopped at the first boundary.
+        assertEquals(2, renewals.size, "expected two renewals, got: $renewals")
+        assertTrue(renewals[0].contains("window 2"), renewals[0])
+        assertTrue(renewals[1].contains("window 3"), renewals[1])
+        // And the run still ends with a written report rather than silence.
+        assertEquals(
+            "final report",
+            last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text },
+        )
     }
 
     @Test

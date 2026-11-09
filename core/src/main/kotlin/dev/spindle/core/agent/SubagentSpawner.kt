@@ -15,6 +15,7 @@ import dev.spindle.core.store.SessionStore
 import dev.spindle.core.tool.SubagentResult
 import dev.spindle.core.tool.SubagentSpec
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -215,8 +216,18 @@ class SubagentSpawner(
         private var lastError: String? = null
         private var job: Job? = null
 
+        /**
+         * Subscribe before the child run starts, and WAIT for the subscription.
+         *
+         * `launch` alone is a race: `MutableSharedFlow` has `replay = 0`, so any
+         * event emitted before the collector is registered is dropped forever. With
+         * `Dispatchers.Unconfined` that worked only by luck of scheduling — which is
+         * exactly why CI saw the findings vanish while a local run did not. `start`
+         * suspends until the collector is actually subscribed, so the first delta
+         * can never be missed.
+         */
         init {
-            job = CoroutineScope(Dispatchers.Unconfined).launch {
+            job = CoroutineScope(Dispatchers.Unconfined).launch(start = CoroutineStart.UNDISPATCHED) {
                 bus.events.collect { event ->
                     if (event.sessionId != childId) return@collect
                     when (event) {
