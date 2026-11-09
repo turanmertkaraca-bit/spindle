@@ -26,7 +26,6 @@ import org.robolectric.annotation.Config
 import java.nio.file.Files
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 /**
  * A retried provider attempt must retract the failed attempt's live text without
@@ -62,65 +61,68 @@ class RetryResetTest {
         val vm = ChatViewModel(dir.toPath(), keys(), store, eventBus = bus)
         vm.openSession(sid.value)
 
+        fun timeline() = vm.state.value.steps
         val partId = PartId("prt_text")
+
         // Attempt 1 streams live; a state event flushes the coalesced deltas into
         // the timeline exactly as a frame-sized flush would during a real run.
         bus.emit(AgentEvent.PartDelta(sid, "msg_1", partId, DeltaKind.TEXT, "stale "))
         bus.emit(AgentEvent.PartDelta(sid, "msg_1", partId, DeltaKind.TEXT, "attempt"))
         bus.emit(AgentEvent.StateChanged(sid, SessionState.RUNNING))
-        // Same async rebuild: wait for the streamed text to land rather than
-        // assuming it is already there when emit() returns.
-        awaitBody(vm, "stale attempt")
-        assertTrue(
-            vm.state.value.steps.any { it.body == "stale attempt" },
-            "live deltas must reach the timeline before the reset",
-        )
+        awaitCondition("the live deltas to reach the timeline") {
+            lastTimeline = timeline()
+            timeline().any { it.body == "stale attempt" }
+        }
 
         // The retry signal drops the part and refreshes the timeline.
         bus.emit(AgentEvent.PartReset(sid, "msg_1", partId))
         assertFalse(
-            vm.state.value.steps.any { it.id == partId.value },
+            timeline().any { it.id == partId.value },
             "PartReset must remove the failed attempt's row",
         )
 
-        // The retried attempt rebuilds the same part from its own deltas.
+        // The retried attempt rebuilds the same part from its own deltas. The rebuild
+        // happens on Dispatchers.Default, so wait for it rather than assuming.
         bus.emit(AgentEvent.PartDelta(sid, "msg_1", partId, DeltaKind.TEXT, "fresh"))
         bus.emit(AgentEvent.Error(sid, "streamed"))
-        // requestRebuild reads the store on Dispatchers.Default, so the timeline
-        // lands asynchronously: asserting immediately races that pass. Waiting for
-        // the rebuilt row makes this deterministic instead of intermittently
-        // failing in CI (it passed on an identical rerun).
-        val bodies = awaitPartBody(vm, partId.value, "fresh")
-        assertEquals(listOf("fresh"), bodies, "the retry's text must start clean")
+        awaitCondition("the retried text to start clean") {
+            lastTimeline = timeline()
+            timeline().filter { it.id == partId.value }.map { it.body } == listOf("fresh")
+        }
+
+        assertEquals(
+            listOf("fresh"),
+            timeline().filter { it.id == partId.value }.map { it.body },
+            "the retry's text must start clean",
+        )
     }
 
     /**
-     * Poll the ViewModel's timeline until [partId] renders [expected], or give up
-     * after [timeoutMs]. Rebuilds are launched onto Dispatchers.Default, so there
-     * is no frame callback to await on this path; polling the observed state is
-     * the honest way to wait without sleeping a fixed guess.
+     * Poll until [condition] holds, or fail with the timeline that was seen.
+     *
+     * Deliberately NOT "poll and return the last value": that shape is what made
+     * this test fail twice (d9e880a, then c616516). A build that landed 20 ms late
+     * handed back an empty list, which then read as a product bug. A test helper
+     * must either observe the condition or fail saying what it observed.
+     *
+     * The rebuild runs on `Dispatchers.Default` (real threads) inside
+     * `viewModelScope`, so there is no frame callback to await; polling the observed
+     * state is the honest way to wait. The window is generous because CI is shared.
      */
-    private fun awaitPartBody(vm: ChatViewModel, partId: String, expected: String): List<String> {
-        val deadline = System.currentTimeMillis() + 5_000L
-        var bodies: List<String>
-        do {
-            // Drain posted runnables so a rebuild launched onto the main looper
-            // gets its turn before the next poll.
-            shadowOf(Looper.getMainLooper()).idle()
-            bodies = vm.state.value.steps.filter { it.id == partId }.map { it.body }
-            if (bodies == listOf(expected)) return bodies
-            Thread.sleep(20)
-        } while (System.currentTimeMillis() < deadline)
-        return bodies
-    }
-
-    /** Wait until any timeline step renders [body], or the timeout expires. */
-    private fun awaitBody(vm: ChatViewModel, body: String) {
-        val deadline = System.currentTimeMillis() + 5_000L
+    private fun awaitCondition(what: String, condition: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + 15_000L
         while (System.currentTimeMillis() < deadline) {
             shadowOf(Looper.getMainLooper()).idle()
-            if (vm.state.value.steps.any { it.body == body }) return
+            if (condition()) return
             Thread.sleep(20)
         }
+        throw AssertionError(
+            "$what did not happen within 15s; timeline was " +
+                lastTimeline.map { it.id to it.body },
+        )
     }
+
+    /** The most recently observed timeline, for failure messages. */
+    @Volatile
+    private var lastTimeline: List<dev.lumen.app.ui.model.UiStep> = emptyList()
 }
