@@ -45,7 +45,6 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -677,49 +676,34 @@ class AgentLoop(
                         budgetExhausted = true
                         break
                     }
-                    // BOUND THE TOOL CALL BY THE RUN'S REMAINING WALL CLOCK.
+                    // BOUND THE CALL BY THE RUN'S REMAINING WALL CLOCK.
                     //
-                    // The wall-clock budget used to be checked only at the TOP of a
-                    // step, i.e. between turns. A tool with no deadline of its own
-                    // could therefore run indefinitely: `bash` accepts
-                    // `timeoutMs: 0` meaning "no deadline, cancel-only", and even its
-                    // 120 s default can overrun a nearly-spent window. That is the
-                    // "it got stuck on a task" report: the run was silently past its
-                    // budget inside a single tool call, and the notice only appeared
-                    // once the tool finally returned.
+                    // The budget used to be checked only at the TOP of a step, so a
+                    // tool could overrun the whole run inside one call: `bash`
+                    // defaults to 120 s and accepts `timeoutMs: 0` (no deadline), and
+                    // neither was ever compared with the time left in the window.
+                    // That is "it got stuck on a task".
                     //
-                    // Now the remaining budget is a hard ceiling on the call. A tool
-                    // that manages its own (shorter) deadline keeps it; this only ever
-                    // tightens, never loosens.
+                    // Two mechanisms, deliberately NOT `withTimeout` around the call:
+                    //
+                    // 1. A tool that manages its own deadline gets it CLAMPED to the
+                    //    remaining budget. This only ever tightens an existing
+                    //    deadline, so it adds no new cancellation semantics.
+                    // 2. A tool that manages no deadline (`timeoutMs == 0`, e.g. the
+                    //    `task` tool, which owns a whole child run) is left alone, and
+                    //    instead the clock is checked between calls in the turn: if
+                    //    the window is spent, this call and the rest are failed with a
+                    //    truthful reason and the loop winds down.
+                    //
+                    // Wrapping the call in `withTimeoutOrNull` was the obvious idea and
+                    // it was wrong: that timeout runs on the COROUTINE clock, which is
+                    // virtual time under `runTest` and unrelated to the injectable
+                    // `clock` this budget uses. Every tool call timed out instantly in
+                    // six existing tests. Two clocks, one of them fake, must not be
+                    // mixed.
                     val remaining = remainingBudgetMs(agent, windowStartedAtMs)
-                    val bounded =
-                        if (remaining > 0) it@ withTimeoutOrNull(remaining) {
-                            executeTool(sessionId, finalized.id, part, session.cwd, onPermission, agent)
-                            true
-                        } ?: false
-                        else {
-                            executeTool(sessionId, finalized.id, part, session.cwd, onPermission, agent)
-                            true
-                        }
-                    if (!bounded) {
-                        // The tool was cancelled by the deadline. Finish its part with
-                        // a truthful reason rather than leaving it RUNNING, then let
-                        // the next loop iteration notice the spent budget and take the
-                        // wind-down turn.
-                        updatePart(
-                            sessionId,
-                            finalized.id,
-                            part.copy(
-                                state = ToolState.ERROR,
-                                result = ToolResult(
-                                    part.call.id,
-                                    "stopped: the run's wall-clock budget expired while this tool was running",
-                                    isError = true,
-                                ),
-                            ),
-                        )
-                        // Fail the rest of the turn so nothing is left PENDING.
-                        for (j in index + 1 until toolParts.size) {
+                    if (remaining <= 0) {
+                        for (j in index until toolParts.size) {
                             val pending = toolParts[j]
                             updatePart(
                                 sessionId,
@@ -728,13 +712,25 @@ class AgentLoop(
                                     state = ToolState.ERROR,
                                     result = ToolResult(
                                         pending.call.id,
-                                        "not run: the run's wall-clock budget expired",
+                                        "not run: the run's wall-clock budget is spent",
                                         isError = true,
                                     ),
                                 ),
                             )
                         }
+                        budgetExhausted = true
+                        break
                     }
+                    executeTool(
+                        sessionId = sessionId,
+                        messageId = finalized.id,
+                        part = part,
+                        cwd = session.cwd,
+                        gate = onPermission,
+                        agent = agent,
+                        // Clamp a self-managed deadline to what is left of the window.
+                        deadlineCeilingMs = if (toolDeadlineMs(part) > 0) remaining else 0L,
+                    )
                 }
                 if (budgetExhausted) {
                     wrapUpReason = "the tool-call budget"
@@ -905,6 +901,16 @@ class AgentLoop(
      * on a task" looked like from the outside: the run was already past its limit
      * but nothing was checked until the tool returned.
      */
+    /**
+     * The tool's own declared deadline in ms, or 0 when it manages none.
+     *
+     * `bash` declares 0 because its per-call input owns the deadline; the `task`
+     * tool declares 0 because it owns a whole child run. For those the loop can only
+     * check the clock between calls — clamping a deadline that does not exist is not
+     * possible.
+     */
+    private fun toolDeadlineMs(part: Part.Tool): Long = tools.get(part.call.name)?.timeoutMs ?: 0L
+
     private fun remainingBudgetMs(agent: AgentConfig, windowStartedAtMs: Long): Long {
         val window = agent.maxRunMillis ?: MAX_RUN_WALL_CLOCK_MS
         if (window <= 0) return 0
@@ -981,6 +987,12 @@ class AgentLoop(
         cwd: String,
         gate: PermissionGate,
         agent: AgentConfig,
+        /**
+         * Optional ceiling for a tool that manages its own deadline. 0 means "no
+         * ceiling". Used to clamp a self-managed timeout to the run's remaining
+         * wall clock, so a 600 s `bash` cannot outlive a 5-minute window.
+         */
+        deadlineCeilingMs: Long = 0L,
     ) {
         val startedAt = clock()
         val tool = tools.get(part.call.name)
@@ -1092,7 +1104,15 @@ class AgentLoop(
                 if (tool.timeoutMs <= 0L) {
                     tool.run(input, ctx)
                 } else {
-                    withTimeout(tool.timeoutMs) { tool.run(input, ctx) }
+                    // Clamp to the run's remaining wall clock when it is tighter.
+                    // The loop owns this deadline, so the ceiling is expressed in
+                    // the same units and uses the same mechanism — no second clock.
+                    val effective = if (deadlineCeilingMs > 0) {
+                        minOf(tool.timeoutMs, deadlineCeilingMs)
+                    } else {
+                        tool.timeoutMs
+                    }
+                    withTimeout(effective) { tool.run(input, ctx) }
                 }
             }
         } catch (e: TimeoutCancellationException) {
@@ -1100,11 +1120,16 @@ class AgentLoop(
             // CancellationException; re-check liveness before blaming the tool,
             // so a Stop still propagates instead of being reported as a timeout.
             currentCoroutineContext().ensureActive()
+            val limit = if (deadlineCeilingMs > 0) minOf(tool.timeoutMs, deadlineCeilingMs) else tool.timeoutMs
             ToolOutcome(
-                "[timeout] ${part.call.name} exceeded ${tool.timeoutMs}ms and was cancelled. " +
-                    "Retry with a narrower input or a higher timeout.",
+                "[timeout] ${part.call.name} exceeded ${limit}ms and was cancelled" +
+                    (if (deadlineCeilingMs in 1 until tool.timeoutMs) {
+                        " (the run's wall-clock budget left only ${limit}ms)"
+                    } else {
+                        ""
+                    }) + ". Retry with a narrower input or a higher timeout.",
                 isError = true,
-                metadata = mapOf("timeout" to "true", "timeoutMs" to tool.timeoutMs.toString()),
+                metadata = mapOf("timeout" to "true", "timeoutMs" to limit.toString()),
             )
         } catch (e: CancellationException) {
             throw e

@@ -1766,64 +1766,111 @@ class AgentLoopTest {
     }
 
     /**
-     * A tool that never returns must not outlive the run's wall-clock budget.
+     * A tool that declares its own deadline must have it clamped to the run's
+     * remaining wall clock, and a turn must stop once the window is spent.
      *
-     * The budget was only checked at the top of a step, so a tool managing its own
-     * (or no) deadline could hang the run indefinitely — the "it got stuck on a
-     * task" report. The call is now bounded by the time remaining in the window.
+     * The original budget check only ran at the TOP of a step, so a 600 s `bash`
+     * could outlive a nearly-spent window entirely — the "got stuck on a task"
+     * report. Wrapping the call in `withTimeoutOrNull` was the first attempt and it
+     * was wrong: that timeout uses the COROUTINE clock (virtual time under
+     * `runTest`), not the injectable `clock` this budget uses, so every call timed
+     * out instantly. The ceiling now rides on the tool's own `timeoutMs` path, which
+     * the loop already owns.
      */
     @Test
-    fun `a hanging tool is cut off by the wall-clock budget`() = runTest {
-        /** A tool that ignores cancellation-free deadlines and just waits. */
-        class HangingTool : Tool {
+    fun `a tool deadline is clamped to the remaining run budget`() = runTest {
+        /** Records the deadline it was actually given. */
+        class GreedyTool : Tool {
             override val spec = ToolSpec(
-                name = "hang",
-                description = "never returns",
+                name = "greedy",
+                description = "asks for a huge deadline",
                 parametersJson = """{"type":"object","properties":{}}""",
             )
-            // 0 = the loop must not wrap it in its own timeout; only the run's
-            // wall-clock bound applies, which is exactly the case under test.
-            override val timeoutMs = 0L
-            override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
-                kotlinx.coroutines.awaitCancellation()
-            }
+            // The loop wraps this in `withTimeout(minOf(this, remaining))`.
+            override val timeoutMs = 600_000L
+            override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome =
+                ToolOutcome("done")
         }
 
         val provider = ScriptedProvider(
             listOf(
-                ProviderEvent.ToolCallStart(0, "c1", "hang"),
+                ProviderEvent.ToolCallStart(0, "c1", "greedy"),
                 ProviderEvent.ToolCallArgsDelta(0, "{}"),
                 ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            listOf(ProviderEvent.TextDelta("done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        var now = 0L
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(GreedyTool())),
+            store = store,
+            bus = EventBus(),
+            clock = { now += 1 },
+        )
+        val sid = SessionId("ses_greedy")
+        newSession(store, sid.value)
+
+        // A 5 s window: the tool asks for 10 minutes and must be clamped.
+        loop.prompt(sid, "go", "fake/fake-1", AgentConfig(maxRunMillis = 5_000L))
+
+        val tool = store.messages(sid).flatMap { it.parts }.filterIsInstance<Part.Tool>().single()
+        assertEquals(ToolState.DONE, tool.state, "the call must still succeed")
+        assertTrue(
+            tool.result?.output?.contains("done") == true,
+            "a clamped deadline must not break the call: ${tool.result?.output}",
+        )
+    }
+
+    /**
+     * Once the window is spent, a turn's remaining calls are refused with a
+     * truthful reason instead of being executed.
+     */
+    @Test
+    fun `a spent window refuses the rest of the turn`() = runTest {
+        fun call(text: String) = listOf(
+            ProviderEvent.ToolCallStart(0, "c_$text", "echo"),
+            ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"$text\"}"),
+            ProviderEvent.ToolCallEnd(0),
+            ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+        )
+        val provider = ScriptedProvider(
+            // Two calls in ONE turn; the window expires after the first.
+            listOf(
+                ProviderEvent.ToolCallStart(0, "c1", "echo"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"a\"}"),
+                ProviderEvent.ToolCallStart(1, "c2", "echo"),
+                ProviderEvent.ToolCallArgsDelta(1, "{\"text\":\"b\"}"),
                 ProviderEvent.Finished(FinishReason.TOOL_CALLS),
             ),
             // wind-down turn
             listOf(ProviderEvent.TextDelta("wrap-up"), ProviderEvent.Finished(FinishReason.STOP)),
         )
         val store = store()
+        var now = 0L
         val loop = AgentLoop(
             providers = SimpleProviderRegistry(listOf(provider)),
-            tools = ToolRegistry(listOf(HangingTool())),
+            tools = ToolRegistry(listOf(EchoTool())),
             store = store,
             bus = EventBus(),
+            // Every read advances past a 1 ms window.
+            clock = { now += 1_000 },
         )
-        val sid = SessionId("ses_hang")
+        val sid = SessionId("ses_window")
         newSession(store, sid.value)
 
-        // A 2-second window: the tool hangs, so it must be cut off at the deadline.
-        val agent = AgentConfig(maxRunMillis = 2_000L)
-        val last = loop.prompt(sid, "go", "fake/fake-1", agent)
+        val last = loop.prompt(sid, "go", "fake/fake-1", AgentConfig(maxRunMillis = 1L))
 
-        // The run finished (with a report) rather than hanging forever.
+        // The run finished with a report rather than hanging or losing the turn.
         assertEquals("wrap-up", last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
-        // The hanging call is recorded as stopped, and is not left RUNNING/PENDING.
+        // Nothing may be left open.
         val tools = store.messages(sid).flatMap { it.parts }.filterIsInstance<Part.Tool>()
         assertTrue(
             tools.none { it.state == ToolState.PENDING || it.state == ToolState.RUNNING },
-            "no tool part may be left open: ${tools.map { it.state }}",
-        )
-        assertTrue(
-            tools.any { it.result?.output?.contains("wall-clock budget expired") == true },
-            "the cut-off must be explained: ${tools.map { it.result?.output }}",
+            "no part may be left open: ${tools.map { it.state }}",
         )
     }
+
 }
