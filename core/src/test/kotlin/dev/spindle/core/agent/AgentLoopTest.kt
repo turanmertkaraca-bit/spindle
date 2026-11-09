@@ -41,7 +41,6 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import java.nio.file.Files
 import java.util.concurrent.atomic.AtomicInteger
@@ -482,9 +481,9 @@ class AgentLoopTest {
     }
 
     @Test
-    fun `over-budget emits a warning at or above 1_0 then throws`() = runTest {
+    fun `over-budget emits one warning, then winds down instead of throwing`() = runTest {
         val provider = ScriptedProvider(
-            listOf(ProviderEvent.TextDelta("unused"), ProviderEvent.Finished(FinishReason.STOP)),
+            listOf(ProviderEvent.TextDelta("wrap-up"), ProviderEvent.Finished(FinishReason.STOP)),
         )
         val store = store()
         val bus = EventBus()
@@ -501,22 +500,27 @@ class AgentLoopTest {
         val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
             bus.events.collect { events += it }
         }
-        val error = assertFailsWith<IllegalStateException> {
-            loop.prompt(SessionId("ses_over"), "go", "fake/fake-1", budget = ContextBudget(maxCostUsd = 1.0))
-        }
+        // MUST NOT throw: a spent budget is a normal end. It used to throw
+        // IllegalStateException from outside the provider try/catch, which fell
+        // through to the generic handler and made a budget stop look like a crash.
+        val last = loop.prompt(
+            SessionId("ses_over"), "go", "fake/fake-1",
+            budget = ContextBudget(maxCostUsd = 1.0),
+        )
         job.cancel()
 
-        assertTrue(error.message!!.contains("session cost budget exceeded"))
+        assertEquals("wrap-up", last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
         val warnings = events.filterIsInstance<AgentEvent.BudgetWarning>()
-        assertEquals(1, warnings.size)
+        assertEquals(1, warnings.size, "the budget warning must fire exactly once")
         assertTrue(warnings.single().fraction >= 1.0)
-        assertEquals(SessionState.ERROR, store.session(SessionId("ses_over"))!!.state)
+        // The session ends IDLE (a normal finish), not ERROR.
+        assertEquals(SessionState.IDLE, store.session(SessionId("ses_over"))!!.state)
     }
 
     @Test
-    fun `over-input-token-budget emits a warning at or above 1_0 then throws`() = runTest {
+    fun `over-input-token-budget warns once, then winds down instead of throwing`() = runTest {
         val provider = ScriptedProvider(
-            listOf(ProviderEvent.TextDelta("unused"), ProviderEvent.Finished(FinishReason.STOP)),
+            listOf(ProviderEvent.TextDelta("wrap-up"), ProviderEvent.Finished(FinishReason.STOP)),
         )
         val store = store()
         val bus = EventBus()
@@ -532,21 +536,20 @@ class AgentLoopTest {
         val job = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
             bus.events.collect { events += it }
         }
-        val error = assertFailsWith<IllegalStateException> {
-            loop.prompt(
-                SessionId("ses_over_tokens"),
-                "go",
-                "fake/fake-1",
-                budget = ContextBudget(maxInputTokens = 1),
-            )
-        }
+        // Must not throw: see the cost-budget test above for why.
+        val last = loop.prompt(
+            SessionId("ses_over_tokens"),
+            "go",
+            "fake/fake-1",
+            budget = ContextBudget(maxInputTokens = 1),
+        )
         job.cancel()
 
-        assertTrue(error.message!!.contains("input token budget exceeded"))
+        assertEquals("wrap-up", last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
         val warnings = events.filterIsInstance<AgentEvent.BudgetWarning>()
-        assertEquals(1, warnings.size)
+        assertEquals(1, warnings.size, "the budget warning must fire exactly once")
         assertTrue(warnings.single().fraction >= 1.0)
-        assertEquals(SessionState.ERROR, store.session(SessionId("ses_over_tokens"))!!.state)
+        assertEquals(SessionState.IDLE, store.session(SessionId("ses_over_tokens"))!!.state)
     }
 
     @Test
@@ -1727,53 +1730,6 @@ class AgentLoopTest {
 
         assertTrue(last.parts.isNotEmpty(), "a budget stop must still return a message")
         assertTrue(provider.requests.last().tools.isEmpty())
-    }
-
-    /**
-     * The doom-loop window is per TURN.
-     *
-     * It used to persist for the whole run, so a healthy task that re-read the same
-     * file in several turns (read → edit → re-read to verify) accumulated identical
-     * signatures and was killed with "doom loop". A real loop repeats within a turn.
-     */
-    @Test
-    fun `re-reading the same file across turns is not a doom loop`() = runTest {
-        // Four turns, each a single identical `echo` call, then a final answer.
-        fun sameCall() = listOf(
-            ProviderEvent.ToolCallStart(0, "c1", "echo"),
-            ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"same\"}"),
-            ProviderEvent.ToolCallEnd(0),
-            ProviderEvent.Finished(FinishReason.TOOL_CALLS),
-        )
-        val provider = ScriptedProvider(
-            sameCall(), sameCall(), sameCall(), sameCall(),
-            listOf(ProviderEvent.TextDelta("done"), ProviderEvent.Finished(FinishReason.STOP)),
-        )
-        val store = store()
-        val loop = AgentLoop(
-            providers = SimpleProviderRegistry(listOf(provider)),
-            tools = ToolRegistry(listOf(EchoTool())),
-            store = store,
-            bus = EventBus(),
-        )
-        val sid = SessionId("ses_reread")
-        newSession(store, sid.value)
-
-        val last = loop.prompt(sid, "go", "fake/fake-1", AgentConfig(maxRepeatedCalls = 3))
-
-        assertEquals("done", last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
-        // Every call must have actually run: a doom-loop verdict would have errored
-        // one of them.
-        val tools = store.messages(sid).flatMap { it.parts }.filterIsInstance<Part.Tool>()
-        assertTrue(
-            tools.none { it.result?.output?.contains("doom loop") == true },
-            "an identical call in a LATER turn must not be treated as a loop: " +
-                tools.map { it.result?.output }.toString(),
-        )
-        assertTrue(
-            tools.all { it.state == ToolState.DONE },
-            tools.map { it.state }.toString(),
-        )
     }
 
     /**

@@ -612,15 +612,6 @@ class AgentLoop(
                     continue
                 }
 
-                // The doom-loop window is per TURN.
-                //
-                // It used to persist for the whole run, so a healthy long task that
-                // re-read the same file in several turns (extremely common: read,
-                // edit, re-read to verify) accumulated identical signatures and
-                // tripped the guard, killing the run with "doom loop" for no reason.
-                // A genuine loop repeats the call within a single turn.
-                recentSignatures.clear()
-
                 var doomLoop = false
                 val toolParts = finalized.parts.filterIsInstance<Part.Tool>()
                 for ((index, part) in toolParts.withIndex()) {
