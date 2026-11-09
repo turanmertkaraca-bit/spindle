@@ -114,18 +114,19 @@ object SubagentReport {
      */
     private fun anyText(e: Evidence): String? {
         val own = textOf(e.finalParts)
-        if (own.isNotBlank()) {
-            return "(the subagent stopped before writing a full report — this is all " +
-                "it wrote at the end)\n\n$own"
-        }
+        // Prefer the LONGEST available text, not the newest. A child that ran out of
+        // steps typically ends on a one-line narration ("Let me check the rest of
+        // X") after writing its actual findings earlier; returning that narration
+        // because it happens to be last is the "report of nothing" complaint. The
+        // longest text is a crude but reliable proxy for "the substantive one".
         val earlier = e.earlierAssistantParts.asReversed()
             .map { textOf(it) }
-            .firstOrNull { it.isNotBlank() }
-        if (!earlier.isNullOrBlank()) {
-            return "(the subagent stopped before writing a full report — this is its " +
-                "most recent written output)\n\n$earlier"
-        }
-        return null
+            .filter { it.isNotBlank() }
+        val best = (earlier + listOfNotNull(own.takeIf { it.isNotBlank() }))
+            .maxByOrNull { it.length }
+            ?: return null
+        val where = if (best == own) "all it wrote at the end" else "its most substantial written output"
+        return "(the subagent stopped before writing a full report — this is $where)\n\n$best"
     }
 
     /** Steps 1–2: real prose, labelled when it is not the child's final answer. */
