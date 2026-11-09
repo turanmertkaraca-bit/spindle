@@ -175,6 +175,8 @@ class AgentLoop(
         persistState(store, sessionId, SessionState.RUNNING)
         val budgetWarning = BudgetWarningState()
         var inFlightAssistant: MessageId? = null
+        /** The last finalized assistant message, used as a fallback return value. */
+        var lastAssistant: Message? = null
         // The terminal state already emitted, so cancellation during the final
         // persist cannot double-emit a terminal StateChanged.
         var terminalState: SessionState? = null
@@ -194,7 +196,6 @@ class AgentLoop(
             val active = tools.without(denied)
             val system = systemPrompt(agent.systemPrompt, Path.of(session.cwd), rules)
             var step = 0
-            var compacted = false
             var overflowRetries = 0
             var continuations = 0
             // Doom-loop guard: count how often each tool signature appears in a
@@ -328,7 +329,15 @@ class AgentLoop(
                 if (decision.action != OverflowAction.NONE) {
                     history = store.messages(sessionId)
                 }
-                budgetCheck(budget, sessionId, budgetWarning, history, decision.estimatedTokens)
+                // A spent budget is a normal end, not an exception. Handled the
+                // same way as the step/tool-call caps: one wind-down turn with
+                // tools disabled, so the run still ends with a report.
+                budgetCheck(budget, sessionId, budgetWarning, history, decision.estimatedTokens)?.let { why ->
+                    if (wrapUpReason == null) {
+                        wrapUpReason = why.label
+                        bus.emit(AgentEvent.Error(sessionId, "${why.label} reached — asking for a wrap-up report"))
+                    }
+                }
 
                 val wire = Wire.toWire(history)
                 // A wind-down turn must not be offered tools: the budget that
@@ -506,6 +515,7 @@ class AgentLoop(
                         parts = erroredParts,
                     )
                     store.updateMessage(errored)
+                    lastAssistant = errored
                     errored.parts.forEach { bus.emit(AgentEvent.PartUpdated(sessionId, errored.id.value, it)) }
                     bus.emit(AgentEvent.Error(sessionId, e.failure.message.ifBlank { "provider error" }))
                     // The assistant just written is the only message added since
@@ -532,6 +542,7 @@ class AgentLoop(
                     finish = if (toolCalls.isEmpty()) finish else FinishReason.TOOL_CALLS,
                 )
                 store.updateMessage(finalized)
+                lastAssistant = finalized
                 parts.forEach { bus.emit(AgentEvent.PartUpdated(sessionId, finalized.id.value, it)) }
                 // Bump updatedAt only, preserving the RUNNING state persisted above.
                 store.session(sessionId)?.let { store.updateSession(it.copy(updatedAt = clock())) }
@@ -600,6 +611,15 @@ class AgentLoop(
                     bus.emit(AgentEvent.Error(sessionId, "step budget reached — asking for a wrap-up report"))
                     continue
                 }
+
+                // The doom-loop window is per TURN.
+                //
+                // It used to persist for the whole run, so a healthy long task that
+                // re-read the same file in several turns (extremely common: read,
+                // edit, re-read to verify) accumulated identical signatures and
+                // tripped the guard, killing the run with "doom loop" for no reason.
+                // A genuine loop repeats the call within a single turn.
+                recentSignatures.clear()
 
                 var doomLoop = false
                 val toolParts = finalized.parts.filterIsInstance<Part.Tool>()
@@ -672,7 +692,23 @@ class AgentLoop(
             terminalState = SessionState.IDLE
             bus.emit(AgentEvent.StateChanged(sessionId, SessionState.IDLE))
             persistState(store, sessionId, SessionState.IDLE)
-            return store.latestMessage(sessionId)!!
+            // Never `!!` here. A store that returned null (a deleted session, a
+            // closed handle, a transient read failure) turned a completed run into
+            // an NPE, which the outer handler then reported as a crash — and the
+            // caller lost the final message entirely. Fall back to the last
+            // assistant message we built, then to a synthetic one, so the run always
+            // returns something coherent.
+            return store.latestMessage(sessionId)
+                ?: lastAssistant
+                ?: Message(
+                    id = MessageId(Ids.new("msg")),
+                    sessionId = sessionId,
+                    role = Role.ASSISTANT,
+                    parts = emptyList(),
+                    createdAt = clock(),
+                    finish = FinishReason.ERROR,
+                    error = "the session history was unavailable when the run ended",
+                )
         } catch (e: CancellationException) {
             withContext(NonCancellable) {
                 inFlightAssistant?.let { id ->
@@ -800,16 +836,30 @@ class AgentLoop(
         return Overflow.decide(est, effectiveWindow, open, compactAt, trimAt)
     }
 
+    /**
+     * Check the run's cost and input-token ceilings.
+     *
+     * **Returns** a [StopReason] when the budget is spent, rather than throwing.
+     *
+     * Throwing was the bug: this is called outside the provider-failure
+     * `try`/`catch`, so an `IllegalStateException` here fell through to the generic
+     * `catch (Throwable)`, which marked the session `ERROR`, emitted the raw
+     * exception as an error, and re-threw. A run that simply reached its cost
+     * ceiling therefore looked like a **crash** and skipped its wind-down report —
+     * directly contradicting "a run must never end without telling the user".
+     *
+     * A budget stop is a normal end, so it is modelled as a value and handled by
+     * the same wind-down path as the step and tool-call budgets.
+     */
     private suspend fun budgetCheck(
         budget: ContextBudget,
         sessionId: SessionId,
         warning: BudgetWarningState,
         history: List<Message>,
         estimatedInputTokens: Int,
-    ) {
-        // Input-token ceiling. Null or non-positive means unlimited, so a run
-        // that never sets it is byte-for-byte unchanged. Mirrors the cost path
-        // below: warn once, then stop the run with the same terminal throw.
+    ): StopReason? {
+        // Input-token ceiling. Null or non-positive means unlimited, so a run that
+        // never sets it is byte-for-byte unchanged.
         budget.maxInputTokens?.takeIf { it > 0 }?.let { maxInput ->
             if (estimatedInputTokens >= maxInput) {
                 if (!warning.warned) {
@@ -823,13 +873,11 @@ class AgentLoop(
                     )
                     warning.warned = true
                 }
-                throw IllegalStateException(
-                    "session input token budget exceeded: $estimatedInputTokens >= $maxInput",
-                )
+                return StopReason.INPUT_TOKEN_BUDGET
             }
         }
 
-        val max = budget.maxCostUsd ?: return
+        val max = budget.maxCostUsd ?: return null
         val spent = history.sumOf { it.usage.costUsd }
         val fraction = if (max > 0.0) spent / max else if (spent > 0.0) 1.0 else 0.0
         if (spent >= max) {
@@ -837,12 +885,13 @@ class AgentLoop(
                 bus.emit(AgentEvent.BudgetWarning(sessionId, spent, max, fraction))
                 warning.warned = true
             }
-            throw IllegalStateException("session cost budget exceeded: $spent >= $max")
+            return StopReason.COST_BUDGET
         }
         if (!warning.warned && fraction >= budget.warnAtFraction) {
             bus.emit(AgentEvent.BudgetWarning(sessionId, spent, max, fraction))
             warning.warned = true
         }
+        return null
     }
 
     /** Persist a run-state transition; a missing session is a no-op. */

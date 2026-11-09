@@ -1656,4 +1656,153 @@ class AgentLoopTest {
             "the wind-down tool call must be refused with a reason: ${tools.map { it.result?.output }}",
         )
     }
+
+    // ---- loop-level defects found by reading it end to end ----
+
+    /**
+     * A spent COST budget is a normal end, not a crash.
+     *
+     * `budgetCheck` used to THROW. It is called outside the provider-failure
+     * try/catch, so the `IllegalStateException` fell through to the generic
+     * `catch (Throwable)`, which marked the session ERROR, emitted the raw
+     * exception, and re-threw — so reaching a cost ceiling looked like a crash and
+     * skipped the wind-down report entirely.
+     */
+    @Test
+    fun `a spent cost budget winds down instead of throwing`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(ProviderEvent.TextDelta("wrap-up report"), ProviderEvent.Finished(FinishReason.STOP)),
+            listOf(ProviderEvent.TextDelta("second"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val sid = SessionId("ses_cost")
+        newSession(store, sid.value)
+        // Already at the ceiling before the first turn.
+        seedCost(store, sid, 0.50)
+
+        val last = loop.prompt(
+            sid, "go", "fake/fake-1",
+            budget = ContextBudget(maxCostUsd = 0.10),
+        )
+
+        // Must return normally (not throw) with the model's report.
+        assertEquals("wrap-up report", last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+        // And the wind-down turn must not offer tools.
+        assertTrue(provider.requests.isNotEmpty())
+        assertTrue(
+            provider.requests.last().tools.isEmpty(),
+            "the budget wind-down turn must be sent with tools disabled",
+        )
+    }
+
+    /**
+     * A spent INPUT-TOKEN budget behaves the same way.
+     */
+    @Test
+    fun `a spent input-token budget winds down instead of throwing`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(ProviderEvent.TextDelta("report"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val sid = SessionId("ses_tokens")
+        newSession(store, sid.value)
+
+        val last = loop.prompt(
+            sid, "go", "fake/fake-1",
+            // maxInputTokens = 1 is certainly exceeded by the prompt itself.
+            budget = ContextBudget(maxInputTokens = 1),
+        )
+
+        assertTrue(last.parts.isNotEmpty(), "a budget stop must still return a message")
+        assertTrue(provider.requests.last().tools.isEmpty())
+    }
+
+    /**
+     * The doom-loop window is per TURN.
+     *
+     * It used to persist for the whole run, so a healthy task that re-read the same
+     * file in several turns (read → edit → re-read to verify) accumulated identical
+     * signatures and was killed with "doom loop". A real loop repeats within a turn.
+     */
+    @Test
+    fun `re-reading the same file across turns is not a doom loop`() = runTest {
+        // Four turns, each a single identical `echo` call, then a final answer.
+        fun sameCall() = listOf(
+            ProviderEvent.ToolCallStart(0, "c1", "echo"),
+            ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"same\"}"),
+            ProviderEvent.ToolCallEnd(0),
+            ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+        )
+        val provider = ScriptedProvider(
+            sameCall(), sameCall(), sameCall(), sameCall(),
+            listOf(ProviderEvent.TextDelta("done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val sid = SessionId("ses_reread")
+        newSession(store, sid.value)
+
+        val last = loop.prompt(sid, "go", "fake/fake-1", AgentConfig(maxRepeatedCalls = 3))
+
+        assertEquals("done", last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+        // Every call must have actually run: a doom-loop verdict would have errored
+        // one of them.
+        val tools = store.messages(sid).flatMap { it.parts }.filterIsInstance<Part.Tool>()
+        assertTrue(
+            tools.none { it.result?.output?.contains("doom loop") == true },
+            "an identical call in a LATER turn must not be treated as a loop: " +
+                tools.map { it.result?.output },
+        )
+        assertTrue(tools.all { it.state == ToolState.DONE }, tools.map { it.state })
+    }
+
+    /**
+     * A store that cannot return the latest message must not turn a completed run
+     * into an NPE reported as a crash.
+     */
+    @Test
+    fun `a finished run still returns a message when the store read fails`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(ProviderEvent.TextDelta("the answer"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val base = store()
+        // Wrap the store so `latestMessage` returns null (as a deleted session or a
+        // closed handle would).
+        val store = object : dev.spindle.core.store.SessionStore by base {
+            override suspend fun latestMessage(sessionId: SessionId): Message? = null
+        }
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val sid = SessionId("ses_noread")
+        newSession(base, sid.value)
+
+        val last = loop.prompt(sid, "go", "fake/fake-1")
+
+        assertEquals(
+            "the answer",
+            last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text },
+            "the caller must still receive the run's output",
+        )
+    }
 }
