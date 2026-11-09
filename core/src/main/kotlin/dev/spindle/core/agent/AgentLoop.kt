@@ -592,19 +592,33 @@ class AgentLoop(
                     // would keep alive a run that is supposed to be reporting, and
                     // (because the budget is already spent) leave the parent with no
                     // report at all.
-                    for (part in finalized.parts.filterIsInstance<Part.Tool>()) {
+                    for (p in finalized.parts.filterIsInstance<Part.Tool>()) {
                         updatePart(
                             sessionId,
                             finalized.id,
-                            part.copy(
+                            p.copy(
                                 state = ToolState.ERROR,
                                 result = ToolResult(
-                                    part.call.id,
+                                    p.call.id,
                                     "not run: the run has already reached its budget",
                                     isError = true,
                                 ),
                             ),
                         )
+                    }
+                    // If the wind-down turn produced NO text, the run would end on an
+                    // assistant message containing only refused tool calls — i.e. the
+                    // caller gets an EMPTY report, which is the very failure this
+                    // whole mechanism exists to prevent. Write the summary ourselves:
+                    // less useful than the model's, but never nothing.
+                    if (finalized.parts.none { it is Part.Text }) {
+                        val notice = Part.Text(
+                            PartId(Ids.new("prt")),
+                            "The run reached $wrapUpReason before it could write a summary. " +
+                                "It made $totalToolCalls tool call(s) and was asked to stop; " +
+                                "review the tool results above for what was done.",
+                        )
+                        updatePart(sessionId, finalized.id, notice)
                     }
                     break
                 }

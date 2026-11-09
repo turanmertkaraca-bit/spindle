@@ -1863,8 +1863,19 @@ class AgentLoopTest {
 
         val last = loop.prompt(sid, "go", "fake/fake-1", AgentConfig(maxRunMillis = 1L))
 
-        // The run finished with a report rather than hanging or losing the turn.
-        assertEquals("wrap-up", last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+        // The run must not end with an EMPTY answer.
+        //
+        // The provider here ignores `tools = []` on the wind-down turn, so the model
+        // emits tool calls instead of prose. The loop refuses them — and if it left
+        // it at that, the assistant message would contain only refused tool calls and
+        // the caller would get nothing, which is the exact failure the wind-down
+        // mechanism exists to prevent. The loop therefore writes the summary itself.
+        val text = last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
+        assertTrue(text.isNotBlank(), "the run ended with no text at all: ${last.parts}")
+        assertTrue(
+            text.contains("before it could write a summary"),
+            "the fallback summary must explain itself: $text",
+        )
         // Nothing may be left open.
         val tools = store.messages(sid).flatMap { it.parts }.filterIsInstance<Part.Tool>()
         assertTrue(
