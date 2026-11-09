@@ -278,21 +278,29 @@ class SubagentSpawner(
             } else {
                 null
             }
-            // The live capture is authoritative for files and tools (the store holds
-            // neither); the store is authoritative for prose it still retains.
-            val finalParts = buildList {
+            // The LIVE CAPTURE IS AUTHORITATIVE for prose, and the store is only a
+            // fallback. The store may already have been compacted (which erases the
+            // child's findings), so preferring it would resurrect exactly the bug this
+            // class exists to fix. The store is still useful when the child failed
+            // before emitting anything.
+            val capturedFinal = buildList {
                 texts.lastOrNull()?.let { add(Part.Text(PartId("captured-text"), it)) }
                 reasonings.lastOrNull()?.let { add(Part.Reasoning(PartId("captured-reasoning"), it)) }
-            }.ifEmpty { fromStore?.finalParts.orEmpty() }
+            }
+            val finalParts = capturedFinal.ifEmpty { fromStore?.finalParts.orEmpty() }
                 .ifEmpty { finalMessage?.parts.orEmpty() }
+
+            // Earlier text is listed NEWEST FIRST, matching how the report picks the
+            // most recent substantial output. Everything captured during the run goes
+            // in before anything read from the store, so live evidence always wins.
+            val capturedEarlier = buildList {
+                texts.dropLast(1).asReversed().forEach { add(listOf(Part.Text(PartId("t"), it))) }
+                reasonings.dropLast(1).asReversed().forEach { add(listOf(Part.Reasoning(PartId("r"), it))) }
+            }
 
             val merged = SubagentReport.Evidence(
                 finalParts = finalParts,
-                earlierAssistantParts = buildList {
-                    texts.dropLast(1).forEach { add(listOf(Part.Text(PartId("t"), it))) }
-                    reasonings.dropLast(1).forEach { add(listOf(Part.Reasoning(PartId("r"), it))) }
-                    addAll(fromStore?.earlierAssistantParts.orEmpty())
-                },
+                earlierAssistantParts = capturedEarlier + fromStore?.earlierAssistantParts.orEmpty(),
                 toolUses = toolUses.ifEmpty { fromStore?.toolUses.orEmpty() },
                 fileChanges = files.values.toList(),
                 error = error ?: lastError ?: fromStore?.error,

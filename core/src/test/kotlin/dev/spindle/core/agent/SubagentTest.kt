@@ -256,7 +256,14 @@ class SubagentTest {
                 ProviderEvent.ToolCallEnd(0),
                 ProviderEvent.Finished(FinishReason.TOOL_CALLS),
             ),
-            // child turn 2: budget-exhausted wind-down turn (no tools offered)
+            // child turn 2: bare tool call (prose is only in turn 1)
+            listOf(
+                ProviderEvent.ToolCallStart(0, "c2", "read"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"path\":\"Bar.kt\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            // child turn 3: budget-exhausted wind-down turn (no tools offered)
             listOf(
                 ProviderEvent.Finished(FinishReason.STOP),
             ),
@@ -408,6 +415,8 @@ class SubagentTest {
                 ProviderEvent.TextDelta("Let me check the rest of KeyStoreTest."),
                 ProviderEvent.Finished(FinishReason.STOP),
             ),
+            // child: wind-down turn once the step budget trips
+            listOf(ProviderEvent.Finished(FinishReason.STOP)),
             // parent's closing turn
             listOf(ProviderEvent.TextDelta("parent done"), ProviderEvent.Finished(FinishReason.STOP)),
         )
@@ -596,6 +605,8 @@ class SubagentTest {
                 ProviderEvent.ToolCallEnd(0),
                 ProviderEvent.Finished(FinishReason.TOOL_CALLS),
             ),
+            // child's wind-down turn (tools are disabled for it)
+            listOf(ProviderEvent.Finished(FinishReason.STOP)),
             listOf(ProviderEvent.TextDelta("parent done"), ProviderEvent.Finished(FinishReason.STOP)),
         )
         val store = InMemorySessionStore()

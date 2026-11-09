@@ -1620,6 +1620,8 @@ class AgentLoopTest {
             toolCallTurn(),
             // wind-down turn: provider ignores tools=[] and calls one anyway
             toolCallTurn(),
+            // If the loop wrongly continued, it would request a third turn.
+            toolCallTurn(),
         )
         val store = store()
         val loop = AgentLoop(
@@ -1634,6 +1636,8 @@ class AgentLoopTest {
         loop.prompt(sid, "go", "fake/fake-1", AgentConfig(maxSteps = 1))
 
         // Exactly two provider requests: the working turn and ONE wind-down turn.
+        // A third would mean the wind-down tool call was executed and the loop
+        // continued, which is the bug.
         assertEquals(2, provider.requests.size, "the wind-down turn must be the last turn")
         // No tool part may be left pending, and the wind-down call is refused.
         val tools = store.messages(sid).flatMap { it.parts }.filterIsInstance<Part.Tool>()

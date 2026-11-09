@@ -33,7 +33,9 @@ class SubagentReportTest {
 
     @Test
     fun `a substantial final answer is returned verbatim`() {
-        val answer = "FINDING: ".repeat(30)
+        // No trailing separator: the report trims surrounding whitespace, and that
+        // is intended (a stray trailing space is not information).
+        val answer = (1..30).joinToString(" ") { "FINDING$it" }
         val report = SubagentReport.build(evidence(final = listOf(text(answer))))
         assertEquals(answer, report, "a real written answer must pass through untouched")
     }
@@ -89,7 +91,7 @@ class SubagentReportTest {
 
     @Test
     fun `prose beats reasoning when both exist`() {
-        val prose = "ANSWER: ".repeat(40)
+        val prose = (1..40).joinToString(" ") { "ANSWER$it" }
         val report = SubagentReport.build(
             evidence(final = listOf(text(prose), reasoning("some thinking"))),
         )

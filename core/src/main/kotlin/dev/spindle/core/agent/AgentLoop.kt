@@ -557,28 +557,14 @@ class AgentLoop(
                     }
                     break
                 }
-                if (agent.maxSteps != null && step >= agent.maxSteps) {
-                    for (part in finalized.parts.filterIsInstance<Part.Tool>()) {
-                        updatePart(
-                            sessionId,
-                            finalized.id,
-                            part.copy(
-                                state = ToolState.ERROR,
-                                result = ToolResult(part.call.id, "step budget exhausted", isError = true),
-                            ),
-                        )
-                    }
-                    wrapUpReason = "the step budget"
-                    bus.emit(AgentEvent.Error(sessionId, "step budget reached — asking for a wrap-up report"))
-                    continue
-                }
-
                 if (wrapUpReason != null) {
-                    // A provider that ignores `tools = []` (or the model insists on
-                    // calling one anyway) would otherwise loop: the wind-down turn
-                    // is the LAST turn, so any tool calls it emitted are failed and
-                    // the run stops here. Without this the guard could spin forever,
-                    // and a subagent with a "finished" run would report nothing.
+                    // The wind-down turn was the LAST turn. It was sent with
+                    // `tools = []`, but a provider may ignore that and the model may
+                    // call a tool anyway. Refuse the calls and stop here: the
+                    // alternative is falling through to normal tool handling, which
+                    // would keep alive a run that is supposed to be reporting, and
+                    // (because the budget is already spent) leave the parent with no
+                    // report at all.
                     for (part in finalized.parts.filterIsInstance<Part.Tool>()) {
                         updatePart(
                             sessionId,
@@ -594,6 +580,21 @@ class AgentLoop(
                         )
                     }
                     break
+                }
+                if (agent.maxSteps != null && step >= agent.maxSteps) {
+                    for (part in finalized.parts.filterIsInstance<Part.Tool>()) {
+                        updatePart(
+                            sessionId,
+                            finalized.id,
+                            part.copy(
+                                state = ToolState.ERROR,
+                                result = ToolResult(part.call.id, "step budget exhausted", isError = true),
+                            ),
+                        )
+                    }
+                    wrapUpReason = "the step budget"
+                    bus.emit(AgentEvent.Error(sessionId, "step budget reached — asking for a wrap-up report"))
+                    continue
                 }
 
                 var doomLoop = false
