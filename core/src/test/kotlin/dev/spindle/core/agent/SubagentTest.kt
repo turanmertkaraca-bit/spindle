@@ -657,4 +657,105 @@ class SubagentTest {
             return ToolOutcome(input["text"]?.jsonPrimitive?.contentOrNull ?: "")
         }
     }
+
+    // ---- round 4: defects found by re-reading the evidence collector ----
+
+    /**
+     * A tool part is published TWICE (RUNNING, then DONE/ERROR). The collector
+     * appended once per event, so the report said "Tools run (6)" for three calls —
+     * CI output showed "Tools run (3)" for a single call.
+     */
+    @Test
+    fun `a tool call is counted once, not once per state change`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_task", "task"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"description\":\"x\",\"prompt\":\"do\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            // child: one tool call, no prose
+            listOf(
+                ProviderEvent.ToolCallStart(0, "c1", "echo"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"hi\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            listOf(ProviderEvent.Finished(FinishReason.STOP)),
+            listOf(ProviderEvent.TextDelta("parent done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = InMemorySessionStore()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(TaskTool(), EchoTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val parentId = SessionId("ses_parent")
+        newSession(store, parentId.value, model = "fake-1", provider = "fake")
+
+        loop.prompt(parentId, "delegate", "fake/fake-1")
+
+        val output = store.messages(parentId)
+            .flatMap { it.parts }
+            .filterIsInstance<Part.Tool>()
+            .single { it.call.name == "task" }
+            .result?.output ?: ""
+        assertTrue(
+            output.contains("Tools run (1)"),
+            "one call must be counted once, not twice: $output",
+        )
+    }
+
+    /**
+     * A retried attempt reuses the same part id. The collector must drop the
+     * retracted text, or attempt-1 and attempt-2 are concatenated into the report.
+     *
+     * Driven through the real loop: the child's first attempt streams text and then
+     * fails, so `AgentLoop` emits `PartReset` before retrying with the same part id.
+     */
+    @Test
+    fun `a retried attempt does not concatenate its text into the report`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_task", "task"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"description\":\"x\",\"prompt\":\"do\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            // child attempt 1: streams text, then the stream fails
+            listOf(
+                ProviderEvent.TextDelta("STALE attempt one text that should vanish. "),
+                ProviderEvent.Failure("503 service unavailable"),
+            ),
+            // child attempt 2 (retry): the real answer
+            listOf(
+                ProviderEvent.TextDelta("FRESH attempt two is the answer."),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+            listOf(ProviderEvent.TextDelta("parent done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = InMemorySessionStore()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(TaskTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val parentId = SessionId("ses_parent")
+        newSession(store, parentId.value, model = "fake-1", provider = "fake")
+
+        loop.prompt(parentId, "delegate", "fake/fake-1")
+
+        val output = store.messages(parentId)
+            .flatMap { it.parts }
+            .filterIsInstance<Part.Tool>()
+            .single { it.call.name == "task" }
+            .result?.output ?: ""
+        assertTrue(output.contains("FRESH"), "the retried answer must be reported: $output")
+        assertTrue(
+            !output.contains("STALE"),
+            "the failed attempt's text must not survive the retry: $output",
+        )
+    }
 }

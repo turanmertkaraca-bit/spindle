@@ -109,6 +109,16 @@ class SubagentSpawner(
         }.copy(
             allowSubagents = false, // no recursive fan-out
             maxSteps = maxChildSteps,
+            // Never let a child outlive the run that is waiting for it.
+            //
+            // The child previously got `AgentConfig.general()` defaults, so it
+            // always had a 30-minute wall clock regardless of the parent's budget or
+            // mode. A goal run (60 min, renewing) that spawned children could have
+            // them die at 30 minutes while the parent was still allowed to work —
+            // and the parent then received a report from a run it had not asked to
+            // stop. Inherit the parent's window; a child never gets a LONGER one.
+            maxRunMillis = listOfNotNull(parentAgent.maxRunMillis, AgentConfig.general().maxRunMillis)
+                .minOrNull(),
         )
 
         // Collect the child's evidence AS IT RUNS.
@@ -174,6 +184,15 @@ class SubagentSpawner(
             evidence.stop()
         }
 
+        // `ok` means "the child's run completed", NOT "the child wrote prose".
+        //
+        // This used to be `finalMessage.error == null`, which is the same thing
+        // today — but the tempting "fix" of marking a prose-less child as failed
+        // would be wrong: `TaskTool` maps `!ok` onto `isError`, and the UI renders
+        // an errored tool part in red. A child that completed successfully but
+        // produced only a work summary (files it changed, tools it ran) DID succeed;
+        // flagging it red would tell the user the delegation failed when the work
+        // landed. Reports carry their own honesty label instead.
         return SubagentResult(
             sessionId = childId,
             text = text,
@@ -222,7 +241,16 @@ class SubagentSpawner(
          */
         private val texts = LinkedHashMap<String, StringBuilder>()
         private val reasonings = LinkedHashMap<String, StringBuilder>()
-        private val toolUses = ArrayList<SubagentReport.ToolUse>()
+        /**
+         * Tool calls, keyed by PART ID.
+         *
+         * A part is published twice: once as RUNNING and again as DONE/ERROR. A
+         * plain list therefore recorded every call TWICE, and the report said
+         * "Tools run (6)" for three calls (visible in CI output: "Tools run (3)"
+         * for a single call). Keyed by id, the later state replaces the earlier,
+         * so the count is the real number of calls.
+         */
+        private val toolUses = LinkedHashMap<String, SubagentReport.ToolUse>()
         private val files = LinkedHashMap<String, SubagentReport.FileChange>()
         private var lastError: String? = null
         private var job: Job? = null
@@ -262,7 +290,7 @@ class SubagentSpawner(
                                 reasonings[part.id.value] = StringBuilder(part.text)
                                 trimOldest(reasonings)
                             }
-                            is Part.Tool -> toolUses += SubagentReport.ToolUse(
+                            is Part.Tool -> toolUses[part.id.value] = SubagentReport.ToolUse(
                                 name = part.call.name,
                                 ok = part.result?.isError == false,
                                 detail = part.result?.output?.lineSequence()?.firstOrNull()?.trim()?.take(120),
@@ -278,6 +306,17 @@ class SubagentSpawner(
                                 path,
                                 SubagentReport.FileChange(path = path, created = event.edit.removed == 0),
                             )
+                        }
+                        is AgentEvent.PartReset -> {
+                            // A failed attempt's streamed text was retracted before
+                            // the retry. The retry REUSES the same part id, so the
+                            // accumulated buffer must be dropped or attempt-1 and
+                            // attempt-2 text are concatenated into the report — the
+                            // same double-render the UI avoids, but in the parent's
+                            // context where nobody would notice.
+                            val id = event.partId.value
+                            texts.remove(id)
+                            reasonings.remove(id)
                         }
                         is AgentEvent.Error -> lastError = event.message
                         else -> Unit
@@ -338,7 +377,7 @@ class SubagentSpawner(
             val merged = SubagentReport.Evidence(
                 finalParts = finalParts,
                 earlierAssistantParts = capturedEarlier + fromStore?.earlierAssistantParts.orEmpty(),
-                toolUses = toolUses.ifEmpty { fromStore?.toolUses.orEmpty() },
+                toolUses = toolUses.values.toList().ifEmpty { fromStore?.toolUses.orEmpty() },
                 fileChanges = files.values.toList(),
                 error = error ?: lastError ?: fromStore?.error,
             )
