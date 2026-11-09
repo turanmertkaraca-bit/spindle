@@ -305,6 +305,22 @@ fun SettingsScreen(
                     tag = "context-slider",
                 )
             }
+            RowDivider(colors)
+            // The run's wall-clock limit was never shown anywhere, so when a run
+            // stopped with "time budget reached" the only reasonable question was
+            // "what time budget?". State it, and say what actually fixes it.
+            Text(
+                "a run stops after 30 min of wall clock (goal mode: 60 min, " +
+                    "auto-extended while tasks remain). Long builds are better split " +
+                    "into steps than left to run for an hour.",
+                color = colors.dim.copy(alpha = 0.7f),
+                fontFamily = LumenFonts.value,
+                fontSize = LumenType.caption,
+                lineHeight = LumenType.lineTight,
+                modifier = Modifier
+                    .padding(horizontal = 4.dp, vertical = 10.dp)
+                    .testTag("run-time-limit"),
+            )
         }
 
         // ---- notifications ----

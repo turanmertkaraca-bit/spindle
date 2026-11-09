@@ -45,6 +45,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -286,8 +287,20 @@ class AgentLoop(
                             )
                         }
                     }
-                    wrapUpReason = "the run's wall-clock budget"
-                    bus.emit(AgentEvent.Error(sessionId, "time budget reached — asking for a wrap-up report"))
+                    // Tell the user WHICH budget and HOW LONG, and only then wind
+                    // down. The bare "time budget reached" gave no number, so the
+                    // reasonable question was "what time budget?" — the limit was
+                    // never surfaced anywhere in the app.
+                    val minutes = ((agent.maxRunMillis ?: MAX_RUN_WALL_CLOCK_MS) / 60_000)
+                    wrapUpReason = "the ${minutes}-minute wall-clock budget"
+                    bus.emit(
+                        AgentEvent.Error(
+                            sessionId,
+                            "the ${minutes}-minute wall-clock budget is spent" +
+                                (if (agent.renewsBudget) "" else " (goal mode extends this automatically)") +
+                                " — asking for a wrap-up report",
+                        ),
+                    )
                     continue
                 }
                 step++
@@ -664,7 +677,64 @@ class AgentLoop(
                         budgetExhausted = true
                         break
                     }
-                    executeTool(sessionId, finalized.id, part, session.cwd, onPermission, agent)
+                    // BOUND THE TOOL CALL BY THE RUN'S REMAINING WALL CLOCK.
+                    //
+                    // The wall-clock budget used to be checked only at the TOP of a
+                    // step, i.e. between turns. A tool with no deadline of its own
+                    // could therefore run indefinitely: `bash` accepts
+                    // `timeoutMs: 0` meaning "no deadline, cancel-only", and even its
+                    // 120 s default can overrun a nearly-spent window. That is the
+                    // "it got stuck on a task" report: the run was silently past its
+                    // budget inside a single tool call, and the notice only appeared
+                    // once the tool finally returned.
+                    //
+                    // Now the remaining budget is a hard ceiling on the call. A tool
+                    // that manages its own (shorter) deadline keeps it; this only ever
+                    // tightens, never loosens.
+                    val remaining = remainingBudgetMs(agent, windowStartedAtMs)
+                    val bounded =
+                        if (remaining > 0) it@ withTimeoutOrNull(remaining) {
+                            executeTool(sessionId, finalized.id, part, session.cwd, onPermission, agent)
+                            true
+                        } ?: false
+                        else {
+                            executeTool(sessionId, finalized.id, part, session.cwd, onPermission, agent)
+                            true
+                        }
+                    if (!bounded) {
+                        // The tool was cancelled by the deadline. Finish its part with
+                        // a truthful reason rather than leaving it RUNNING, then let
+                        // the next loop iteration notice the spent budget and take the
+                        // wind-down turn.
+                        updatePart(
+                            sessionId,
+                            finalized.id,
+                            part.copy(
+                                state = ToolState.ERROR,
+                                result = ToolResult(
+                                    part.call.id,
+                                    "stopped: the run's wall-clock budget expired while this tool was running",
+                                    isError = true,
+                                ),
+                            ),
+                        )
+                        // Fail the rest of the turn so nothing is left PENDING.
+                        for (j in index + 1 until toolParts.size) {
+                            val pending = toolParts[j]
+                            updatePart(
+                                sessionId,
+                                finalized.id,
+                                pending.copy(
+                                    state = ToolState.ERROR,
+                                    result = ToolResult(
+                                        pending.call.id,
+                                        "not run: the run's wall-clock budget expired",
+                                        isError = true,
+                                    ),
+                                ),
+                            )
+                        }
+                    }
                 }
                 if (budgetExhausted) {
                     wrapUpReason = "the tool-call budget"
@@ -825,6 +895,20 @@ class AgentLoop(
         val compactAt = (budget.compactAtFraction ?: Overflow.COMPACT_AT).coerceIn(0.5, 0.98)
         val trimAt = (compactAt - 0.12).coerceAtLeast(0.4)
         return Overflow.decide(est, effectiveWindow, open, compactAt, trimAt)
+    }
+
+    /**
+     * Milliseconds left in the current wall-clock window, or 0 when unlimited.
+     *
+     * Used to bound a single tool call. Without it a tool that manages its own (or
+     * no) deadline can outlive the whole run's budget, which is what "it got stuck
+     * on a task" looked like from the outside: the run was already past its limit
+     * but nothing was checked until the tool returned.
+     */
+    private fun remainingBudgetMs(agent: AgentConfig, windowStartedAtMs: Long): Long {
+        val window = agent.maxRunMillis ?: MAX_RUN_WALL_CLOCK_MS
+        if (window <= 0) return 0
+        return (windowStartedAtMs + window - clock()).coerceAtLeast(0)
     }
 
     /**

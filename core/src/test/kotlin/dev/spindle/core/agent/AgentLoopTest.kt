@@ -1764,4 +1764,66 @@ class AgentLoopTest {
             "the caller must still receive the run's output",
         )
     }
+
+    /**
+     * A tool that never returns must not outlive the run's wall-clock budget.
+     *
+     * The budget was only checked at the top of a step, so a tool managing its own
+     * (or no) deadline could hang the run indefinitely — the "it got stuck on a
+     * task" report. The call is now bounded by the time remaining in the window.
+     */
+    @Test
+    fun `a hanging tool is cut off by the wall-clock budget`() = runTest {
+        /** A tool that ignores cancellation-free deadlines and just waits. */
+        class HangingTool : Tool {
+            override val spec = ToolSpec(
+                name = "hang",
+                description = "never returns",
+                parametersJson = """{"type":"object","properties":{}}""",
+            )
+            // 0 = the loop must not wrap it in its own timeout; only the run's
+            // wall-clock bound applies, which is exactly the case under test.
+            override val timeoutMs = 0L
+            override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
+                kotlinx.coroutines.awaitCancellation()
+            }
+        }
+
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "c1", "hang"),
+                ProviderEvent.ToolCallArgsDelta(0, "{}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            // wind-down turn
+            listOf(ProviderEvent.TextDelta("wrap-up"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(HangingTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val sid = SessionId("ses_hang")
+        newSession(store, sid.value)
+
+        // A 2-second window: the tool hangs, so it must be cut off at the deadline.
+        val agent = AgentConfig(maxRunMillis = 2_000L)
+        val last = loop.prompt(sid, "go", "fake/fake-1", agent)
+
+        // The run finished (with a report) rather than hanging forever.
+        assertEquals("wrap-up", last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+        // The hanging call is recorded as stopped, and is not left RUNNING/PENDING.
+        val tools = store.messages(sid).flatMap { it.parts }.filterIsInstance<Part.Tool>()
+        assertTrue(
+            tools.none { it.state == ToolState.PENDING || it.state == ToolState.RUNNING },
+            "no tool part may be left open: ${tools.map { it.state }}",
+        )
+        assertTrue(
+            tools.any { it.result?.output?.contains("wall-clock budget expired") == true },
+            "the cut-off must be explained: ${tools.map { it.result?.output }}",
+        )
+    }
 }
