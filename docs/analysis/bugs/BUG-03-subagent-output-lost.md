@@ -249,3 +249,84 @@ Fixed in two places:
   measurements are no longer corrupt, but the engine is still weak. That is the
   project's own Phase 2 work (SEE, aspiration windows, LMR table, IID), not
   something this app should reach into.
+
+---
+
+## Round 4 — a deliberate audit, and five more defects (fixed `a103f27`, `v0.2.18`)
+
+The owner asked for one last bug-find run on subagents before opening a new
+session. This was a fresh read of `SubagentSpawner` / `SubagentReport` /
+`TaskTool`, not a re-check of the previous fixes. Five real defects.
+
+### 1. Every tool call was counted TWICE
+
+A tool part is published once as RUNNING and again as DONE/ERROR. The evidence
+collector appended one entry per `PartUpdated`, so the report said
+**"Tools run (3)" for a single call**. That string was in the CI output for
+several rounds and was read past. Now keyed by part id, so the later state
+replaces the earlier.
+
+### 2. A retried attempt's text was concatenated into the report
+
+`AgentLoop` retracts a failed attempt with `AgentEvent.PartReset`, and the retry
+**reuses the same part id**. The collector ignored `PartReset`, so attempt-1's text
+was followed by attempt-2's inside the parent's context — the same double-render
+the UI avoids, where nobody would notice. Now the buffer is dropped on reset.
+
+### 3. A child always got a 30-minute wall clock, whatever the parent had
+
+Children were built from `AgentConfig.general()` defaults, so a goal run (60 min,
+renewing) could spawn children that died at 30 minutes while the parent was still
+permitted to work. The parent then received a report from a run it never asked to
+stop. A child now inherits the parent's window and never gets a longer one.
+
+### 4. `ok` is not "the child wrote prose" (documented, behaviour unchanged)
+
+`TaskTool` maps `!ok` onto `isError`, which the UI renders red. A child that
+completed successfully but produced only a work summary (files changed, tools run)
+DID succeed; flagging it failed would tell the user the delegation broke when the
+work landed. Recorded so the tempting "fix" is not applied later.
+
+### 5. A wind-down turn with no prose left the caller an EMPTY answer
+
+Found by the new `a spent window refuses the rest of the turn` test. When a
+provider ignores `tools = []` and emits tool calls instead of prose, every call is
+refused — and the assistant message then contained **only** refused tool calls. The
+caller got an empty report, exactly the failure the wind-down mechanism exists to
+prevent. The loop now writes the summary itself when the wind-down turn produced no
+text. Same invariant as `SubagentReport`: **a run always says what happened.**
+
+---
+
+## Round 4, part 2 — and a bug in my own fix
+
+The first attempt at bounding tool calls by the wall clock wrapped `executeTool` in
+`withTimeoutOrNull(remaining)`. CI failed six existing tests immediately, and the
+reason is worth keeping:
+
+**`withTimeoutOrNull` measures the COROUTINE clock, which is virtual time under
+`runTest`** — it has nothing to do with the injectable `clock` the wall-clock
+budget uses. With a test clock advancing 1 ms per read, `remaining` was ~1 ms, so
+every tool call was cancelled instantly and every result was null.
+
+Two clocks, one of them fake, must not be mixed. The correct mechanism is the one
+the loop already owns:
+
+- `executeTool` takes a `deadlineCeilingMs` and clamps a tool's own `timeoutMs` to
+  the smaller of that and the remaining run budget. Same `withTimeout`, no second
+  clock, no new cancellation semantics.
+- A tool declaring NO deadline (`timeoutMs == 0`: `bash` with `timeoutMs: 0`, and
+  `task`, which owns a whole child run) cannot be clamped; the clock is checked
+  **between calls within the turn**, so a spent window refuses the rest of the turn.
+
+---
+
+## Test-infrastructure note
+
+`RetryResetTest` failed twice on otherwise-green trees (`d9e880a`, then `c616516`).
+The cause was the helper's **shape**, not the product: `awaitPartBody` polled for
+the final text and *returned the last polled value on timeout*, so a rebuild landing
+20 ms late produced an empty list that read as a retry bug. Replaced with
+`awaitCondition(what) { ... }`, which either observes the condition or throws with
+the timeline it actually saw. **A test helper must never hand a stale value to an
+assertion** — that is how a flake gets misread as a defect and costs a round.

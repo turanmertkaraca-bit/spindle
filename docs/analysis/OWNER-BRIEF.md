@@ -270,3 +270,36 @@ rather than removing it, the missing concept is usually a **lifecycle flag**
   root, so real GPU passthrough is not available; what *is* achievable is exposing
   `libvulkan`/`libEGL` from the host to the guest bind-mounts plus a driver-swap UI,
   which needs verifying against this device's actual `/vendor/lib64` layout first.
+
+---
+
+## Wave 4 — the closing audit (0.2.17 / 0.2.18)
+
+| sha | what |
+|---|---|
+| `69474f5` | **BUG-04:** a spent cost/input-token budget **threw** from outside the provider try/catch, so it fell through to the generic handler — session `ERROR`, raw exception shown, **no wind-down report**. Now returns a `StopReason`. Two tests had asserted the crash was correct and were fixed. |
+| `b4ff11b` | Corrected my own overstatement: I claimed the doom-loop window killed healthy runs; it does not (needs 3 identical calls within 6). Reverted, test deleted. |
+| `72e35df` | A tool could outlive the whole run: the budget was checked only between turns, and `bash` accepts `timeoutMs: 0`. Now clamped. Settings states the 30-min limit. |
+| `973314c` | Four more subagent defects (double-counted tools, retry text concatenation, child wall clock, `ok` semantics). |
+| `58d2a8f` | My `withTimeoutOrNull` fix was wrong — it uses the **coroutine** clock (virtual under `runTest`), not the injectable `clock`. Six tests caught it. Replaced with deadline clamping. |
+| `c616516` | A wind-down turn with no prose left the caller an empty answer; the loop now writes the summary itself. |
+| `a103f27` | **Released `v0.2.18`.** Plus `RetryResetTest` made honest: it returned a stale value on timeout, so a slow CI read as a product bug. |
+
+### The two lessons worth carrying
+
+1. **Two clocks, one fake, must not be mixed.** `withTimeout`/`delay` measure the
+   coroutine clock; a wall-clock budget measured with an injectable `clock` cannot
+   be enforced with them. Under `runTest` the coroutine clock is virtual, so the
+   combination fails instantly and confusingly.
+2. **A test helper must never return a stale value.** `awaitPartBody` polled and
+   returned whatever it last saw, so a late rebuild looked like a product bug. It
+   cost two rounds. Either observe the condition or fail naming what you saw.
+
+### Honest state after this wave
+
+- `main` is green on both jobs at `a103f27`; `v0.2.18` is published.
+- **The five deliberate bug-hunt waves still have not been run.** Waves 1–4 above
+  were reactive (owner reports) or single targeted passes. The loop has been read
+  start to finish once; `Compaction`, `ContextPolicy`, `Retry`, `Wire`,
+  `RunRecovery` and the `ChatViewModel` → `RunEndPolicy` handoff have not.
+- No claim is made that the app is bug-free.

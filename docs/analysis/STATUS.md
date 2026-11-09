@@ -10,8 +10,9 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[—]` deferred
 > what "finished" means in the owner's terms. This queue is the ordered
 > implementation of it.
 
-**Last CI-green sha: `b301743`** (both jobs green) — **released as `v0.2.15`**
-(`lumen-0.2.15-debug.apk`, versionCode 20). Supersedes 0.2.14 (19) and 0.2.13 (18).
+**Last CI-green sha: `a103f27`** (both jobs green) — **released as `v0.2.18`**
+(`lumen-0.2.18-debug.apk`, versionCode 23). Supersedes 0.2.17 (22), 0.2.16 (21),
+0.2.15 (20), 0.2.14 (19), 0.2.13 (18).
 
 > **0.2.15 is the subagent fix that is actually verified.** Rounds 1–2 of the
 > subagent work (`v0.2.13`/`v0.2.14`) were green and still broken in practice: the
