@@ -1,10 +1,12 @@
 package dev.spindle.core.agent
 
 import dev.spindle.core.event.AgentEvent
+import dev.spindle.core.event.DeltaKind
 import dev.spindle.core.event.EventBus
 import dev.spindle.core.model.Ids
 import dev.spindle.core.model.Message
 import dev.spindle.core.model.Part
+import dev.spindle.core.model.PartId
 import dev.spindle.core.model.Role
 import dev.spindle.core.model.Session
 import dev.spindle.core.model.SessionId
@@ -12,6 +14,10 @@ import dev.spindle.core.model.Usage
 import dev.spindle.core.store.SessionStore
 import dev.spindle.core.tool.SubagentResult
 import dev.spindle.core.tool.SubagentSpec
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -104,6 +110,18 @@ class SubagentSpawner(
             maxSteps = maxChildSteps,
         )
 
+        // Collect the child's evidence AS IT RUNS.
+        //
+        // This is the fix for the worst subagent bug: a long child crosses the
+        // compaction threshold, and `Compaction.compact` replaces the head
+        // messages' parts with an empty list. Any report built by walking the
+        // store afterwards therefore sees only the retained tail — so the LONGER
+        // a child worked, the LESS it reported. Watching the event stream captures
+        // the findings before they can be folded away. It is also the only place
+        // file changes exist at all (they arrive as `FileEdited`, never as a
+        // transcript part), and the only record of a reasoning model's work.
+        val evidence = EvidenceCollector(bus, childId)
+
         // The child loop owns the StateChanged(RUNNING) and terminal events; the
         // spawner only re-reads and touches updatedAt so it never clobbers the
         // state the loop persisted.
@@ -134,111 +152,177 @@ class SubagentSpawner(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Throwable) {
-            // A child that THREW still did work. Returning a bare "failed" threw
-            // all of it away, so the parent had to redo the whole investigation.
-            // Report what the child wrote before it died, plus the cause.
+            // A child that THREW still did work. Report what it did, plus the
+            // cause — never a bare "failed" that discards the whole run.
             store.session(childId)?.let { store.updateSession(it.copy(updatedAt = System.currentTimeMillis())) }
-            val salvaged = runCatching {
-                store.messages(childId)
-                    .asReversed()
-                    .firstOrNull { it.role == Role.ASSISTANT }
-                    ?.parts
-                    ?.filterIsInstance<Part.Text>()
-                    ?.joinToString("") { it.text }
-                    .orEmpty()
-            }.getOrDefault("")
             val cause = e.message?.takeIf { it.isNotBlank() } ?: e::class.simpleName ?: "unknown error"
-            val body = if (salvaged.isNotBlank()) {
-                "subagent stopped with an error ($cause). Its findings up to that point:\n\n$salvaged"
-            } else {
-                "subagent failed: $cause"
+            val usage = childUsage(childId)
+            val text = try {
+                evidence.report(error = cause)
+            } finally {
+                evidence.stop()
             }
-            return SubagentResult(childId, body, false)
+            return SubagentResult(childId, text, false, usage.totalTokens, usage.costUsd)
         }
 
-        val text = subagentReport(store, childId, finalMessage)
-        // Return the full report; the loop's tool-output clip bounds it. An
-        // artificial low cap here silently dropped findings the parent needed.
-        val childUsage: Usage = store.messages(childId).fold(Usage()) { acc, m -> acc + m.usage }
+        val usage = childUsage(childId)
         store.session(childId)?.let { store.updateSession(it.copy(updatedAt = System.currentTimeMillis())) }
+        val text = try {
+            evidence.report(store, finalMessage)
+        } finally {
+            evidence.stop()
+        }
 
         return SubagentResult(
             sessionId = childId,
             text = text,
             ok = finalMessage.error == null,
-            childTokens = childUsage.totalTokens,
-            costUsd = childUsage.costUsd,
+            childTokens = usage.totalTokens,
+            costUsd = usage.costUsd,
         )
     }
 
+    /** Rolled-up child usage; never throws (a store hiccup must not lose a report). */
+    private suspend fun childUsage(childId: SessionId): Usage =
+        runCatching { store.messages(childId).fold(Usage()) { acc, m -> acc + m.usage } }
+            .getOrDefault(Usage())
+
     /**
-     * The child's report, resilient to *where* the child stopped.
+     * Subscribes to the child's event stream and keeps everything the report may
+     * need, **before** compaction can rewrite the store.
      *
-     * The obvious implementation — read [finalMessage]'s text parts — loses the
-     * entire subagent when the child's last message is a **tool call** rather
-     * than prose. That is the normal shape of a run that hits its step budget
-     * (the model calls a tool, the budget trips, the run ends), and it used to
-     * return `"(subagent produced no text)"` for a child that had burned a
-     * hundred thousand tokens of real research. The parent then had to redo all
-     * of it, which is the worst possible failure mode for delegation.
+     * Three bugs this exists to fix, all of which independently produced "250k
+     * tokens and no report":
      *
-     * Order of preference:
-     *  1. the final message's text, when it has any;
-     *  2. the most recent earlier assistant message that has text (the child's
-     *     last written findings), newest first;
-     *  3. an explicit note that the child stopped without writing anything,
-     *     including the reason so the parent can decide whether to retry.
+     * 1. **Compaction erases the evidence.** `Compaction.compact` replaces head
+     *    messages' parts with an empty list, so a post-hoc store walk sees only the
+     *    retained tail. The longer a child worked, the less it reported — exactly
+     *    backwards.
+     * 2. **File changes are not in the transcript.** They arrive as
+     *    `AgentEvent.FileEdited`. Without collecting them, a child that wrote the
+     *    files and said nothing looked like it had done nothing.
+     * 3. **Reasoning models never emit text.** `deepseek-r1`/`o1` stream
+     *    `ReasoningDelta`, so the reasoning *is* the record of the work.
+     *
+     * Bounded: at most [MAX_TEXT_PARTS] streamed blobs per channel, so a
+     * pathological child cannot grow the parent's memory without limit.
      */
-    private suspend fun subagentReport(
-        store: SessionStore,
-        childId: SessionId,
-        finalMessage: Message,
-    ): String {
-        val own = finalMessage.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
-        if (own.length >= SUBSTANTIAL_REPORT_CHARS) return own
+    private class EvidenceCollector(bus: EventBus, private val childId: SessionId) {
+        private val texts = ArrayDeque<String>()
+        private val reasonings = ArrayDeque<String>()
+        private val toolUses = ArrayList<SubagentReport.ToolUse>()
+        private val files = LinkedHashMap<String, SubagentReport.FileChange>()
+        private var lastError: String? = null
+        private var job: Job? = null
 
-        // Gather every assistant text the child produced this run, newest first,
-        // including its final message (which may hold a short narration).
-        //
-        // Newest-first alone is not enough. A child that runs out of steps
-        // mid-investigation typically ends on one line like "Let me check the rest
-        // of KeyStoreTest", and handing that back as "the report" is
-        // indistinguishable from the child having failed — the owner's exact
-        // complaint. So among the candidates we prefer the most SUBSTANTIAL text:
-        // a real report is long, a progress line is not. If nothing is long
-        // enough we still return the longest, clearly labelled as incomplete,
-        // because a partial answer beats an empty one.
-        val candidates = buildList {
-            if (own.isNotBlank()) add(own)
-            addAll(
-                store.messages(childId)
-                    .asReversed()
-                    .filter { it.role == Role.ASSISTANT && it.id != finalMessage.id }
-                    .mapNotNull { m ->
-                        m.parts.filterIsInstance<Part.Text>()
-                            .joinToString("") { it.text }
-                            .takeIf { it.isNotBlank() }
-                    },
-            )
-        }
-
-        val best = candidates.firstOrNull { it.length >= SUBSTANTIAL_REPORT_CHARS }
-            ?: candidates.maxByOrNull { it.length }
-        if (!best.isNullOrBlank()) {
-            return if (best.length >= SUBSTANTIAL_REPORT_CHARS) {
-                "(the subagent stopped before writing a final answer — " +
-                    "this is its most substantial output from the run)\n\n$best"
-            } else {
-                "(the subagent stopped without a written report — this is all it produced)\n\n$best"
+        init {
+            job = CoroutineScope(Dispatchers.Unconfined).launch {
+                bus.events.collect { event ->
+                    if (event.sessionId != childId) return@collect
+                    when (event) {
+                        is AgentEvent.PartDelta -> when (event.kind) {
+                            DeltaKind.TEXT -> append(texts, event.delta)
+                            DeltaKind.REASONING -> append(reasonings, event.delta)
+                        }
+                        is AgentEvent.PartUpdated -> when (val part = event.part) {
+                            is Part.Text -> appendWhole(texts, part.text)
+                            is Part.Reasoning -> appendWhole(reasonings, part.text)
+                            is Part.Tool -> toolUses += SubagentReport.ToolUse(
+                                name = part.call.name,
+                                ok = part.result?.isError == false,
+                                detail = part.result?.output?.lineSequence()?.firstOrNull()?.trim()?.take(120),
+                            )
+                            else -> Unit
+                        }
+                        is AgentEvent.FileEdited -> {
+                            val path = event.edit.path
+                            // Keep the FIRST record of a path: "created" comes from
+                            // the first edit (removed == 0) and a later overwrite
+                            // must not clear it.
+                            files.putIfAbsent(
+                                path,
+                                SubagentReport.FileChange(path = path, created = event.edit.removed == 0),
+                            )
+                        }
+                        is AgentEvent.Error -> lastError = event.message
+                        else -> Unit
+                    }
+                }
             }
         }
 
-        // Nothing substantial was ever written. Say why, so the parent can act on
-        // it instead of guessing at an unexplained empty result.
-        val why = finalMessage.error
-            ?: finalMessage.parts.filterIsInstance<Part.Tool>().lastOrNull()?.result?.output
-            ?: "it produced no text before stopping"
-        return "(subagent produced no text: $why)"
+        fun stop() {
+            job?.cancel()
+            job = null
+        }
+
+        /**
+         * The report, preferring the live capture and falling back to the store.
+         *
+         * The store fallback matters for a child that failed before emitting
+         * anything (a provider error on turn one): the transcript may still hold a
+         * usable message even though no events were seen.
+         */
+        suspend fun report(
+            fallbackStore: SessionStore? = null,
+            finalMessage: Message? = null,
+            error: String? = null,
+        ): String {
+            val fromStore = if (fallbackStore != null) {
+                runCatching {
+                    SubagentReport.evidenceFrom(
+                        fallbackStore.messages(childId),
+                        error = error ?: lastError,
+                    )
+                }.getOrNull()
+            } else {
+                null
+            }
+            // The live capture is authoritative for files and tools (the store holds
+            // neither); the store is authoritative for prose it still retains.
+            val finalParts = buildList {
+                texts.lastOrNull()?.let { add(Part.Text(PartId("captured-text"), it)) }
+                reasonings.lastOrNull()?.let { add(Part.Reasoning(PartId("captured-reasoning"), it)) }
+            }.ifEmpty { fromStore?.finalParts.orEmpty() }
+                .ifEmpty { finalMessage?.parts.orEmpty() }
+
+            val merged = SubagentReport.Evidence(
+                finalParts = finalParts,
+                earlierAssistantParts = buildList {
+                    texts.dropLast(1).forEach { add(listOf(Part.Text(PartId("t"), it))) }
+                    reasonings.dropLast(1).forEach { add(listOf(Part.Reasoning(PartId("r"), it))) }
+                    addAll(fromStore?.earlierAssistantParts.orEmpty())
+                },
+                toolUses = toolUses.ifEmpty { fromStore?.toolUses.orEmpty() },
+                fileChanges = files.values.toList(),
+                error = error ?: lastError ?: fromStore?.error,
+            )
+            return SubagentReport.build(merged)
+        }
+
+        private fun append(target: ArrayDeque<String>, delta: String) {
+            if (delta.isEmpty()) return
+            if (target.isNotEmpty() && target.size >= MAX_TEXT_PARTS) {
+                // Merge into the newest entry so a streamed answer stays one blob
+                // instead of growing the deque without bound.
+                target[target.size - 1] = target.last() + delta
+            } else {
+                target.addLast(delta)
+            }
+        }
+
+        private fun appendWhole(target: ArrayDeque<String>, text: String) {
+            if (text.isBlank()) return
+            // A PartUpdated carries the FULL part text, and the delta stream has
+            // already accumulated it. Only record it when nothing streamed (some
+            // providers send a completed part with no deltas at all).
+            if (target.isEmpty()) target.addLast(text)
+        }
+
+        private companion object {
+            /** Bound on retained streamed blobs per channel. */
+            const val MAX_TEXT_PARTS = 24
+        }
     }
 
     /**
@@ -274,13 +358,6 @@ class SubagentSpawner(
     }
 
     companion object {
-        /**
-         * How long a child's text must be to count as a real report rather than a
-         * progress narration ("Let me check X"). 200 chars is roughly one
-         * sentence plus a file path — below that it is almost always narration.
-         */
-        internal const val SUBSTANTIAL_REPORT_CHARS = 200
-
         /** Default tool-work steps for a child run; see [maxChildSteps]. */
         const val DEFAULT_MAX_CHILD_STEPS = 24
 

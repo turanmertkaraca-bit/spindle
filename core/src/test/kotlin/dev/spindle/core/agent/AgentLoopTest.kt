@@ -1598,4 +1598,49 @@ class AgentLoopTest {
         assertEquals(1, provider.requests.size)
         assertEquals("done", last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
     }
+
+    /**
+     * A provider that ignores `tools = []` must not make the wind-down turn loop.
+     *
+     * The wind-down turn is the LAST turn. If the model still emits a tool call
+     * (some providers ignore an empty tool list), the loop used to fall through to
+     * normal tool handling and could spin, so a run that should have ended with a
+     * report instead produced nothing.
+     */
+    @Test
+    fun `a wind-down turn that still emits a tool call ends the run`() = runTest {
+        fun toolCallTurn() = listOf(
+            ProviderEvent.ToolCallStart(0, "c1", "echo"),
+            ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"x\"}"),
+            ProviderEvent.ToolCallEnd(0),
+            ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+        )
+        val provider = ScriptedProvider(
+            // working turn: trips maxSteps = 1
+            toolCallTurn(),
+            // wind-down turn: provider ignores tools=[] and calls one anyway
+            toolCallTurn(),
+        )
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val sid = SessionId("ses_windup")
+        newSession(store, sid.value)
+
+        loop.prompt(sid, "go", "fake/fake-1", AgentConfig(maxSteps = 1))
+
+        // Exactly two provider requests: the working turn and ONE wind-down turn.
+        assertEquals(2, provider.requests.size, "the wind-down turn must be the last turn")
+        // No tool part may be left pending, and the wind-down call is refused.
+        val tools = store.messages(sid).flatMap { it.parts }.filterIsInstance<Part.Tool>()
+        assertTrue(tools.none { it.state == ToolState.PENDING || it.state == ToolState.RUNNING })
+        assertTrue(
+            tools.any { it.result?.output?.contains("already reached its budget") == true },
+            "the wind-down tool call must be refused with a reason: ${tools.map { it.result?.output }}",
+        )
+    }
 }

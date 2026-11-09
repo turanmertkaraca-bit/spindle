@@ -438,4 +438,212 @@ class SubagentTest {
             "a bare progress narration must not be passed off as the report: $output",
         )
     }
+
+    // ---- reasoning models, and work without prose ----
+
+    /**
+     * A reasoning-only child. `deepseek-r1` and friends stream `ReasoningDelta`
+     * and may never emit a text part; the old report path read only text parts and
+     * returned "no text" about a run that had done the whole job.
+     */
+    @Test
+    fun `a reasoning-only child still reports to its parent`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_task", "task"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"description\":\"x\",\"prompt\":\"think\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            // child: reasoning only, no text delta at all
+            listOf(
+                ProviderEvent.ReasoningDelta(
+                    "The castling bug is that make_move updates bb but not occ, so slider " +
+                        "attacks see a phantom blocker on h1 and f1 looks empty.",
+                ),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+            listOf(ProviderEvent.TextDelta("parent done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = InMemorySessionStore()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(TaskTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val parentId = SessionId("ses_parent")
+        newSession(store, parentId.value, model = "fake-1", provider = "fake")
+
+        loop.prompt(parentId, "delegate", "fake/fake-1")
+
+        val output = store.messages(parentId)
+            .flatMap { it.parts }
+            .filterIsInstance<Part.Tool>()
+            .single { it.call.name == "task" }
+            .result?.output ?: ""
+        assertTrue(output.contains("phantom blocker"), "the reasoning must reach the parent: $output")
+        assertTrue(output.contains("produced no written answer"), output)
+    }
+
+    /**
+     * A child that changed files but wrote no prose. The file-change list is the
+     * only evidence the work happened — it never appears in the transcript.
+     */
+    @Test
+    fun `a child that only edits files reports the edits`() = runTest {
+        var childCwd: java.nio.file.Path? = null
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_task", "task"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"description\":\"x\",\"prompt\":\"write\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            // child writes a file and says nothing
+            listOf(
+                ProviderEvent.ToolCallStart(0, "c1", "fakewrite"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"path\":\"out.txt\",\"text\":\"hi\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            listOf(ProviderEvent.Finished(FinishReason.STOP)),
+            listOf(ProviderEvent.TextDelta("parent done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = InMemorySessionStore()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(TaskTool(), FakeWriteTool { childCwd = it })),
+            store = store,
+            bus = bus,
+            snapshots = null,
+        )
+        val parentId = SessionId("ses_parent")
+        newSession(store, parentId.value, model = "fake-1", provider = "fake")
+
+        loop.prompt(parentId, "delegate", "fake/fake-1")
+
+        val output = store.messages(parentId)
+            .flatMap { it.parts }
+            .filterIsInstance<Part.Tool>()
+            .single { it.call.name == "task" }
+            .result?.output ?: ""
+        // The report must not be silence: either it names the edit or it names the
+        // tool the child ran. Both are actionable for the parent.
+        assertTrue(
+            output.contains("out.txt") || output.contains("fakewrite"),
+            "a child that did work must not report nothing: $output",
+        )
+        assertTrue(!output.startsWith("(subagent produced no text)"), output)
+    }
+
+    /** A write tool that reports an edit exactly like a real mutating tool does. */
+    private class FakeWriteTool(private val onRun: (java.nio.file.Path) -> Unit) : Tool {
+        override val spec = ToolSpec(
+            name = "fakewrite",
+            description = "writes a file",
+            parametersJson = """{"type":"object","properties":{"path":{"type":"string"},"text":{"type":"string"}},"required":["path","text"]}""",
+        )
+        override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
+            onRun(ctx.cwd)
+            val path = input["path"]?.jsonPrimitive?.contentOrNull ?: "out.txt"
+            val text = input["text"]?.jsonPrimitive?.contentOrNull ?: ""
+            java.io.File(ctx.cwd.toFile(), path).writeText(text)
+            return ToolOutcome(
+                output = "wrote $path",
+                edit = dev.spindle.core.model.FileEdit(
+                    id = "e1",
+                    sessionId = ctx.sessionId,
+                    path = path,
+                    added = 1,
+                    removed = 0,
+                ),
+            )
+        }
+    }
+
+    /**
+     * THE worst subagent bug, pinned.
+     *
+     * `Compaction.compact` replaces the head messages' parts with an empty list. A
+     * report assembled by walking the store afterwards therefore sees only the
+     * retained tail — so the LONGER a child worked, the LESS it reported. The
+     * collector must capture findings as they stream, not read them at the end.
+     */
+    @Test
+    fun `findings survive the child being compacted mid-run`() = runTest {
+        val findings = "FINDING: the desync is in make_move; occ is not updated for the rook. ".repeat(4)
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_task", "task"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"description\":\"x\",\"prompt\":\"look\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            // child writes the real findings, then a tool call
+            listOf(
+                ProviderEvent.TextDelta(findings),
+                ProviderEvent.ToolCallStart(0, "c1", "echo"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"x\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            // child's final turn: a bare tool call, no prose
+            listOf(
+                ProviderEvent.ToolCallStart(0, "c2", "echo"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"y\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            listOf(ProviderEvent.TextDelta("parent done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = InMemorySessionStore()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(TaskTool(), EchoTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val parentId = SessionId("ses_parent")
+        newSession(store, parentId.value, model = "fake-1", provider = "fake")
+
+        loop.prompt(parentId, "delegate", "fake/fake-1")
+
+        // Simulate what compaction does to the CHILD's history: erase every part
+        // before the last two messages. A store-only report would now be empty.
+        val child = store.sessions(includeChildren = true).single { it.parentId == parentId }
+        val childMessages = store.messages(child.id)
+        val keep = childMessages.takeLast(2)
+        for (m in childMessages.dropLast(2)) {
+            store.updateMessage(m.copy(parts = emptyList()))
+        }
+        assertTrue(
+            keep.isNotEmpty(),
+            "sanity: the tail must survive compaction",
+        )
+
+        val output = store.messages(parentId)
+            .flatMap { it.parts }
+            .filterIsInstance<Part.Tool>()
+            .single { it.call.name == "task" }
+            .result?.output ?: ""
+        assertTrue(
+            output.contains("occ is not updated"),
+            "the findings must survive the child being compacted: $output",
+        )
+    }
+
+    /** Minimal echo tool so a child has something real to call. */
+    private class EchoTool : Tool {
+        override val spec = ToolSpec(
+            name = "echo",
+            description = "echoes text",
+            parametersJson = """{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}""",
+        )
+        override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome {
+            ctx.checkAborted()
+            return ToolOutcome(input["text"]?.jsonPrimitive?.contentOrNull ?: "")
+        }
+    }
 }

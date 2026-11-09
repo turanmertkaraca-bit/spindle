@@ -573,6 +573,29 @@ class AgentLoop(
                     continue
                 }
 
+                if (wrapUpReason != null) {
+                    // A provider that ignores `tools = []` (or the model insists on
+                    // calling one anyway) would otherwise loop: the wind-down turn
+                    // is the LAST turn, so any tool calls it emitted are failed and
+                    // the run stops here. Without this the guard could spin forever,
+                    // and a subagent with a "finished" run would report nothing.
+                    for (part in finalized.parts.filterIsInstance<Part.Tool>()) {
+                        updatePart(
+                            sessionId,
+                            finalized.id,
+                            part.copy(
+                                state = ToolState.ERROR,
+                                result = ToolResult(
+                                    part.call.id,
+                                    "not run: the run has already reached its budget",
+                                    isError = true,
+                                ),
+                            ),
+                        )
+                    }
+                    break
+                }
+
                 var doomLoop = false
                 val toolParts = finalized.parts.filterIsInstance<Part.Tool>()
                 for ((index, part) in toolParts.withIndex()) {
