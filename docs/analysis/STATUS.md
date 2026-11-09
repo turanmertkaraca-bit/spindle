@@ -116,6 +116,15 @@ for the outer one (this was the "side-tracked by other projects" defect).
 
 ---
 
+### [x] BUG-04 · A spent budget was reported as a crash — FIXED `69474f5` (v0.2.17)
+**Detail:** `docs/analysis/bugs/BUG-04-budget-stop-reported-as-crash.md`
+`budgetCheck` **threw** `IllegalStateException` from outside the provider
+try/catch, so reaching your own cost or input-token ceiling fell through to the
+generic handler: session marked `ERROR`, raw exception in the transcript, **no
+wind-down report**. Now returns a `StopReason` and takes the normal wind-down path.
+Two tests had encoded the crash as the contract and were corrected. Also fixed
+`latestMessage(...)!!` NPE-ing a completed run.
+
 ## Tier 2 — structural
 
 ### [x] ARCH-01 · Subagent concurrency cap = 7 — FIXED `c391e20`
