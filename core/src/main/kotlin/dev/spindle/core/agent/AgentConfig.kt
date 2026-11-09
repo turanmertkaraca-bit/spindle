@@ -90,6 +90,12 @@ data class AgentConfig(
 
             Do not ask the user questions — make the most reasonable choice, note it, and
             continue. Finish with a short summary of what you did and any files changed.
+
+            Always finish by writing that summary as normal text. A run that ends on a
+            tool call has given the caller nothing to act on, and paths you were asked
+            to create are the one thing that must survive. Keep scratch work in a
+            temporary directory and never leave numbered variants (.v2, .final) of a
+            deliverable beside it.
         """.trimIndent()
 
         /** Delegation-first primary agent: thinks hard, talks little, fans out. */

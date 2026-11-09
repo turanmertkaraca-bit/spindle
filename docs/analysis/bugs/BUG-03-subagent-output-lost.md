@@ -189,3 +189,63 @@ never an answer to a parent that has to decide what to do next.
 - **Accumulate streams by part/message id, never by delta.** A per-delta store
   looks like it works (the text is all there) while every read of "the last
   message" returns one token.
+
+---
+
+## Round 3 — what the chess workbench report exposed
+
+A separate project (`chess/`) ran four subagents and filed a bug report. Two of
+its findings are about **this app**, not the chess engine, and they matter more
+than the chess bugs:
+
+### The report that made correct work look fabricated
+
+> *"I accused a subagent of fabricating its 'Stockfish agrees: cp 1047 / cp 675 /
+> cp 419' claims — those claims were CORRECT, my verification was the broken part."*
+
+The verification used a raw shell pipe (`printf ... go depth 8\nquit | stockfish`).
+`quit` racing `go` makes Stockfish exit mid-search and print `depth 1 nodes 0
+score cp 0` with `bestmove a2a3` **regardless of position**. The measurement was
+garbage; the subagent was right.
+
+**Fixed in `chess/uci.js`**: `search()` now rejects a degenerate result
+(`nodes == 0 && depth <= 1 && cp == 0`) instead of returning it. A corrupt
+measurement now raises an error naming the cause, rather than silently becoming a
+data point. All three conditions are required, because a genuine `go nodes 1`
+also reports 0 nodes — requiring all three avoids rejecting honest tiny budgets.
+
+**Lesson for this app:** a tool that returns plausible garbage is worse than one
+that fails. The same principle is why `RunEndPolicy` refuses silence and why
+`SubagentReport` refuses an empty report.
+
+### Subagents leaving scratch files in the repo root
+
+A subagent wrote `.scan.js`, `.scan2.js`, `.v2.js`, `.final.js` into the
+repository root. Nothing in the system prompt said where scratch work belongs, and
+in a repo whose git index is damaged (`fatal: bad object HEAD`) those files are
+nearly invisible.
+
+Fixed in two places:
+- `AgentLoop.FILE_ACCESS_NOTICE` (injected into **every** agent, including
+  subagents) now states the rule: scratch work in a temp directory, deliverables
+  under the requested name, no numbered variants.
+- `AgentConfig.GENERAL_SYSTEM` additionally tells a subagent to always finish with
+  its summary **as text**, because a run that ends on a tool call gives the caller
+  nothing to act on — the round-1 bug, now prevented at the prompt as well as in
+  the report path.
+
+### Not fixable in this app
+
+- **`fatal: bad object HEAD` in the downstream repo.** Its `.git/objects`
+  contained proot `--link2symlink` artifacts. The repair procedure is in
+  `docs/analysis/arch/ENVIRONMENT.md` §1 — it is mechanical, but it must be run in
+  *that* repo, and the working tree must not be re-cloned over.
+- **Thermal throttling** (265 → 18 knops on identical work). No software fix;
+  fixed `--nodes` and interleaved runs are the correct methodology, which the
+  project already adopted.
+- **`go nodes 1000` completing only depth 1.** Real, and a search-efficiency
+  problem rather than a correctness one: the engine now emits an honest `info`
+  line (`depth 1 ... nodes 1000`) and a legal move at every budget ≥ 1, so
+  measurements are no longer corrupt, but the engine is still weak. That is the
+  project's own Phase 2 work (SEE, aspiration windows, LMR table, IID), not
+  something this app should reach into.

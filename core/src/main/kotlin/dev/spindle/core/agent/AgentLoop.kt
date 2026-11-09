@@ -1296,7 +1296,16 @@ class AgentLoop(
         const val FILE_ACCESS_NOTICE =
             "File access is limited to the current working directory and its " +
                 "subdirectories. If you need the user to see or use a specific file, " +
-                "ensure it is placed within this accessible directory."
+                "ensure it is placed within this accessible directory.\n\n" +
+                // Scratch-file hygiene. A subagent left `.scan.js`, `.scan2.js`,
+                // `.v2.js` and `.final.js` in the repository root because nothing
+                // said not to, and in a repo whose git index is broken those files
+                // are almost invisible (`git status` cannot be trusted). Naming the
+                // rule in the prompt is cheaper than auditing after every task.
+                "Put throwaway scratch work in a temporary directory, not in the " +
+                "project root. Deliverables go exactly where the task asks for them, " +
+                "under the name it asks for — do not scatter numbered variants " +
+                "(.v2, .final, .scan2) beside the real file."
 
         /** Most auto-continuations of an output-token-truncated turn per run. */
         const val MAX_CONTINUATIONS = 3
