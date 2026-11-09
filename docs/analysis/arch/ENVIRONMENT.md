@@ -175,3 +175,90 @@ the wrapper basename to `MEMORY_HUNGRY` if it is a routine one.
 **A 2 GiB `ulimit -v` is still worth having** for non-JVM commands: it stops a
 runaway process from being reaped by Android's low-memory killer, which would
 take the whole app down rather than just the command.
+
+---
+
+## 7. Repairing a downstream repo's object store (verified recipe)
+
+The agent works inside `projects/playground/`, which contains **another** git
+repository (`fnportandroid`). Its store developed the same proot artifacts, and
+`git status` there failed with `fatal: bad object HEAD` — which the chess
+workbench report correctly called out as a repo-hygiene hazard, because stray
+files are invisible when `status` cannot run.
+
+The repair below was applied and verified: `log`, `status` and `fetch` all work
+with zero errors afterwards. It is *not* the same as §1 above; the failure mode is
+different and the naive §1 script does nothing here.
+
+### What was actually wrong
+
+1. **Pack files were symlinks into a deleted path.** `pack-*.pack` and
+   `pack-*.idx` were `--link2symlink` links pointing at
+   `/data/user/0/.../workspace/.git/objects/pack/.l2s.tmp_pack_X`, which no longer
+   existed — but the real bytes were present as `.l2s.tmp_pack_X.0001`.
+   `git verify-pack` reported `.pack: ok` only after restoring them, which is how
+   to tell this apart from genuine corruption.
+2. **A local-only commit was the branch tip.** `refs/heads/main` pointed at a
+   commit whose parent had never been fetched (it is not on the remote), so every
+   traversal died on a missing parent.
+3. **Stale refs kept resurrecting the dead commit.** A reflog, a
+   `refs/remotes/origin/main` entry, a tag, and `.git/shallow` all referenced it.
+   `git fetch` failed with `fetch-pack: invalid index-pack output` until all were
+   removed.
+4. **A `refs/tags/V3.0.0` pointing at a missing object** made `fetch` abort with
+   `did not send all necessary objects`.
+
+### The repair, in order
+
+```sh
+cd <downstream-repo>
+
+# 1. Restore pack/index bytes from the .0001 sidecars.
+#    `cp` then `mv` — a plain `python os.remove` on the dangling link is
+#    redirected by proot's link2symlink layer and fails.
+cd .git/objects/pack
+for pair in "pack-AAA.pack:.l2s.tmp_pack_X.0001" "pack-AAA.idx:.l2s.tmp_idx_X.0001"; do
+  link="${pair%%:*}"; side="${pair##*:}"
+  cp -f "$side" "$link.tmp-real" && rm -f "$link" && mv "$link.tmp-real" "$link"
+done
+cd -
+git verify-pack -v .git/objects/pack/<name>.idx | tail -1     # expect ": ok"
+
+# 2. Get the missing history from a CLEAN clone elsewhere (never clone over this
+#    working tree — you would lose local refs).
+git clone --filter=blob:none --no-checkout <url> /tmp/fresh
+cp -n /tmp/fresh/.git/objects/pack/*.pack .git/objects/pack/
+cp -n /tmp/fresh/.git/objects/pack/*.idx  .git/objects/pack/
+
+# 3. Point the branch at a commit that exists, then clear every stale ref.
+git update-ref refs/heads/main <real-remote-head>
+git symbolic-ref HEAD refs/heads/main
+rm -rf .git/logs                      # reflogs referenced the dead commit
+rm -f  .git/shallow                   # a bogus shallow boundary blocks fetching
+rm -f  .git/FETCH_HEAD .git/ORIG_HEAD
+
+# 4. Delete every ref whose object is missing (some are in .git/packed-refs).
+for t in $(git for-each-ref --format='%(refname)' refs/tags); do
+  git cat-file -t "$t" >/dev/null 2>&1 || rm -f ".git/$t"
+done
+# and drop stale lines from .git/packed-refs by hand
+
+# 5. Verify.
+git log --oneline -3
+git status          # must print no "error:"/"fatal:" lines
+git fetch origin main
+git branch --set-upstream-to=origin/main main
+```
+
+### The general lesson
+
+`fatal: bad object HEAD` has (at least) two distinct causes in this environment,
+and they need different repairs:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| loose objects are broken links | `--link2symlink` on `objects/xx/` | §1 script |
+| `verify-pack` says the pack is `ok` but refs fail | pack **and** index were links; plus a local-only tip and stale refs | §7 above |
+
+Do not re-clone over a working tree to "fix" git. Copy objects from a clean clone
+in `/tmp` instead.
