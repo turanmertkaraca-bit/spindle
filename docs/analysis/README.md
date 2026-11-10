@@ -16,10 +16,18 @@ of re-deriving the codebase and burning context.
 
 | Area | File |
 |---|---|
-| Bugs (with confirmed root causes) | [`bugs/BUG-01-models-show-free.md`](bugs/BUG-01-models-show-free.md) |
-| UI (per-screen, + how to judge with screenshots/VLM) | [`ui/README.md`](ui/README.md), [`ui/CHAT-SCREEN.md`](ui/CHAT-SCREEN.md) |
-| Architecture (subagents, context, environment) | [`arch/SUBAGENTS.md`](arch/SUBAGENTS.md), [`arch/CONTEXT.md`](arch/CONTEXT.md), [`arch/ENVIRONMENT.md`](arch/ENVIRONMENT.md) |
+| Bugs (confirmed root cause + fix sha) | `bugs/BUG-01` models-show-free · `bugs/BUG-02` large-tool-output-crash · **`bugs/BUG-03` subagent-output-lost** · **`bugs/BUG-04` budget-stop-reported-as-crash** |
+| UI (per-screen, + how to judge screenshots) | [`ui/README.md`](ui/README.md), [`ui/CHAT-SCREEN.md`](ui/CHAT-SCREEN.md), [`../guide/06-ui.md`](../guide/06-ui.md) |
+| Architecture (subagents, context, environment) | [`arch/SUBAGENTS.md`](arch/SUBAGENTS.md), [`arch/CONTEXT.md`](arch/CONTEXT.md), **`arch/ENVIRONMENT.md` §7** (repairing a downstream repo's object store) |
 | Features (GitHub, git tool) | [`features/GITHUB.md`](features/GITHUB.md), [`features/GIT-TOOL.md`](features/GIT-TOOL.md) |
+
+### The two files most likely to save you a wasted round
+
+- **`bugs/BUG-03`** — subagents lost their report in **five** separate ways over
+  four rounds. Read it before touching `SubagentSpawner` / `SubagentReport`.
+- **`arch/ENVIRONMENT.md` §6–7** — local Gradle is unreliable on this host, and
+  `projects/playground/` holds a *second* repo whose object store needed repair.
+  Both traps are documented with verified recipes; do not re-derive them.
 
 Deeper background lives in `docs/guide/` (per-subsystem developer guide) and
 `docs/HANDOFF.md` (long-form history + invariants).

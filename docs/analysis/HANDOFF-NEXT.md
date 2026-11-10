@@ -7,10 +7,11 @@ point. Everything you need is in this repo; nothing here is guesswork.
   codename "spindle")
 - **Working dir:** `spindle/` (the repo root — you are already in it)
 - **Branch:** `main` — in sync with origin, clean tree
-- **Version:** `0.2.14` (`versionCode 19`)
-- **Published release:** https://github.com/turanmertkaraca-bit/spindle/releases/tag/v0.2.14
-- **Last CI-green sha:** `59809b9` (both jobs)
-- **Installed on the owner's device:** 0.2.14 (owner confirmed "much nicer")
+- **Version:** `0.2.18` (`versionCode 23`)
+- **Published release:** https://github.com/turanmertkaraca-bit/spindle/releases/tag/v0.2.18
+- **Last CI-green sha:** `a103f27` (both jobs green); release workflow green at
+  `b831860`
+- **Installed on the owner's device:** presumed 0.2.18 — **verify it**, see §0
 
 ---
 
@@ -43,7 +44,15 @@ area.
 
 ## 2. State at this handoff
 
-Shipped in 0.2.14 and verified on device:
+**The single most important thing to know: the subagent report path was broken in
+FIVE different ways across four rounds of fixes.** Read
+`docs/analysis/bugs/BUG-03-subagent-output-lost.md` in full before touching
+`SubagentSpawner.kt`, `SubagentReport.kt` or `TaskTool.kt`. The pattern that kept
+recurring: *a tool returning plausible garbage instead of failing* — the owner's
+own separate project accused a subagent of fabricating data when the verification
+harness was the broken part.
+
+Shipped and CI-verified:
 
 - **Motion safety** (`40bae2c`): no animation loops faster than 1 Hz, the
   streaming pulse is 2 s at 0.62→1.0, and reduce-motion is derived from Android's
@@ -63,6 +72,16 @@ Shipped in 0.2.14 and verified on device:
 - **Composer** (`efcea8f`): the context limit is a labelled bar inside the card.
 - **Freeze/teleport** (`5e90bfc`): the transcript no longer scrolls from inside
   its own `layoutInfo` collector (that was a main-thread ANR).
+- **Budget stops** (`69474f5`, BUG-04): a spent cost/input-token budget used to
+  **throw** from outside the provider try/catch, so it was reported as a crash with
+  no wind-down report. It now returns a `StopReason`.
+- **Tool call bounded by the run's wall clock** (`72e35df`, `58d2a8f`): a tool with
+  `timeoutMs: 0` (e.g. `bash`) could outlive the whole run — the "got stuck on a
+  task" cause. Clamped to the remaining budget; Settings now states the 30-min limit.
+- **Four more subagent defects** (`973314c`, `c616516`): tools counted twice, a
+  retried attempt's text concatenated into the report, children getting a fixed
+  30-minute window regardless of parent mode, and a wind-down turn with no prose
+  leaving an **empty** answer.
 
 Open work is listed at the bottom of `OWNER-BRIEF.md` §"Still open" and in
 `STATUS.md` tiers.
@@ -145,6 +164,19 @@ Full protocol: `docs/analysis/PROTOCOL.md`.
 it into one of these files. That is the entire point of them.
 
 ---
+
+## 4b. The two traps that cost the most time last session
+
+1. **Two clocks, one fake, must not be mixed.** `withTimeout`/`delay` measure the
+   *coroutine* clock, which is **virtual time under `runTest`**. The wall-clock
+   budget is measured with an injectable `clock`. Enforcing that budget with
+   `withTimeoutOrNull` cancelled every tool call instantly in six tests. Do not
+   attempt it again — the fix is deadline clamping (`AgentLoop.executeTool`'s
+   `deadlineCeilingMs`).
+2. **A test helper must never return a stale value.** `RetryResetTest` failed twice
+   because its poll helper returned whatever it last saw on timeout, so a late
+   background rebuild read as a product bug. Use `awaitCondition { }` — observe the
+   condition or fail naming what you saw.
 
 ## 5. First 30 minutes — suggested
 
