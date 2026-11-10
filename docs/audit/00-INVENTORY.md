@@ -1,3 +1,7 @@
+> **⚠ PINNED AT `d17dbd2` — HISTORICAL AUDIT, NOT CURRENT.**
+> Many findings here are already fixed. Before acting on any row, check the code and
+> `docs/analysis/STATUS.md`. Index: `docs/analysis/DOC-MAP.md`.
+
 # Merged bug & risk inventory
 
 Merged from the eight per-area audits at HEAD d17dbd2 — core loop, storage, tools/sandbox, shell, background service, resource policy, chat UI and projects — deduplicated by root cause. Original severities are preserved; where several reports describe the same defect the rows are collapsed into one entry and the other report is named inline ("also in …"). Raw counts before merging were P0 4, P1 27, P2 56, P3 28; the P3 tail is not carried over.

@@ -1,3 +1,9 @@
+> **⚠ STALE — DO NOT FOLLOW THIS FILE AS INSTRUCTION.**
+> Current HEAD is `2b16802` (v0.2.18). This file was written against an older tree
+> and is kept as history only. The authoritative entry point is
+> [`docs/analysis/HANDOFF-NEXT.md`](analysis/HANDOFF-NEXT.md); the doc index is
+> [`docs/analysis/DOC-MAP.md`](analysis/DOC-MAP.md).
+
 # Lumen ↔ opencode reliability parity & capability roadmap
 
 Audit of Lumen (`dev.lumen.app`, engine **spindle**; Kotlin `:core` `:tools` `:app`

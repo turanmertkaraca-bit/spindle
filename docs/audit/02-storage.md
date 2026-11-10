@@ -1,3 +1,7 @@
+> **⚠ PINNED AT `d17dbd2` — HISTORICAL AUDIT, NOT CURRENT.**
+> Many findings here are already fixed. Before acting on any row, check the code and
+> `docs/analysis/STATUS.md`. Index: `docs/analysis/DOC-MAP.md`.
+
 # AndroidDatabase — persistence integrity audit
 
 `AndroidDatabase` owns the single lazily-opened SQLite handle for `lumen.db`: it opens and integrity-checks the file, quarantines a corrupt one and starts fresh, installs connection pragmas (`busy_timeout`, `foreign_keys`, WAL, `synchronous=NORMAL`, page cache), runs the six-step `user_version`-gated migration chain that builds and reshapes `sessions`/`messages`/`parts`/`todos`/`snapshots`/`snapshot_blobs`, and provides the `lease()` refcount so a concurrent `close()` cannot free the handle underneath an in-flight query. It is the only place that knows about schema versions, so every durability and upgrade guarantee in the app rests on this file.

@@ -1,3 +1,8 @@
+> **NOTE:** written against HEAD `4ff37c0`, which is older than current. The
+> *structure* described here is still accurate and every change since is recorded in
+> `docs/analysis/STATUS.md`; re-check any specific claim against the code. Doc index:
+> `docs/analysis/DOC-MAP.md`.
+
 # Conventions and hard-won rules
 
 Each rule below exists because breaking it caused a real bug in this repo.

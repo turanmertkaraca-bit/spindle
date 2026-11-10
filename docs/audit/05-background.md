@@ -1,3 +1,7 @@
+> **⚠ PINNED AT `d17dbd2` — HISTORICAL AUDIT, NOT CURRENT.**
+> Many findings here are already fixed. Before acting on any row, check the code and
+> `docs/analysis/STATUS.md`. Index: `docs/analysis/DOC-MAP.md`.
+
 # RunService — lifecycle & background audit
 
 `RunService` is a foreground service whose only job is to keep an in-flight agent run alive while the app is backgrounded and to render it as an ongoing notification with a Stop action. It deliberately owns no domain state — the session store stays the source of truth — so it is `START_NOT_STICKY`, never resumes an interrupted run, and never persists anything itself. Its contract with the UI is three companion calls (`start`, `update`, `stop`) plus one result-notification helper (`notifyComplete`), and the run control seam `RunControl.stopHandler`, which is the only way the service can actually cancel work. It also holds a bounded `PARTIAL_WAKE_LOCK` that is re-armed on each progress update. The whole surface is defensive to the point of silence: nearly every platform call is wrapped in `runCatching`, which is what most of the findings below are about.

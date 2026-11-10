@@ -37,6 +37,12 @@ server between them and no second state model.
 Read `docs/analysis/OWNER-BRIEF.md` (what "finished" means, measured against the
 code, with shas) and `docs/analysis/STATUS.md` (the ordered queue + execution log).
 
+**There are 30+ markdown files here and most are stale.** Read
+[`DOC-MAP.md`](DOC-MAP.md) — it marks every one authoritative or stale, with the sha
+each was written against. Note in particular that `docs/HANDOFF.md` says "READ
+FIRST" in its title and is the most out-of-date file in the repo; this file
+supersedes it.
+
 `docs/guide/README.md` is the **per-subsystem developer guide**, one file per
 area.
 

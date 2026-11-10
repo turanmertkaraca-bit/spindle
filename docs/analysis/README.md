@@ -5,8 +5,14 @@ of re-deriving the codebase and burning context.
 
 ## Read in this order
 
+> **Confused about which of the 30+ docs to trust? Read [`DOC-MAP.md`](DOC-MAP.md)
+> first.** It marks every file authoritative or stale, with the sha each was
+> written against. `docs/HANDOFF.md` in particular says "READ FIRST" and is the
+> most out-of-date file in the repo.
+
 | # | File | Purpose |
 |---|---|---|
+| 0 | [`DOC-MAP.md`](DOC-MAP.md) | **Which docs are current, which will mislead you.** |
 | 1 | [`HANDOFF-NEXT.md`](HANDOFF-NEXT.md) | **Entry point.** Mission, rules, environment, traps. |
 | 2 | [`STATUS.md`](STATUS.md) | **The ranked work queue.** Start your next task here. |
 | 3 | [`OWNER-BRIEF.md`](OWNER-BRIEF.md) | **What "finished" means.** The owner's acceptance spec, measured against the code. |

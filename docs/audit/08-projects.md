@@ -1,3 +1,7 @@
+> **⚠ PINNED AT `d17dbd2` — HISTORICAL AUDIT, NOT CURRENT.**
+> Many findings here are already fixed. Before acting on any row, check the code and
+> `docs/analysis/STATUS.md`. Index: `docs/analysis/DOC-MAP.md`.
+
 # Projects — store & screen audit
 
 Every project is one direct child directory of `filesDir/projects`, and the active project's folder is handed to the agent as its working directory, so workspaces are isolated by directory rather than by any in-app filtering. `ProjectStore` owns creation, listing, activation, deletion and a one-time migration of the legacy `filesDir/workspace` tree, while `ProjectsScreen` is a thin picker over a pre-built `List<ProjectRow>`: it renders name/session-count/active badge, offers "New" (name dialog), "Delete" (confirm dialog), "Resume newest session" and a switch tap — every action is a callback upward (`onCreate`/`onSwitch`/`onDelete`/`onOpenSession`), and the screen never touches the filesystem or the store directly. Note: the requested path `app/.../ProjectStore.kt` does not exist; the file is at `app/.../data/ProjectStore.kt` and all store citations below refer to it.

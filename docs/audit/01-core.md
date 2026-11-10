@@ -1,3 +1,7 @@
+> **⚠ PINNED AT `d17dbd2` — HISTORICAL AUDIT, NOT CURRENT.**
+> Many findings here are already fixed. Before acting on any row, check the code and
+> `docs/analysis/STATUS.md`. Index: `docs/analysis/DOC-MAP.md`.
+
 # AgentLoop — core loop correctness audit
 
 `AgentLoop.promptLocked` owns one run end to end: it takes a per-session mutex (line 140-143), finalizes any tool part left open by a previous turn (166), appends the user message (181), then loops `while (true)` (205) — each iteration snapshots durable history (213), evaluates the overflow policy and trims/compacts (216-245), builds the wire request (248-282), streams the provider with resilient retry while checkpointing partial text to the store (285-374), finalizes the assistant message with its tool calls (424-443), and either stops (no tool calls, LENGTH-continuation, step budget, doom loop) or executes each tool serially in call-index order (481-514) before repeating. The contract is "assemble → stream → run tools → repeat until the model stops asking"; the loop is the single owner of terminal state (`terminalState`, 179) and of the per-tool deadline (811-818), and it persists `RUNNING`/`IDLE`/`ERROR` around the whole run.

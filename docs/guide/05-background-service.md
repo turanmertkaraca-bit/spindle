@@ -1,3 +1,8 @@
+> **NOTE:** written against HEAD `4ff37c0`, which is older than current. The
+> *structure* described here is still accurate and every change since is recorded in
+> `docs/analysis/STATUS.md`; re-check any specific claim against the code. Doc index:
+> `docs/analysis/DOC-MAP.md`.
+
 # Background execution (`RunService`)
 
 Verified against HEAD `4ff37c0`. `app/src/main/kotlin/dev/lumen/app/platform/RunService.kt`.

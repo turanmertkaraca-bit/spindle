@@ -1,3 +1,7 @@
+> **⚠ PINNED AT `d17dbd2` — HISTORICAL AUDIT, NOT CURRENT.**
+> Many findings here are already fixed. Before acting on any row, check the code and
+> `docs/analysis/STATUS.md`. Index: `docs/analysis/DOC-MAP.md`.
+
 # AndroidShellExecutor — process & concurrency audit
 
 `AndroidShellExecutor` is the Android implementation of the `ShellExecutor` interface: it runs agent commands through `sh -c` inside the Alpine userland from `AndroidEnvironment` (or a plain `/system/bin/sh` fallback when the rootfs is absent), preferring the Debian/proot guest whenever `DebianEnvironment` reports active. It launches every child under `nice` + `setsid` so a process-group signal can reap the whole tree, merges stderr into stdout, drains output on a daemon thread into a head+tail bounded buffer, and enforces timeouts by polling `Process.waitFor(50ms)` plus `ensureActive()`. It also exposes `openPty`, a pipe-backed pseudo-terminal (`ProcessPtySession`) for the interactive terminal panel, and takes an admission slot from `ResourcePolicy` for both paths so guest work cannot starve the UI.

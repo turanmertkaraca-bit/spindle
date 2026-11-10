@@ -1,3 +1,7 @@
+> **⚠ PINNED AT `d17dbd2` — HISTORICAL AUDIT, NOT CURRENT.**
+> Many findings here are already fixed. Before acting on any row, check the code and
+> `docs/analysis/STATUS.md`. Index: `docs/analysis/DOC-MAP.md`.
+
 # Tools — sandbox & path-safety audit
 
 `ExternalDirectoryTool` (`spindle/tools/src/main/kotlin/dev/spindle/tool/ExternalDirectoryTool.kt`) gives the agent **read-only** access to directories the user has explicitly granted outside the session working directory. It is constructed with a list of absolute `grantedRoots` (empty by default, in which case every request is denied at line 63–65), accepts an `op` of `list`/`stat`/`read`, and for each call resolves the requested `path` against those roots, asks the user for permission on the resolved path + root, and then lists the directory (bounded to `EXTERNAL_MAX_ENTRIES + 1` rows before sorting), returns `BasicFileAttributes`, or reads a UTF-8 line window with `offset`/`limit`. Containment is intended to be enforced by canonicalizing with `normalize()` + `toRealPath()` and requiring the result to sit under a real granted root.

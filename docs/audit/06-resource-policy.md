@@ -1,3 +1,7 @@
+> **⚠ PINNED AT `d17dbd2` — HISTORICAL AUDIT, NOT CURRENT.**
+> Many findings here are already fixed. Before acting on any row, check the code and
+> `docs/analysis/STATUS.md`. Index: `docs/analysis/DOC-MAP.md`.
+
 # ResourcePolicy — CPU/priority/pause gate audit
 
 `ResourcePolicy` is a root-free admission-control object for guest (proot) work: it computes a device-appropriate concurrency ceiling, hands out a slot from a lazily-sized fair `Semaphore` around each guest process lifetime, exposes the nice/battery/thermal thresholds as constants, and derives an advisory "pause" reason from the device's battery percentage, charge state and temperature. Its stated design position is that proot shares the host scheduler, so cgroups are unavailable without privileges and the only levers that work are concurrency, nice, and pausing when the device is hot or nearly flat.

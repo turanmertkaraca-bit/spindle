@@ -1,3 +1,7 @@
+> **⚠ PINNED AT `d17dbd2` — HISTORICAL AUDIT, NOT CURRENT.**
+> Many findings here are already fixed. Before acting on any row, check the code and
+> `docs/analysis/STATUS.md`. Index: `docs/analysis/DOC-MAP.md`.
+
 # LumenChatScreen — recomposition & main-thread audit
 
 `LumenChatScreen` renders the whole chat surface: a `LazyColumn` transcript of grouped/deduped `MessageRow`s (keyed by step id, with linked tool runs drawn as a rail), a top bar with back/title/fork/files/shell/settings controls, a stack of notice/card composables above the composer (`ErrorNotice`, `HintNotice`, `UndoNotice`, `ChangesCard`, `TodoBoard`, `UsageMeter`, `AskCard`), the `Composer` itself, and two overlays (`FilePeekOverlay`, `QuickSettingsSheet`, `ModelPickerSheet`) plus a "latest" scroll cue. Audit covers lines 344–920 only; findings outside that range are not considered.
