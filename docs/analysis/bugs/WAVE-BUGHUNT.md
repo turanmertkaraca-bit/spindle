@@ -210,3 +210,40 @@ caller's coroutine, so a queued child is cancelled by Stop rather than wedged; t
 `EvidenceCollector` subscribes with `UNDISPATCHED` so it cannot miss the child's
 early events; child budget is 24 steps; `ok` deliberately means "the run
 completed", not "prose was written". No change made.
+
+
+---
+
+## Feature wave — one file-type router, real git ops (`807b056`)
+
+Seven explore agents were dispatched; two reported. One report was **wrong** and is
+recorded here so nobody acts on it: it claimed `GitTool` "is registered nowhere —
+the whole tool is dead code". It is registered, in
+`ChatViewModel.kt:3899`, with the token factory wired (`token = { keys.githubToken }`).
+It is simply not in `DefaultTools.registry()`, which is correct — `DefaultTools`
+cannot know a token. Verification caught it; had the report been trusted, the
+"fix" would have moved a working tool for no reason.
+
+### Verified and fixed
+
+| id | finding | fix |
+|---|---|---|
+| FEAT-1 | **Four** independent file-extension tables disagreed: the Files row tap, the Files menu, `openFileExternally`'s mime map, and the chat-mention router. A built `.apk` opened in the **text editor** from Files (binary mojibake) while the same file in a chat message offered install; `.pdf`/`.zip`/`.tar.gz` fell into the editor too; the mime map knew only images, so every other type went to the system as `application/octet-stream` and "open" failed silently | `ui/FileTypeRouting` — one total map, 8 routes, used by all four call sites. Files gains an **Install** item for APKs (menu = the confirmation) and a labelled "open with" for PDFs/archives |
+| FEAT-2 | `merge`, `rebase`, `stash`, `tag`, `blame`, `cherry-pick`, `config`, `pull --rebase`, `push --tags` all missing. The sandbox shell has no `GITHUB_TOKEN`, so a manual `git pull --rebase` after a rejected push **cannot authenticate** — a diverged branch was a dead end | added, each validated (no `-`-prefixed refs), no force, no `reset --hard` |
+
+Tests: `FileTypeRoutingTest` (15 plain-JVM cases, one per original defect) and
+three new `GitToolTest` cases (exact argv, no token in argv, refusal of bad input).
+
+### Two of my own tests were wrong
+
+Both were expectation errors, not product bugs, and CI caught them:
+`GitTool.quote()` single-quotes every argument so the expected strings need that
+quoting; and `blame` resolves its path through `insideCwd`, so it is absolute. A
+third assertion I wrote was vacuous (`length.coerceAtMost(2).coerceAtLeast(1)`
+can never fail) and is now a real check.
+
+### Not done
+
+Four of the seven feature agents' areas (terminal, models, storage/projects,
+settings) were not reported on. The full UI rework — Settings as the reference
+standard, chat included — has not started.
