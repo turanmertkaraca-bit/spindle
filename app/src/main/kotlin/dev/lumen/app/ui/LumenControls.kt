@@ -32,6 +32,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.ui.unit.sp
 
 /**
  * The shared control vocabulary. One switch, one segmented "pick one of N" and
@@ -180,5 +183,132 @@ internal fun LumenLoading(
             fontFamily = LumenFonts.label,
             fontSize = LumenType.body,
         )
+    }
+}
+
+@Composable
+internal fun SettingsCard(colors: LumenColors, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(LumenShapes.card)
+            .background(colors.surface)
+            .border(1.dp, colors.outline, LumenShapes.card),
+        content = content,
+    )
+}
+
+@Composable
+internal fun RowDivider(colors: LumenColors) {
+    Box(Modifier.fillMaxWidth().height(1.dp).background(colors.outline.copy(alpha = 0.6f)))
+}
+
+@Composable
+internal fun NavRow(
+    colors: LumenColors,
+    label: String,
+    value: String,
+    tag: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    loading: Boolean = false,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 14.dp, vertical = 14.dp)
+            .testTag(tag),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            color = if (enabled) colors.fg else colors.faint,
+            fontFamily = LumenFonts.label,
+            fontSize = LumenType.bodyLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(14.dp),
+                color = colors.water,
+                strokeWidth = 1.5.dp,
+            )
+        } else {
+            Text(
+                value,
+                color = if (enabled) colors.dim else colors.faint,
+                fontFamily = LumenFonts.value,
+                fontSize = LumenType.body,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.End,
+                // fill = false so a short value keeps the label wide while a very
+                // long model id is capped at half the row instead of crushing it.
+                modifier = Modifier.weight(1f, fill = false),
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "\u203a",
+            color = if (enabled) colors.accent else colors.faint,
+            fontFamily = LumenFonts.value,
+            fontSize = 20.sp,
+        )
+    }
+}
+
+/** A toggle row: label left, themed switch right. */
+@Composable
+internal fun ToggleRow(
+    colors: LumenColors,
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    tag: String,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            color = colors.fg,
+            fontFamily = LumenFonts.label,
+            fontSize = LumenType.bodyLarge,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(12.dp))
+        LumenSwitch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = colors,
+            tag = tag,
+            contentDescription = label,
+        )
+    }
+}
+
+/** A labelled control row inside a card: small label above, control below. */
+@Composable
+internal fun FieldRow(colors: LumenColors, label: String, content: @Composable () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        Text(
+            label,
+            color = colors.dim,
+            fontFamily = LumenFonts.label,
+            fontSize = LumenType.caption,
+            fontWeight = FontWeight.Normal,
+        )
+        Spacer(Modifier.height(LumenSpacing.sm))
+        content()
     }
 }
