@@ -310,9 +310,10 @@ fun SettingsScreen(
             // stopped with "time budget reached" the only reasonable question was
             // "what time budget?". State it, and say what actually fixes it.
             Text(
-                "a run stops after 30 min of wall clock (goal mode: 60 min, " +
-                    "auto-extended while tasks remain). Long builds are better split " +
-                    "into steps than left to run for an hour.",
+                "a normal run stops after 30 min of wall clock. Goal mode has no " +
+                    "limit at all: it keeps working until you press Stop or the model " +
+                    "finishes. Long builds are better split into steps than left to " +
+                    "run for hours.",
                 color = colors.dim.copy(alpha = 0.7f),
                 fontFamily = LumenFonts.value,
                 fontSize = LumenType.caption,

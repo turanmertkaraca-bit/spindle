@@ -89,12 +89,19 @@ sealed interface AgentEvent {
     /** Running token/cost totals for the session, rolled up from each message. */
     data class UsageUpdated(override val sessionId: SessionId, val usage: Usage) : AgentEvent
 
-    /** The session crossed its cost-warning threshold (or hit the ceiling). */
+    /** The session crossed its cost-warning threshold (or hit the ceiling).
+     *
+     * This is advisory: a cost ceiling no longer stops a run (see
+     * `AgentLoop.budgetCheck`), so the UI must present it as a notice, not a
+     * failure. [message], when present, is an exact wording supplied by the loop
+     * for the case where the distinction matters (ceiling reached but running on).
+     */
     data class BudgetWarning(
         override val sessionId: SessionId,
         val spentUsd: Double,
         val maxUsd: Double,
         val fraction: Double,
+        val message: String? = null,
     ) : AgentEvent
 
     /** A session's title was set or auto-generated. */

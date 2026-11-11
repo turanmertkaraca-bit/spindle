@@ -160,21 +160,34 @@ data class AgentConfig(
             allowSubagents = false,
         )
 
-        /** Task-driven agent: stop when the stated goal is met, not when a
-         *  fixed step budget runs out. Higher retry budget and a longer
-         *  wall-clock backstop so multi-step goals have room to land. */
+        /** Task-driven agent: keep working until the user stops it, like opencode.
+         *
+         *  The owner's words: *"i made goal mode so that the agent never stops till
+         *  i come and interrupt it.. its just a 60 minute timer instead of a 30,
+         *  cheaply implemented"*. That was exactly right — the previous version was
+         *  a bigger timer plus a renewal that ran out after 8 windows (~9 hours of
+         *  wall clock but only while todos happened to be open, and it still
+         *  stopped on its own).
+         *
+         *  Goal mode now has **no wall clock at all**: `maxRunMillis = 0` disables
+         *  the deadline, and the run ends only when
+         *    - the user stops it (cancellation),
+         *    - the model answers without calling a tool (goal met), or
+         *    - a genuine safety backstop trips (doom loop, total-tool-call ceiling,
+         *      provider failure), each of which writes its reason into the message.
+         *
+         *  `maxSteps` stays null for the same reason: a step budget is a timer by
+         *  another name. Retries stay at 7 so a flaky provider is waited out rather
+         *  than killing a long run. */
         val GOAL = AgentConfig(
             name = "goal",
             systemPrompt = GOAL_SYSTEM,
             maxRetries = 7,
-            maxRunMillis = 60L * 60L * 1_000L,
-            // "Work until the goal is met" has to survive a long task. A single
-            // 60-minute window contradicted the prompt: the run simply stopped
-            // mid-plan, which is exactly the "goal mode keeps stopping" report.
-            // Renewal is gated on unfinished todos, so a run with nothing left to
-            // do still ends immediately.
-            renewsBudget = true,
-            maxBudgetWindows = 8,
+            maxRunMillis = 0L,
+            // Renewal is meaningless without a window to renew; kept false so the
+            // bookkeeping cannot accidentally re-introduce a stop.
+            renewsBudget = false,
+            maxBudgetWindows = 0,
         )
 
         /** The selectable primary agents, keyed by name. */

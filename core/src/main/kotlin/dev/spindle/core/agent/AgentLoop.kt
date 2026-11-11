@@ -242,9 +242,7 @@ class AgentLoop(
                 // The direct system call made this branch untestable (a test had to
                 // rely on real elapsed time) and could disagree with the timestamps
                 // the loop persists elsewhere.
-                if (wrapUpReason == null &&
-                    clock() - windowStartedAtMs > (agent.maxRunMillis ?: MAX_RUN_WALL_CLOCK_MS)
-                ) {
+                if (wrapUpReason == null && RunClock.isSpent(agent, clock() - windowStartedAtMs)) {
                     // The wall clock is spent. A goal run that still has open work
                     // renews for another window instead of stopping: that is the
                     // difference between "goal mode" and "build mode with a longer
@@ -294,14 +292,12 @@ class AgentLoop(
                     // down. The bare "time budget reached" gave no number, so the
                     // reasonable question was "what time budget?" — the limit was
                     // never surfaced anywhere in the app.
-                    val minutes = ((agent.maxRunMillis ?: MAX_RUN_WALL_CLOCK_MS) / 60_000)
-                    wrapUpReason = "the ${minutes}-minute wall-clock budget"
+                    val label = RunClock.describe(agent) ?: "its wall-clock budget"
+                    wrapUpReason = label
                     bus.emit(
                         AgentEvent.Error(
                             sessionId,
-                            "the ${minutes}-minute wall-clock budget is spent" +
-                                (if (agent.renewsBudget) "" else " (goal mode extends this automatically)") +
-                                " — asking for a wrap-up report",
+                            "$label is spent — asking for a wrap-up report",
                         ),
                     )
                     continue
@@ -598,12 +594,28 @@ class AgentLoop(
                 bus.emit(AgentEvent.UsageUpdated(sessionId, sessionUsage))
 
                 if (toolCalls.isEmpty()) {
-                    // A response cut off by the output-token limit would otherwise
-                    // end the run with a silently truncated answer. Ask the model to
-                    // resume, bounded so a model that keeps hitting the limit cannot
-                    // loop forever. A wind-down turn always ends here: that answer
-                    // *is* the report, so truncation must not restart the loop.
-                    if (finish == FinishReason.LENGTH && continuations < MAX_CONTINUATIONS && wrapUpReason == null) {
+                    // A wind-down turn always ends here: that answer *is* the
+                    // report, so neither truncation nor an empty response may
+                    // restart or silently finish the run.
+                    if (wrapUpReason != null) {
+                        // A response cut off by the output-token limit would
+                        // otherwise end the run with a silently truncated answer.
+                        // Ask the model to resume, bounded so a model that keeps
+                        // hitting the limit cannot loop forever.
+                        //
+                        // ORDER MATTERS. This branch is evaluated BEFORE the
+                        // wind-down check below, and its `break` is unconditional,
+                        // so a wind-down turn that returned no tool calls and no
+                        // text (a reasoning-only model that spent its whole output
+                        // budget and was cut at LENGTH) used to fall straight
+                        // through to `break` — leaving the caller an assistant
+                        // message with no prose at all. That is exactly the empty
+                        // report the wind-down mechanism exists to prevent, so the
+                        // summary is written on this path too.
+                        ensureWindUpProse(sessionId, finalized, totalToolCalls, wrapUpReason)
+                        break
+                    }
+                    if (finish == FinishReason.LENGTH && continuations < MAX_CONTINUATIONS) {
                         continuations++
                         store.appendMessage(
                             Message(
@@ -645,15 +657,7 @@ class AgentLoop(
                     // caller gets an EMPTY report, which is the very failure this
                     // whole mechanism exists to prevent. Write the summary ourselves:
                     // less useful than the model's, but never nothing.
-                    if (finalized.parts.none { it is Part.Text }) {
-                        val notice = Part.Text(
-                            PartId(Ids.new("prt")),
-                            "The run reached $wrapUpReason before it could write a summary. " +
-                                "It made $totalToolCalls tool call(s) and was asked to stop; " +
-                                "review the tool results above for what was done.",
-                        )
-                        updatePart(sessionId, finalized.id, notice)
-                    }
+                    ensureWindUpProse(sessionId, finalized, totalToolCalls, wrapUpReason)
                     break
                 }
                 if (agent.maxSteps != null && step >= agent.maxSteps) {
@@ -750,7 +754,7 @@ class AgentLoop(
                     // six existing tests. Two clocks, one of them fake, must not be
                     // mixed.
                     val remaining = remainingBudgetMs(agent, windowStartedAtMs)
-                    if (remaining <= 0) {
+                    if (remaining != null && remaining <= 0) {
                         for (j in index until toolParts.size) {
                             val pending = toolParts[j]
                             updatePart(
@@ -777,7 +781,9 @@ class AgentLoop(
                         gate = onPermission,
                         agent = agent,
                         // Clamp a self-managed deadline to what is left of the window.
-                        deadlineCeilingMs = if (toolDeadlineMs(part) > 0) remaining else 0L,
+                        // A null remaining means the run is unbounded (goal mode), so
+                        // the tool keeps its own deadline.
+                        deadlineCeilingMs = if (toolDeadlineMs(part) > 0) (remaining ?: 0L) else 0L,
                     )
                 }
                 if (budgetExhausted) {
@@ -788,7 +794,21 @@ class AgentLoop(
                 }
                 // A doom loop is a model bug, not a budget event; the error text
                 // already explains it, and one more turn would just repeat it.
-                if (doomLoop) break
+                if (doomLoop) {
+                    // The explanation currently lives only in the refused tool
+                    // results, so the assistant message itself carries no prose.
+                    // Anything that reads the run's final TEXT (a subagent's parent,
+                    // a transcript row) then sees an empty answer for a run that
+                    // actually stopped for a clear reason. Say it in the message.
+                    ensureStopProse(
+                        sessionId,
+                        finalized,
+                        "Stopped: the model called the same tool with identical arguments " +
+                            "$totalToolCalls time(s) in a row, so the run was ended to avoid an " +
+                            "infinite loop. The tool results above show what had been attempted.",
+                    )
+                    break
+                }
                 // The wind-down turn has now run. Whatever it produced is the
                 // report, so stop here rather than looping on a spent budget.
                 if (wrapUpReason != null) break
@@ -964,26 +984,37 @@ class AgentLoop(
      */
     private fun toolDeadlineMs(part: Part.Tool): Long = tools.get(part.call.name)?.timeoutMs ?: 0L
 
-    private fun remainingBudgetMs(agent: AgentConfig, windowStartedAtMs: Long): Long {
-        val window = agent.maxRunMillis ?: MAX_RUN_WALL_CLOCK_MS
-        if (window <= 0) return 0
-        return (windowStartedAtMs + window - clock()).coerceAtLeast(0)
-    }
+    /**
+     * Wall-clock milliseconds left in the current run, or null when the run has
+     * no wall clock at all (goal mode).
+     *
+     * `null` and `0` mean different things and must not be conflated: null is
+     * "unbounded", 0 is "spent". Returning 0 for an unbounded run made
+     * `Retry.clampToDeadline` refuse every retry instantly, so a goal run could
+     * not even wait out a 429.
+     */
+    private fun remainingBudgetMs(agent: AgentConfig, windowStartedAtMs: Long): Long? =
+        RunClock.remainingMs(agent, clock() - windowStartedAtMs)
 
     /**
-     * Check the run's cost and input-token ceilings.
+     * Report the cost ceiling as an ADVISORY, and never stop a run for it.
      *
-     * **Returns** a [StopReason] when the budget is spent, rather than throwing.
+     * The owner asked for this: *"change this budget thing too i dont know why i
+     * added it"*. It was a stop condition — reaching your own cost ceiling ended
+     * the run — which is the wrong shape for the goal mode they actually want
+     * ("never stops till i come and interrupt it"). A spend limit that silently
+     * ends a long run is also a trap: the run looks like it failed, and the last
+     * thing you want when you have spent money is for the work to be thrown away.
      *
-     * Throwing was the bug: this is called outside the provider-failure
-     * `try`/`catch`, so an `IllegalStateException` here fell through to the generic
-     * `catch (Throwable)`, which marked the session `ERROR`, emitted the raw
-     * exception as an error, and re-threw. A run that simply reached its cost
-     * ceiling therefore looked like a **crash** and skipped its wind-down report —
-     * directly contradicting "a run must never end without telling the user".
+     * So a cost ceiling is now purely a **warning**: the user is told once, and the
+     * run continues. Nobody is prevented from stopping it themselves, which is what
+     * the Stop button is for.
      *
-     * A budget stop is a normal end, so it is modelled as a value and handled by
-     * the same wind-down path as the step and tool-call budgets.
+     * Returns null unconditionally; kept returning [StopReason]? so the call site
+     * and its wind-down wiring stay valid if a future policy wants a real stop
+     * again. `maxInputTokens` keeps its hard stop: it exists to prevent a request
+     * the provider will reject outright, which is a correctness limit rather than
+     * a spend limit.
      */
     private suspend fun budgetCheck(
         budget: ContextBudget,
@@ -993,7 +1024,9 @@ class AgentLoop(
         estimatedInputTokens: Int,
     ): StopReason? {
         // Input-token ceiling. Null or non-positive means unlimited, so a run that
-        // never sets it is byte-for-byte unchanged.
+        // never sets it is byte-for-byte unchanged. This one still stops: an
+        // oversized request is rejected by the provider anyway, and failing here
+        // produces a report instead of a raw 400.
         budget.maxInputTokens?.takeIf { it > 0 }?.let { maxInput ->
             if (estimatedInputTokens >= maxInput) {
                 if (!warning.warned) {
@@ -1011,22 +1044,35 @@ class AgentLoop(
             }
         }
 
-        val max = budget.maxCostUsd ?: return null
-        val spent = history.sumOf { it.usage.costUsd }
-        val fraction = if (max > 0.0) spent / max else if (spent > 0.0) 1.0 else 0.0
-        if (spent >= max) {
-            if (!warning.warned) {
-                bus.emit(AgentEvent.BudgetWarning(sessionId, spent, max, fraction))
-                warning.warned = true
-            }
-            return StopReason.COST_BUDGET
-        }
-        if (!warning.warned && fraction >= budget.warnAtFraction) {
-            bus.emit(AgentEvent.BudgetWarning(sessionId, spent, max, fraction))
+        // Cost: advisory only. Warned once per run, never a stop.
+        val max = budget.maxCostUsd?.takeIf { it > 0.0 } ?: return null
+        if (warning.warned) return null
+        val spent = history.sumOf { it.usage.costUsd } + history.lastOrNull()?.usage?.costUsd.orZero()
+        val fraction = spent / max
+        if (fraction >= budget.warnAtFraction) {
+            bus.emit(
+                AgentEvent.BudgetWarning(
+                    sessionId,
+                    spent,
+                    max,
+                    fraction,
+                    // Say plainly that this is not a stop, so a warning at 80% of a
+                    // ceiling the user forgot they set does not read as "about to
+                    // be killed".
+                    message = if (spent >= max) {
+                        "cost ceiling reached (\$%.2f of \$%.2f) — the run continues; press Stop to end it"
+                            .format(spent, max)
+                    } else {
+                        null
+                    },
+                ),
+            )
             warning.warned = true
         }
         return null
     }
+
+    private fun Double?.orZero(): Double = this ?: 0.0
 
     /** Persist a run-state transition; a missing session is a no-op. */
     private suspend fun persistState(store: SessionStore, sessionId: SessionId, state: SessionState) {
@@ -1425,6 +1471,56 @@ class AgentLoop(
     private suspend fun updatePart(sessionId: SessionId, messageId: MessageId, part: Part) {
         store.updatePart(sessionId, messageId, part)
         bus.emit(AgentEvent.PartUpdated(sessionId, messageId.value, part))
+    }
+
+    /**
+     * Guarantee a wind-down turn left the caller something to read.
+     *
+     * A wind-down turn is sent with `tools = []` and its prose is the run's
+     * report. Two shapes can still arrive with no acceptable text:
+     *
+     *  - a provider that ignores `tools = []` and returns tool calls, which are
+     *    refused, leaving only ERROR parts;
+     *  - a reasoning-only model that spends its whole output budget on
+     *    `ReasoningDelta` and is cut at `FinishReason.LENGTH` before emitting any
+     *    `Part.Text`.
+     *
+     * The second shape reached the `toolCalls.isEmpty()` exit, whose `break` is
+     * unconditional, so the summary that this method writes never ran and the run
+     * ended with an empty answer — the exact failure the wind-down mechanism
+     * exists to prevent. Writing the notice here means every exit path shares one
+     * implementation and one wording.
+     */
+    private suspend fun ensureWindUpProse(
+        sessionId: SessionId,
+        finalized: Message,
+        totalToolCalls: Int,
+        wrapUpReason: String,
+    ) {
+        ensureStopProse(
+            sessionId,
+            finalized,
+            "The run reached $wrapUpReason before it could write a summary. " +
+                "It made $totalToolCalls tool call(s) and was asked to stop; " +
+                "review the tool results above for what was done.",
+        )
+    }
+
+    /**
+     * Add [notice] to [finalized] when it carries no text.
+     *
+     * One wording-free helper so every abrupt stop shares one guarantee: a run
+     * that ends always says, in its own message, why it ended. Without it the
+     * reason lives only in dispatching ERROR events, which are lost the moment
+     * nobody is subscribed — and a subagent's parent reads only the text.
+     */
+    private suspend fun ensureStopProse(
+        sessionId: SessionId,
+        finalized: Message,
+        notice: String,
+    ) {
+        if (finalized.parts.any { it is Part.Text }) return
+        updatePart(sessionId, finalized.id, Part.Text(PartId(Ids.new("prt")), notice))
     }
 
     private class MutableToolCall(val id: String, val name: String) {

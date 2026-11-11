@@ -1568,9 +1568,13 @@ class AgentLoopTest {
         newSession(store, sid.value)
         store.setTodos(sid, listOf(TodoItem("t1", "ship the thing", TodoStatus.IN_PROGRESS)))
 
+        // A POSITIVE window: `maxRunMillis = 0` now means "no wall clock at all"
+        // (goal mode, per the owner), and an agent with no clock has nothing to
+        // renew. Renewal remains the mechanism for a bounded-but-extended run, so
+        // this test pins it with a real window.
         val agent = AgentConfig(
             name = "goal",
-            maxRunMillis = 0L,
+            maxRunMillis = 1L,
             renewsBudget = true,
             maxBudgetWindows = 2,
         )
@@ -1604,7 +1608,9 @@ class AgentLoopTest {
 
         val last = loop.prompt(
             sid, "goal", "fake/fake-1",
-            AgentConfig(name = "goal", maxRunMillis = 0L, renewsBudget = true, maxBudgetWindows = 5),
+            // A real window, because a renewing agent must have one; see the
+            // renewal test above. Nothing outstanding is what stops it here.
+            AgentConfig(name = "goal", maxRunMillis = 1L, renewsBudget = true, maxBudgetWindows = 5),
         )
 
         assertEquals(1, provider.requests.size)
@@ -1882,6 +1888,121 @@ class AgentLoopTest {
             tools.none { it.state == ToolState.PENDING || it.state == ToolState.RUNNING },
             "no part may be left open: ${tools.map { it.state }}",
         )
+    }
+
+    /**
+     * Wave 2 defect: a wind-down turn that ends on LENGTH with no prose.
+     *
+     * The `toolCalls.isEmpty()` exit is evaluated BEFORE the wind-down branch, and
+     * its `break` was unconditional. A reasoning-only model that spends its whole
+     * output budget on `ReasoningDelta` and is then cut at `FinishReason.LENGTH`
+     * therefore ended the run with an assistant message containing no `Part.Text`
+     * at all — the exact empty report the wind-down mechanism exists to prevent,
+     * and the shape a subagent's parent reads as "the child produced nothing".
+     */
+    @Test
+    fun `a wind-down turn cut off by LENGTH still leaves the caller some prose`() = runTest {
+        val provider = ScriptedProvider(
+            // Turn 1: no tool call, so the run would end... except the step budget
+            // sends it into a wind-down. Use maxSteps = 1 to force that.
+            listOf(ProviderEvent.Finished(FinishReason.STOP)),
+            // Turn 2 (the wind-down): reasoning only, then cut at LENGTH.
+            listOf(
+                ProviderEvent.ReasoningDelta("thinking very hard about it"),
+                ProviderEvent.Finished(FinishReason.LENGTH),
+            ),
+        )
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val sid = SessionId("ses_windup_length")
+        newSession(store, sid.value)
+
+        val last = loop.prompt(
+            sid, "do the thing", "fake/fake-1",
+            AgentConfig(name = "bounded", maxSteps = 1),
+        )
+
+        val text = last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
+        assertTrue(
+            text.isNotBlank(),
+            "the run ended with no prose at all; parts were ${last.parts.map { it::class.simpleName }}",
+        )
+    }
+
+    /**
+     * Wave 2: a doom-loop stop must say so in the message, not only in events.
+     *
+     * The explanation lived only in the refused tool results and a dispatched
+     * ERROR event. Anything that reads the run's final TEXT — a subagent's parent,
+     * or a transcript row built from parts — saw an empty answer for a run that
+     * stopped for a perfectly clear reason.
+     */
+    @Test
+    fun `a doom-loop stop writes its reason into the message`() = runTest {
+        fun sameCall() = listOf(
+            ProviderEvent.ToolCallStart(0, "c1", "echo"),
+            ProviderEvent.ToolCallArgs(0, """{"text":"x"}"""),
+            ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+        )
+        val provider = ScriptedProvider(*Array(10) { sameCall() })
+        val store = store()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val sid = SessionId("ses_doom_prose")
+        newSession(store, sid.value)
+
+        val last = loop.prompt(sid, "loop forever", "fake/fake-1", AgentConfig(name = "bounded"))
+
+        val text = last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
+        assertTrue(
+            text.contains("identical arguments", ignoreCase = true),
+            "a run stopped for a repeated call must say so in its own text; got: ${text.take(200)}",
+        )
+    }
+
+    /**
+     * The owner asked for the cost ceiling to stop being a stop condition
+     * ("i dont know why i added it"). Reaching it must warn and keep going, because
+     * go
+     * goal mode is meant to run until interrupted — ending someone's long run
+     * because of a spend limit they forgot about throws the work away.
+     */
+    @Test
+    fun `hitting the cost ceiling warns but does not stop the run`() = runTest {
+        val provider = ScriptedProvider(
+            listOf(
+                ProviderEvent.TextDelta("working"),
+                ProviderEvent.Usage(Usage(inputTokens = 10, outputTokens = 10, costUsd = 5.0)),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+        )
+        val store = store()
+        val bus = EventBus()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = bus,
+        )
+        val sid = SessionId("ses_cost_advisory")
+        newSession(store, sid.value)
+
+        val last = loop.prompt(
+            sid, "spend money", "fake/fake-1", AgentConfig(name = "build"),
+            budget = ContextBudget(maxCostUsd = 0.10),
+        )
+
+        val text = last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
+        assertEquals("working", text, "the model's answer must survive a spent cost budget")
     }
 
 }
