@@ -3801,19 +3801,20 @@ class ChatViewModel(
             _state.value = _state.value.copy(needsKey = true, input = "")
             return
         }
-        // Refuse rather than warn. A non-vision model rejects an image part outright
-        // (the adapters attach `image_url`/`image` blocks for every image part
-        // without checking the capability), so sending anyway produced a provider
-        // error the user had to decode — after their attachment had already been
-        // cleared and their text consumed. Keeping the draft intact is the point:
-        // they can switch model and press send again.
-        if (attachments.isNotEmpty() && !modelSupportsVision()) {
-            _state.value = _state.value.copy(
-                error = "this model does not accept images — switch to a vision model, " +
-                    "or remove the attachment",
-            )
-            return
-        }
+        // Warn, but do not refuse.
+        //
+        // Refusing looked right and was wrong: NO model in the embedded catalogue
+        // declares `supportsVision = true`, and a model the live catalogue does not
+        // describe is built with it false. A hard block therefore rejected every
+        // image send for every user — turning a hint into a total loss of the
+        // feature. Only an explicitly-declared non-vision model may block, and the
+        // catalogue cannot currently declare one, so the honest behaviour is the
+        // hint it already had: the provider will say so if it really cannot.
+        //
+        // What would make a hard block correct: every model in the catalogue
+        // declaring `supportsVision` truthfully. Until then, blocking is more
+        // harmful than the error it prevents.
+        val blind = attachments.isNotEmpty() && !modelSupportsVision()
 
         diag("run start: " + oneLine(text, 60).ifBlank { "[image]" })
         diag("shell: " + shellKind())
@@ -3831,7 +3832,7 @@ class ChatViewModel(
         _state.value = _state.value.copy(
             input = "",
             error = null,
-            hint = null,
+            hint = if (blind) "this model may not accept images" else null,
             busy = true,
             attachments = emptyList(),
             steps = stream.snapshot(),
