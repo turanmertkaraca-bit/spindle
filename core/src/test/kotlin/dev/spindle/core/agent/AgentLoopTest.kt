@@ -1678,7 +1678,7 @@ class AgentLoopTest {
      * skipped the wind-down report entirely.
      */
     @Test
-    fun `a spent cost budget winds down instead of throwing`() = runTest {
+    fun `a spent cost budget warns and keeps going`() = runTest {
         val provider = ScriptedProvider(
             listOf(ProviderEvent.TextDelta("wrap-up report"), ProviderEvent.Finished(FinishReason.STOP)),
             listOf(ProviderEvent.TextDelta("second"), ProviderEvent.Finished(FinishReason.STOP)),
@@ -1700,14 +1700,19 @@ class AgentLoopTest {
             budget = ContextBudget(maxCostUsd = 0.10),
         )
 
-        // Must return normally (not throw) with the model's report.
+        // The owner asked for the cost ceiling to stop being a stop condition:
+        // "i dont know why i added it". It is now advisory, so the run behaves
+        // exactly as it would with no ceiling at all — the model's answer arrives
+        // and tools stay available. (It used to take a tools-disabled wind-down
+        // turn here, which is precisely the behaviour that was removed.)
         assertEquals("wrap-up report", last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
-        // And the wind-down turn must not offer tools.
         assertTrue(provider.requests.isNotEmpty())
         assertTrue(
-            provider.requests.last().tools.isEmpty(),
-            "the budget wind-down turn must be sent with tools disabled",
+            provider.requests.last().tools.isNotEmpty(),
+            "a cost ceiling must no longer disable tools or force a wind-down",
         )
+        // Only one turn: nothing about being over budget should add a request.
+        assertEquals(1, provider.requests.size, "a spent cost budget must not spend an extra turn")
     }
 
     /**
@@ -1902,11 +1907,18 @@ class AgentLoopTest {
      */
     @Test
     fun `a wind-down turn cut off by LENGTH still leaves the caller some prose`() = runTest {
+        fun toolTurn() = listOf(
+            ProviderEvent.ToolCallStart(0, "c1", "echo"),
+            ProviderEvent.ToolCallArgsDelta(0, """{"text":"x"}"""),
+            ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+        )
         val provider = ScriptedProvider(
-            // Turn 1: no tool call, so the run would end... except the step budget
-            // sends it into a wind-down. Use maxSteps = 1 to force that.
-            listOf(ProviderEvent.Finished(FinishReason.STOP)),
-            // Turn 2 (the wind-down): reasoning only, then cut at LENGTH.
+            // Turn 1 makes a tool call, so maxSteps = 1 is consumed and the loop
+            // enters its wind-down turn — the turn that must produce the report.
+            toolTurn(),
+            // The wind-down turn: reasoning only, then cut at LENGTH, so it emits
+            // no Part.Text at all. This is the exact shape that used to leave the
+            // caller with an empty answer.
             listOf(
                 ProviderEvent.ReasoningDelta("thinking very hard about it"),
                 ProviderEvent.Finished(FinishReason.LENGTH),
