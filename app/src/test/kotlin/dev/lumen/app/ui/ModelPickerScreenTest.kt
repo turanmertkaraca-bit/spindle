@@ -263,4 +263,43 @@ class ModelPickerScreenTest {
         val both = filterAndSortModels(catalogue, "p", "zeta", ModelSort.Name, true, setOf("p/zeta-big"))
         assertEquals(listOf("zeta-big"), both.map { it.id })
     }
+    /**
+     * A query that matches ONLY the drawn label must find the model.
+     *
+     * The existing test searched "alpha" against a model whose id is
+     * "alpha-cheap", so it passed on the id and never exercised the label. The
+     * code then matched `displayModelLabel(model.id)` — which strips a vendor
+     * prefix from the ID — instead of `model.label`, so a model could be visible
+     * on screen and still report "no models match" for its own name.
+     */
+    @Test
+    fun `search matches the drawn label even when the id does not contain it`() {
+        val cat = listOf(
+            ModelInfo("p", "openrouter-free", label = "OpenRouter Free (auto)", contextWindow = 32_000),
+            ModelInfo("p", "v4-flash", label = "DeepSeek V4 Flash", contextWindow = 128_000),
+        )
+        assertEquals(
+            listOf("openrouter-free"),
+            filterAndSortModels(cat, "p", "free (auto)", ModelSort.Name, false, emptySet()).map { it.id },
+            "the label is what the row draws, so it must be searchable",
+        )
+        assertEquals(
+            listOf("v4-flash"),
+            filterAndSortModels(cat, "p", "deepseek v4", ModelSort.Name, false, emptySet()).map { it.id },
+        )
+    }
+
+    @Test
+    fun `the name sort orders by the drawn label, not the id`() {
+        val cat = listOf(
+            ModelInfo("p", "a-model", label = "Zebra", contextWindow = 1_000),
+            ModelInfo("p", "z-model", label = "Aardvark", contextWindow = 1_000),
+        )
+        assertEquals(
+            listOf("z-model", "a-model"),
+            filterAndSortModels(cat, "p", "", ModelSort.Name, false, emptySet()).map { it.id },
+            "sorting by id text would put a-model first and disagree with what is on screen",
+        )
+    }
+
 }

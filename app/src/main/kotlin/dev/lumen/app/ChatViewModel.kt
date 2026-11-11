@@ -2018,6 +2018,12 @@ class ChatViewModel(
                     updatedAt = now,
                     model = keys.model.substringAfter('/', keys.model),
                     providerId = keys.model.substringBefore('/', "opencode-go"),
+                    // File the session under the ACTIVE project. Without this every
+                    // new chat was created unfiled: it never appeared under the
+                    // project it was started in, the dashboard's "N sessions" and
+                    // resume row stayed empty, and filtering by project showed
+                    // nothing even though the run's cwd was that project.
+                    projectId = _state.value.projectId.takeIf { it.isNotBlank() },
                 ),
             )
             if (token != sessionOpenToken) return@launch
@@ -3795,7 +3801,19 @@ class ChatViewModel(
             _state.value = _state.value.copy(needsKey = true, input = "")
             return
         }
-        val blind = attachments.isNotEmpty() && !modelSupportsVision()
+        // Refuse rather than warn. A non-vision model rejects an image part outright
+        // (the adapters attach `image_url`/`image` blocks for every image part
+        // without checking the capability), so sending anyway produced a provider
+        // error the user had to decode — after their attachment had already been
+        // cleared and their text consumed. Keeping the draft intact is the point:
+        // they can switch model and press send again.
+        if (attachments.isNotEmpty() && !modelSupportsVision()) {
+            _state.value = _state.value.copy(
+                error = "this model does not accept images — switch to a vision model, " +
+                    "or remove the attachment",
+            )
+            return
+        }
 
         diag("run start: " + oneLine(text, 60).ifBlank { "[image]" })
         diag("shell: " + shellKind())
@@ -3813,7 +3831,7 @@ class ChatViewModel(
         _state.value = _state.value.copy(
             input = "",
             error = null,
-            hint = if (blind) "the selected model may not support images" else null,
+            hint = null,
             busy = true,
             attachments = emptyList(),
             steps = stream.snapshot(),
@@ -3848,6 +3866,13 @@ class ChatViewModel(
                         next = next.copy(title = oneLine(text, 48))
                     }
                     if (next.cwd != workspace.toString()) next = next.copy(cwd = workspace.toString())
+                    // Re-file the session under the project it is actually running
+                    // in. `cwd` and `projectId` are two records of the same fact, and
+                    // previously only `cwd` was pinned here, so a session started
+                    // before a project switch kept showing under the old project (or
+                    // nowhere) while its tools ran in the new one.
+                    val active = _state.value.projectId.takeIf { it.isNotBlank() }
+                    if (active != null && next.projectId != active) next = next.copy(projectId = active)
                     if (next != s) store.updateSession(next.copy(updatedAt = System.currentTimeMillis()))
                 }
             }

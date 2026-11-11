@@ -488,11 +488,22 @@ internal fun filterAndSortModels(
     val filtered = models.filter { model ->
         if (favoritesOnly && "$provider/${model.id}" !in favorites) return@filter false
         if (needle.isEmpty()) return@filter true
+        // The catalogue's `label` is what the row DRAWS, so it must be searchable
+        // and sortable too. `displayModelLabel(model.id)` only strips a vendor
+        // prefix from the id — using it alone meant a model could be on screen and
+        // still not match its own visible name (e.g. "OpenRouter Free (auto)"
+        // matched neither "free (auto)" nor "OpenRouter Free"), and the Name sort
+        // ordered by id text rather than by the string the user reads.
         model.id.lowercase().contains(needle) ||
+            model.label.lowercase().contains(needle) ||
             displayModelLabel(model.id).lowercase().contains(needle)
     }
     return when (sort) {
-        ModelSort.Name -> filtered.sortedBy { displayModelLabel(it.id).lowercase() }
+        // Sort by what the row shows; fall back to the id when a label is blank
+        // so two unnamed models cannot reorder unpredictably.
+        ModelSort.Name -> filtered.sortedBy {
+            (it.label.ifBlank { displayModelLabel(it.id) }).lowercase()
+        }
         // Descending for size and cost: "biggest" and "priciest" are what a user
         // opens this list to find. Context still defaults to zero when unknown,
         // which sinks it — that is fine, smaller is a safe fallback.

@@ -4,7 +4,9 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import dev.lumen.app.data.KeyStore
 import dev.lumen.app.data.ProjectStore
+import dev.spindle.core.model.SessionId
 import dev.spindle.core.store.InMemorySessionStore
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -33,6 +35,7 @@ class ProjectWorkspaceTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
     private lateinit var projects: ProjectStore
     private lateinit var vm: ChatViewModel
+    private lateinit var store: InMemorySessionStore
     private lateinit var alpha: dev.lumen.app.data.Project
     private lateinit var beta: dev.lumen.app.data.Project
 
@@ -48,10 +51,11 @@ class ProjectWorkspaceTest {
         projects.setActive(alpha.id)
         File(alpha.dir, "alpha.txt").writeText("alpha")
         File(beta.dir, "beta.txt").writeText("beta")
+        store = InMemorySessionStore()
         vm = ChatViewModel(
             alpha.dir.toPath(),
             KeyStore(context),
-            InMemorySessionStore(),
+            store,
             projectStore = projects,
             io = Dispatchers.Unconfined,
         )
@@ -119,4 +123,27 @@ class ProjectWorkspaceTest {
         assertEquals(alpha.id, vm.state.value.projectId)
         assertEquals(alpha.dir.toPath().toString(), vm.workspacePath)
     }
+    /**
+     * A new chat must be filed under the project it was started in.
+     *
+     * `newChat` set the cwd but not `projectId`, so every session was created
+     * UNFILED: it never appeared under its project, the dashboard's "N sessions"
+     * and resume row stayed empty, and filtering by project showed nothing even
+     * though the run's tools were operating inside that project.
+     */
+    @Test
+    fun `a new chat is filed under the active project`() = runTest {
+        vm.newChat()
+
+        val sid = vm.state.value.currentSessionId
+        assertNotNull(sid, "newChat must open a session")
+        val persisted = store.session(SessionId(sid!!))
+        assertNotNull(persisted, "the session must exist in the store")
+        assertEquals(
+            alpha.id,
+            persisted.projectId,
+            "a new chat belongs to the active project, not the unfiled inbox",
+        )
+    }
+
 }
