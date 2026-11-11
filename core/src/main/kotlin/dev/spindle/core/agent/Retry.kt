@@ -181,6 +181,19 @@ object Retry {
         retryAfterMs: (Throwable) -> Long? = { null },
         /** Structured retryable verdict; null falls back to [classify]. */
         retryable: (Throwable) -> Boolean? = { null },
+        /**
+         * Wall-clock milliseconds left in the run, or null/0 for unlimited.
+         *
+         * The attempt budget alone does not bound *time*. A capacity rejection
+         * gets [CAPACITY_ATTEMPTS] attempts and each may legitimately wait
+         * [MAX_WAIT_MS] (two minutes), so a 429 storm that begins near the end of
+         * a 30-minute run could sleep for another ~60 minutes before noticing the
+         * run was over — long after the budget the user was promised. Waiting is
+         * never allowed to outlast the run itself: the retry throws once the next
+         * wait would cross the deadline, so the loop's normal wind-down takes over
+         * and the run still ends with a report.
+         */
+        deadlineInMs: () -> Long? = { null },
         block: suspend () -> T,
     ): T {
         var attempt = 0
@@ -211,16 +224,42 @@ object Retry {
                 val hint = retryAfterMs(e)
                 // Connectivity: patient, capped backoff. Other transient: normal.
                 // A provider Retry-After hint always wins, bounded to one minute.
-                val wait = if (hint != null && hint > 0) {
+                val proposed = if (hint != null && hint > 0) {
                     minOf(hint, MAX_WAIT_MS)
                 } else if (network) {
                     backoffMs(attempt, base = 1_000, cap = 30_000)
                 } else {
                     backoffMs(attempt)
                 }
+                val wait = clampToDeadline(proposed, deadlineInMs())
                 onRetry(attempt, e, wait)
+                // A spent run must not keep sleeping. Throwing here hands control
+                // back to the loop, which winds down with a written report instead
+                // of silently overrunning its own budget by an hour.
+                if (wait <= 0L) throw e
                 delay(wait)
             }
         }
     }
+
+    /**
+     * Shrink [proposed] so a wait cannot extend past the run's remaining time.
+     *
+     * Returns 0 when nothing is left, which the caller treats as "stop retrying".
+     * A null or non-positive [remainingMs] means the caller has no deadline.
+     */
+    internal fun clampToDeadline(proposed: Long, remainingMs: Long?): Long {
+        // null = no deadline (unlimited run); 0 or less = the budget is already
+        // spent, so no wait may be taken. These must not be conflated: treating a
+        // spent budget as "unlimited" is what let a retry sleep past the run.
+        if (remainingMs == null) return proposed
+        // Leave a small margin so the model still gets a turn to write its report
+        // rather than the retry consuming the very last millisecond of the budget.
+        val usable = remainingMs - REPORT_MARGIN_MS
+        if (usable <= 0L) return 0L
+        return minOf(proposed, usable)
+    }
+
+    /** Time reserved at the end of a run so it can still write its wind-down. */
+    const val REPORT_MARGIN_MS = 15_000L
 }

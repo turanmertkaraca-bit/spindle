@@ -232,6 +232,10 @@ class AgentLoop(
             // wall-clock check becomes a sliding budget rather than a single
             // absolute deadline that can never be extended.
             var windowStartedAtMs = runStartedAtMs
+            // Consecutive trim/compact passes that rewrote nothing. Two in a row on
+            // a fresh over-window estimate means history cannot be made to fit, and
+            // folding again would only rediscover that. See Overflow.nextAction.
+            var stalledFolds = 0
             while (true) {
                 currentCoroutineContext().ensureActive()
                 // Uses the injectable [clock], not `System.currentTimeMillis()`.
@@ -323,17 +327,42 @@ class AgentLoop(
                 if (decision.action != OverflowAction.NONE) {
                     bus.emit(AgentEvent.StateChanged(sessionId, SessionState.RUNNING))
                 }
-                when (decision.action) {
-                    OverflowAction.TRIM -> Compaction.trim(store, sessionId, bus)
+                // Keep the retained tail inside the model's usable window. A tail
+                // larger than the window can never be folded away, so compaction
+                // would decline forever and the request would stay over budget.
+                val keepTokens = Overflow.keepTokens(budget.compactKeepTokens, decision.effectiveWindow)
+                val changed = when (decision.action) {
+                    OverflowAction.TRIM -> Compaction.trim(store, sessionId, bus, keepTokens) > 0
                     OverflowAction.COMPACT -> {
                         // A compaction that has nothing new to fold (the head is
                         // already just a summary) still needs the fallback trim
                         // so an over-window session keeps shrinking.
-                        if (!Compaction.compact(store, sessionId, modelRef, providers, bus)) {
-                            Compaction.trim(store, sessionId, bus)
-                        }
+                        val folded = Compaction.compact(store, sessionId, modelRef, providers, bus, keepTokens)
+                        folded || Compaction.trim(store, sessionId, bus, keepTokens) > 0
                     }
-                    OverflowAction.NONE -> Unit
+                    OverflowAction.NONE -> false
+                }
+                if (decision.action != OverflowAction.NONE) {
+                    // Distinguish "declined, nothing new to fold" from "cannot
+                    // shrink at all". Without this the identical decision is
+                    // recomputed every step and the run burns out on the bounded
+                    // overflow retry with no explanation of why.
+                    val next = Overflow.nextAction(decision.action, changed, stalledFolds)
+                    stalledFolds = next.stalled
+                    if (!changed && next.exhausted) {
+                        // Give up folding and make the request as-is: the provider
+                        // will accept it if the estimate was conservative, and if
+                        // it does not, the failure now carries a real reason
+                        // instead of an unexplained overflow.
+                        bus.emit(
+                            AgentEvent.Progress(
+                                sessionId,
+                                "context is ~${decision.estimatedTokens} tokens against a " +
+                                    "${decision.effectiveWindow}-token window and cannot be " +
+                                    "reduced further — continuing; the provider may reject this turn",
+                            ),
+                        )
+                    }
                 }
                 // trim/compact just rewrote persisted history, so the snapshot
                 // taken above is stale for the wire request and budget check.
@@ -406,6 +435,11 @@ class AgentLoop(
                         },
                         retryAfterMs = { th -> (th as? ProviderFailure)?.failure?.retryAfterMs },
                         retryable = { th -> (th as? ProviderFailure)?.failure?.retryable },
+                        // Waiting must never outlast the run. Without this a 429
+                        // storm beginning near the end of the window could sleep
+                        // for up to CAPACITY_ATTEMPTS x MAX_WAIT_MS (~60 min) after
+                        // the budget the user was promised had already expired.
+                        deadlineInMs = { remainingBudgetMs(agent, windowStartedAtMs) },
                         onRetry = { attempt, err, waitMs ->
                             // The previous attempt already streamed deltas for the
                             // text/reasoning parts into the UI. Retract them before
@@ -899,12 +933,17 @@ class AgentLoop(
         }
         // Hold back room for the response we are about to ask for, so we compact
         // before the provider (which counts input+output against the window)
-        // rejects the turn.
-        val reserved = minOf(20_000, maxOutputTokens)
-        val effectiveWindow = (contextWindow - reserved).coerceAtLeast(1)
+        // rejects the turn. Overflow.effectiveWindow also substitutes a
+        // conservative window when the catalogue does not know this model, so a
+        // 0-window model no longer looks infinitely over budget.
+        val effectiveWindow = Overflow.effectiveWindow(contextWindow, maxOutputTokens)
         val compactAt = (budget.compactAtFraction ?: Overflow.COMPACT_AT).coerceIn(0.5, 0.98)
         val trimAt = (compactAt - 0.12).coerceAtLeast(0.4)
-        return Overflow.decide(est, effectiveWindow, open, compactAt, trimAt)
+        return Overflow.decide(est, effectiveWindow, open, compactAt, trimAt).let { decision ->
+            // The caller needs the same window to size the retained tail; carry it
+            // on the decision rather than recomputing it (and risking drift).
+            decision.copy(effectiveWindow = effectiveWindow)
+        }
     }
 
     /**

@@ -12,6 +12,9 @@ import dev.spindle.core.event.AgentEvent
 import dev.spindle.core.event.EventBus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Context management. [trim] shrinks the *content* of old turns without changing
@@ -71,7 +74,13 @@ object Compaction {
     }
 
     private fun clip(part: Part): Part = when (part) {
-        is Part.Text -> if (part.text.length > TRIM_TEXT) {
+        // A compaction summary is the ONLY surviving copy of everything the head
+        // used to say, so it is never clipped. Cutting it to TRIM_TEXT silently
+        // discarded whatever did not fit in the first 4k characters of the one
+        // message that exists to carry that information forward.
+        is Part.Text -> if (part.text.startsWith(AgentLoop.COMPACT_MARKER)) {
+            part
+        } else if (part.text.length > TRIM_TEXT) {
             Part.Text(part.id, part.text.take(TRIM_TEXT) + "\n…[trimmed]")
         } else part
         is Part.Reasoning -> Part.Reasoning(part.id, part.text.take(500))
@@ -144,6 +153,23 @@ object Compaction {
     }
 
     /**
+     * Per-session compaction lock.
+     *
+     * `compact` is a read-modify-write across `store.messages` → `summarize` (a
+     * suspending network call) → `store.updateMessage`, so two concurrent passes
+     * both read the same head and the later writer clobbers the earlier summary.
+     * The agent loop already serializes per session, but the app has a SECOND
+     * caller — `ChatViewModel.compactNow` — that launches on `viewModelScope`
+     * while runs live on the application scope, so its `busy`/`compacting` guard
+     * is a non-atomic check-then-act across two different scopes. This lock makes
+     * compaction safe regardless of which entry point won the race.
+     */
+    private val locks = ConcurrentHashMap<String, Mutex>()
+
+    private fun lockFor(sessionId: SessionId): Mutex =
+        locks.computeIfAbsent(sessionId.value) { Mutex() }
+
+    /**
      * Fold the head of the session into a single summary at the head of the
      * conversation, leaving a token-budgeted recent tail verbatim. Returns true
      * when a compaction actually happened. The tail is sized by [keepTokens]
@@ -159,6 +185,17 @@ object Compaction {
         providers: ProviderRegistry,
         bus: EventBus,
         keepTokens: Int = ContextBudget.DEFAULT_COMPACT_KEEP_TOKENS,
+    ): Boolean = lockFor(sessionId).withLock {
+        compactLocked(store, sessionId, modelRef, providers, bus, keepTokens)
+    }
+
+    private suspend fun compactLocked(
+        store: SessionStore,
+        sessionId: SessionId,
+        modelRef: String,
+        providers: ProviderRegistry,
+        bus: EventBus,
+        keepTokens: Int,
     ): Boolean {
         val messages = store.messages(sessionId)
         val keepCount = retainedCount(messages, keepTokens)

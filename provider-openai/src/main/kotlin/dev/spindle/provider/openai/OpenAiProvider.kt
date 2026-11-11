@@ -710,12 +710,16 @@ private fun parseError(root: JsonObject): ProviderEvent.Failure? {
  * Parse a `Retry-After` value into milliseconds. A bare number is interpreted as
  * seconds unless [isMillis] is set (the `retry-after-ms` header carries ms).
  */
-private fun parseRetryAfter(value: String?, isMillis: Boolean = false): Long? {
-    val raw = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-    val number = raw.toDoubleOrNull() ?: return null
-    if (!number.isFinite() || number < 0.0) return null
-    return if (isMillis) number.toLong() else (number * 1000.0).toLong()
-}
+/**
+ * Delegates to the shared parser in `:core`.
+ *
+ * The local copy handled only the numeric form, so a `Retry-After` HTTP-date
+ * (legal per RFC 7231, and emitted by gateways in front of 429/503) became null
+ * and the client retried after ~500 ms instead of waiting. Kept as a thin alias
+ * so the call sites above stay unchanged.
+ */
+private fun parseRetryAfter(value: String?, isMillis: Boolean = false): Long? =
+    ProviderErrors.parseRetryAfter(value, isMillis)
 
 private fun JsonObject.str(key: String): String? =
     (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content

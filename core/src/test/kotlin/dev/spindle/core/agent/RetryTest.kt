@@ -8,6 +8,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
 
 class RetryTest {
 
@@ -455,5 +456,81 @@ class RetryTest {
             }
         }
         assertEquals(3, calls, "fatalRetries=2 means 3 executions then give up")
+    }
+}
+
+/**
+ * Wave-1 bug hunt (R1): retrying had no relationship to the run's wall clock.
+ *
+ * The attempt budget bounds *how many* retries happen, not how long they take. A
+ * capacity rejection gets 30 attempts and each may legitimately wait
+ * `MAX_WAIT_MS` (two minutes), so a 429 storm beginning near the end of a
+ * 30-minute run could sleep for another ~60 minutes after the budget the user was
+ * promised had expired — with the spinner still spinning.
+ */
+class RetryDeadlineTest {
+
+    @Test
+    fun `a wait is shrunk to the remaining budget`() {
+        assertEquals(
+            45_000L,
+            Retry.clampToDeadline(proposed = 120_000L, remainingMs = 60_000L),
+            "the wait must not outlast the run",
+        )
+    }
+
+    @Test
+    fun `a near-spent budget refuses to wait at all`() {
+        assertEquals(0L, Retry.clampToDeadline(proposed = 120_000L, remainingMs = 5_000L))
+        assertEquals(0L, Retry.clampToDeadline(proposed = 120_000L, remainingMs = 0L))
+        assertEquals(0L, Retry.clampToDeadline(proposed = 120_000L, remainingMs = -1L))
+    }
+
+    @Test
+    fun `a generous budget leaves the wait alone`() {
+        assertEquals(500L, Retry.clampToDeadline(proposed = 500L, remainingMs = 600_000L))
+    }
+
+    @Test
+    fun `no deadline means no clamping`() {
+        assertEquals(120_000L, Retry.clampToDeadline(proposed = 120_000L, remainingMs = null))
+    }
+
+    @Test
+    fun `a spent deadline stops the retry instead of sleeping past the run`() = runTest {
+        var calls = 0
+        val error = assertFailsWith<IllegalStateException> {
+            Retry.withResilientRetry(
+                fatalRetries = 5,
+                classify = { true },
+                retryable = { true },
+                // The run has 5s left; a wait must not be taken.
+                deadlineInMs = { 5_000L },
+                onRetry = { _, _, _ -> },
+            ) {
+                calls++
+                throw IllegalStateException("429 rate limited")
+            }
+        }
+        assertEquals(1, calls, "a spent run must not be retried again")
+        assertTrue(error.message!!.contains("429"))
+    }
+
+    @Test
+    fun `an unlimited budget still retries the full attempt count`() = runTest {
+        var calls = 0
+        assertFailsWith<IllegalStateException> {
+            Retry.withResilientRetry(
+                fatalRetries = 2,
+                classify = { true },
+                retryable = { true },
+                deadlineInMs = { null },
+            ) {
+                calls++
+                throw IllegalStateException("429 rate limited")
+            }
+        }
+        // attempt 1..2 retried, attempt 3 exceeds fatalRetries
+        assertEquals(3, calls)
     }
 }

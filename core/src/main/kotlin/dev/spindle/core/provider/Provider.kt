@@ -5,6 +5,11 @@ import dev.spindle.core.model.ToolCall
 import dev.spindle.core.model.Usage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
+import java.time.LocalDateTime
+import java.time.ZoneOffset
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 /**
  * A model available from a provider. Capability flags drive adapter behaviour
@@ -177,6 +182,75 @@ object ProviderErrors {
             else -> value * 1_000.0
         }
         return ms.toLong().coerceIn(1L, 300_000L)
+    }
+
+    /**
+     * Parse a `Retry-After` header into milliseconds.
+     *
+     * RFC 7231 allows **two** forms and providers/CDNs use both:
+     *
+     *  - `delay-seconds`, e.g. `30`
+     *  - `HTTP-date`, e.g. `Wed, 21 Oct 2015 07:28:00 GMT`
+     *
+     * Only the numeric form used to be handled, by `toDoubleOrNull() ?: return
+     * null`. An HTTP-date therefore produced **null**, which the caller read as
+     * "no hint" and replaced with our own ~500 ms backoff — so the client hammered
+     * an endpoint that had just asked it to wait, burned the whole attempt budget
+     * in seconds, and surfaced a hard failure. That is precisely the behaviour the
+     * capacity-hint work exists to prevent.
+     *
+     * A date in the past (clock skew, or a gateway echoing a stale value) yields
+     * null so the caller falls back to normal backoff rather than a zero wait.
+     * [now] is injectable so the parsing is testable without depending on the
+     * wall clock.
+     *
+     * @param isMillis true for the non-standard `retry-after-ms` header, whose
+     *   value is already milliseconds.
+     */
+    fun parseRetryAfter(value: String?, isMillis: Boolean = false, now: () -> Long = System::currentTimeMillis): Long? {
+        val raw = value?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        val number = raw.toDoubleOrNull()
+        if (number != null) {
+            if (!number.isFinite() || number < 0.0) return null
+            val ms = if (isMillis) number.toLong() else (number * 1000.0).toLong()
+            return ms.coerceAtMost(MAX_RETRY_AFTER_MS)
+        }
+        // Not a number: try the HTTP-date form. `isMillis` is irrelevant here —
+        // a date is an absolute instant, not a duration.
+        val at = parseHttpDate(raw) ?: return null
+        val delta = at - now()
+        return delta.takeIf { it > 0 }?.coerceAtMost(MAX_RETRY_AFTER_MS)
+    }
+
+    /** Ceiling for any provider-stated wait, so a garbled header cannot park a run. */
+    const val MAX_RETRY_AFTER_MS = 300_000L
+
+    /**
+     * The date formats RFC 7231 §7.1.1.1 requires a recipient to accept, in the
+     * order they actually appear in the wild.
+     *
+     * The third (asctime) form pads a single-digit day with a **space**, so
+     * `Jan  1` needs `ppd` — the plain `d` pattern rejects it. Both variants are
+     * listed because a gateway may or may not normalise the padding.
+     */
+    private val HTTP_DATE_FORMATS = listOf(
+        DateTimeFormatter.RFC_1123_DATE_TIME,
+        DateTimeFormatter.ofPattern("EEEE, dd-MMM-yy HH:mm:ss zzz", Locale.US),
+        DateTimeFormatter.ofPattern("EEE MMM ppd HH:mm:ss yyyy", Locale.US),
+        DateTimeFormatter.ofPattern("EEE MMM d HH:mm:ss yyyy", Locale.US),
+    )
+
+    private fun parseHttpDate(raw: String): Long? {
+        for (fmt in HTTP_DATE_FORMATS) {
+            val parsed = runCatching {
+                ZonedDateTime.parse(raw, fmt).toInstant().toEpochMilli()
+            }.getOrNull() ?: runCatching {
+                // The asctime form has no zone; RFC 7231 fixes it to GMT.
+                LocalDateTime.parse(raw, fmt).toInstant(ZoneOffset.UTC).toEpochMilli()
+            }.getOrNull()
+            if (parsed != null) return parsed
+        }
+        return null
     }
 }
 
