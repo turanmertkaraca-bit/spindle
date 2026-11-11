@@ -237,17 +237,22 @@ class GitToolTest {
                 """{"op":"stash","action":"list"}""" to "git stash list",
                 """{"op":"tag","name":"v1.0.0"}""" to "git tag -a 'v1.0.0' -m 'v1.0.0'",
                 """{"op":"tag","list":true}""" to "git tag --list",
-                """{"op":"blame","path":"a.kt"}""" to "git blame --no-color 'a.kt'",
+                // `path` goes through insideCwd, so the command carries the
+                // ABSOLUTE path; only the prefix is fixed for this one.
+                """{"op":"blame","path":"a.kt"}""" to "git blame --no-color '",
                 """{"op":"cherry-pick","onto":"abc123"}""" to "git cherry-pick 'abc123'",
                 """{"op":"config","name":"user.email"}""" to "git config --get 'user.email'",
             )
             for ((json, expected) in cases) {
                 val outcome = tool.run(gitObj(json), ctx)
                 assertFalse(outcome.isError, "$json -> ${outcome.output}")
-                assertTrue(
-                    shell.commands.last().endsWith(expected),
-                    "$json should end with [$expected], got [${shell.commands.last()}]",
-                )
+                val cmd = shell.commands.last()
+                val ok = if (json.contains("blame")) {
+                    cmd.contains(expected) && cmd.contains("a.kt'")
+                } else {
+                    cmd.endsWith(expected)
+                }
+                assertTrue(ok, "$json should build [$expected], got [$cmd]")
                 assertFalse(shell.commands.last().contains("s3cr3t"), "token in argv: ${shell.commands.last()}")
             }
         }
