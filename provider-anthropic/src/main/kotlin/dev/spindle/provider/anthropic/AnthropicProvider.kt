@@ -275,7 +275,29 @@ class AnthropicProvider(
                 if (m.role == "system" && text != null && text.isNotEmpty()) add(text)
             }
         }.joinToString("\n")
-        if (system.isNotBlank()) put("system", system)
+        // Prompt caching. Anthropic only caches where a `cache_control` breakpoint
+        // says to, and we were sending NONE — so every turn re-billed (and
+        // re-processed) the whole system prompt plus conversation from scratch.
+        // That is invisible in the UI and looks exactly like "subagents take an
+        // unnatural amount of time": with 24-step children re-sending a large
+        // system prompt and tool schema every step, nothing is ever reused.
+        //
+        // The system prompt is the right first breakpoint: it is large, stable for
+        // the whole session, and sits before everything that changes. The second
+        // is placed on the newest message by `buildMessages`, so the growing
+        // conversation up to that point is a cache hit on the next step.
+        if (system.isNotBlank()) {
+            put(
+                "system",
+                buildJsonArray {
+                    add(buildJsonObject {
+                        put("type", "text")
+                        put("text", system)
+                        put("cache_control", buildJsonObject { put("type", "ephemeral") })
+                    })
+                },
+            )
+        }
         put("messages", buildMessages(request.messages))
         if (request.tools.isNotEmpty()) put("tools", buildTools(request.tools))
         put("max_tokens", request.maxTokens ?: 4096)
@@ -361,18 +383,51 @@ class AnthropicProvider(
         }
 
         return buildJsonArray {
-            turns.forEach { (role, blocks) ->
+            turns.forEachIndexed { index, (role, blocks) ->
                 val ordered = if (role == "user") {
                     blocks.sortedBy { if ((it as? JsonObject)?.str("type") == "tool_result") 0 else 1 }
                 } else {
                     blocks
                 }
+                val content = if (index == turns.lastIndex) {
+                    markLastBlockCacheable(ordered)
+                } else {
+                    JsonArray(ordered)
+                }
                 add(buildJsonObject {
                     put("role", role)
-                    put("content", JsonArray(ordered))
+                    put("content", content)
                 })
             }
         }
+    }
+
+    /**
+     * Put a cache breakpoint on the final content block of the newest turn.
+     *
+     * Anthropic caches the prefix up to (and including) a block marked
+     * `cache_control`. Marking the newest block means the next step — which
+     * appends to the conversation — reuses everything before it instead of
+     * re-processing the whole history. Without any breakpoint NOTHING is cached,
+     * which is why a 24-step child felt unnaturally slow.
+     *
+     * Only the last block is marked: the API allows at most four breakpoints, and
+     * `buildMessages` already places the first on the system prompt. A block that
+     * cannot carry the marker (an image `source`, a bare string) is left alone, so
+     * a request Anthropic would reject is never built.
+     */
+    private fun markLastBlockCacheable(blocks: List<JsonElement>): JsonArray {
+        if (blocks.isEmpty()) return JsonArray(emptyList())
+        val out = blocks.toMutableList()
+        val last = out.lastOrNull() as? JsonObject
+        val type = last?.str("type")
+        if (last != null && (type == "text" || type == "tool_result" || type == "tool_use")) {
+            out[out.lastIndex] = buildJsonObject {
+                last.forEach { (k, v) -> put(k, v) }
+                put("cache_control", buildJsonObject { put("type", "ephemeral") })
+            }
+        }
+        return JsonArray(out)
     }
 }
 

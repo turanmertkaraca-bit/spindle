@@ -594,4 +594,56 @@ class AnthropicProviderTest {
         val events = withTimeout(5_000) { subject.stream(request()).toList() }
         assertEquals(1, events.count { it is ProviderEvent.Finished || it is ProviderEvent.Failure })
     }
+    /**
+     * Anthropic only caches where a `cache_control` breakpoint says to.
+     *
+     * We were sending NONE, so every turn re-processed and re-billed the entire
+     * system prompt and conversation. That is invisible in the UI — no error, no
+     * warning, just a child that takes far longer than it should — and it is why a
+     * 24-step subagent felt unnaturally slow. These assertions are the only thing
+     * standing between us and silently losing that again.
+     */
+    @Test
+    fun `the system prompt carries a cache breakpoint`() = runTest {
+        server.enqueue(MockResponse().setChunkedBody("data: {\"type\":\"message_stop\"}\n\n", 5))
+
+        provider().stream(request()).toList()
+
+        val body = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+        val system = body["system"]!!.jsonArray
+        assertEquals(1, system.size)
+        val block = system[0].jsonObject
+        assertEquals("text", block["type"]!!.jsonPrimitive.content)
+        assertEquals(
+            "ephemeral",
+            block["cache_control"]!!.jsonObject["type"]!!.jsonPrimitive.content,
+            "without this the system prompt is never cached and every step pays full price",
+        )
+    }
+
+    @Test
+    fun `the newest message carries a cache breakpoint so history is reused`() = runTest {
+        server.enqueue(MockResponse().setChunkedBody("data: {\"type\":\"message_stop\"}\n\n", 5))
+
+        provider().stream(request()).toList()
+
+        val messages = Json.parseToJsonElement(server.takeRequest().body.readUtf8())
+            .jsonObject["messages"]!!.jsonArray
+        val lastBlocks = messages.last().jsonObject["content"]!!.jsonArray
+        val lastBlock = lastBlocks.last().jsonObject
+        assertEquals(
+            "ephemeral",
+            lastBlock["cache_control"]!!.jsonObject["type"]!!.jsonPrimitive.content,
+            "the prefix up to the newest block is what the next step can reuse",
+        )
+        // Only the final message is marked: a breakpoint on every turn would
+        // exhaust Anthropic's four-breakpoint budget for no extra benefit.
+        val markedEarlier = messages.dropLast(1).count { m ->
+            m.jsonObject["content"]!!.jsonArray.any { b ->
+                (b as? kotlinx.serialization.json.JsonObject)?.get("cache_control") != null
+            }
+        }
+        assertEquals(0, markedEarlier)
+    }
+
 }
