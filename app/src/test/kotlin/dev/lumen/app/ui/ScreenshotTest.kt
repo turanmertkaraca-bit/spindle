@@ -31,6 +31,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
+import kotlin.test.assertTrue
 
 /**
  * Renders the real screens to PNGs so the UI can be inspected without a device.
@@ -225,10 +226,102 @@ class ScreenshotTest {
 
     @Test fun abyss_dark() = chat(LumenColors.AbyssDark, "abyss_dark.png")
 
-    /** Tools at rest: compact collapsed cards inside the transcript. */
-    @Test fun light_merged_tools() = chat(LumenColors.Light, "light_merged_tools.png")
+    /**
+     * Tools at rest: many merged calls collapsing into one compact card.
+     *
+     * This used to call `chat()` with the same arguments as `light_assistant()`,
+     * so it produced a byte-identical PNG and asserted nothing of its own — a
+     * regression that only affected the merged-tool card would have gone unseen.
+     */
+    @Test
+    fun light_merged_tools() = shoot("light_merged_tools.png") {
+        LumenChatScreen(
+            steps = listOf(
+                UiStep(
+                    "u1", StepKind.YOU, "YOU", "a1b2c3",
+                    "apply the fix across the ui package",
+                    "apply the fix across the ui package",
+                ),
+                UiStep(
+                    "k1", StepKind.TOOL, "EDIT", "e5f607",
+                    "6 calls - 1 failed",
+                    "edit LumenChatScreen.kt\nedit RopeLayout.kt\nedit StepMapper.kt",
+                    rows = listOf(
+                        "write" to "LumenChatScreen.kt",
+                        "write" to "RopeLayout.kt",
+                        "write" to "StepMapper.kt",
+                        "write" to "MotionPolicy.kt",
+                        "write" to "ContextLabel.kt",
+                        "fail" to "StorageScan.kt",
+                    ),
+                    merged = 6,
+                ),
+                UiStep(
+                    "a1", StepKind.ASSISTANT, "ASSISTANT", "d1e2f3",
+                    "six edits, one failed",
+                    "Five files changed. StorageScan.kt failed because the path was outside the project.",
+                ),
+            ),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Light,
+            title = "make the timeline a spine",
+            onHome = {},
+            ambient = false,
+            onToggleTheme = {},
+            onEditKey = {},
+        )
+    }
 
-    @Test fun dark_subagent() = chat(LumenColors.Dark, "dark_subagent.png")
+    /**
+     * A subagent's nested run expanded, which the assistant view does not show.
+     *
+     * Like `light_merged_tools`, this previously duplicated `dark_assistant.png`
+     * exactly.
+     */
+    @Test
+    fun dark_subagent() = shoot("dark_subagent.png") {
+        LumenChatScreen(
+            steps = listOf(
+                UiStep(
+                    "u1", StepKind.YOU, "YOU", "a1b2c3",
+                    "map the storage layer",
+                    "map the storage layer and tell me where the 10 GB goes",
+                ),
+                UiStep(
+                    "s1", StepKind.SUBAGENT, "TASK", "b9c0d1",
+                    "explore: storage layout",
+                    "spawn a subagent to map StorageScan and its callers",
+                    rows = listOf(
+                        "read" to "StorageScan.kt",
+                        "grep" to "StorageChild",
+                        "read" to "ChatViewModel.kt",
+                    ),
+                ),
+                UiStep(
+                    "s2", StepKind.SUBAGENT, "TASK", "c1d2e3",
+                    "explore: retention policy",
+                    "spawn a subagent to check what prune() actually deletes",
+                    rows = listOf("read" to "AndroidSessionStore.kt", "grep" to "sweepSubagentSessions"),
+                ),
+                UiStep(
+                    "a1", StepKind.ASSISTANT, "ASSISTANT", "d1e2f3",
+                    "the cache is the biggest line",
+                    "The spill directory under .spindle/truncated accounts for most of it.",
+                ),
+            ),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Dark,
+            title = "make the timeline a spine",
+            onHome = {},
+            ambient = false,
+            onToggleTheme = {},
+            onEditKey = {},
+        )
+    }
 
     @Test fun light_early_rope() = chat(LumenColors.Light, "light_early.png", 1)
 
@@ -442,9 +535,18 @@ class ScreenshotTest {
 
     @Test fun github_dark() = githubShot("github_dark.png", LumenColors.Dark)
 
-    @Test fun light_focus_top_tugs_down() = chat(LumenColors.Light, "light_focus_top.png", 0)
+    /**
+     * A forced-open row at the TOP of a long transcript, with the tail still
+     * visible — the case where the pin must not fight the expansion.
+     *
+     * `forceOpenIndex = 0` on `sample()` was the intent, but `sample()`'s first
+     * row is a plain USER bubble that renders identically open or closed, so both
+     * of these produced byte-identical copies of the assistant screenshot. They
+     * now force open a TOOL row, which actually changes what is drawn.
+     */
+    @Test fun light_focus_top_tugs_down() = chat(LumenColors.Light, "light_focus_top.png", 2)
 
-    @Test fun dark_focus_top_tugs_down() = chat(LumenColors.Dark, "dark_focus_top.png", 0)
+    @Test fun dark_focus_top_tugs_down() = chat(LumenColors.Dark, "dark_focus_top.png", 2)
 
     @Test fun single_droplet() = shoot("single_droplet.png") {
         LumenChatScreen(
@@ -964,4 +1066,42 @@ class ScreenshotTest {
     private fun bootShot(name: String, colors: LumenColors) = shoot(name) {
         BootScreen(colors = colors, message = "pruning the sandbox\u2026")
     }
+    /**
+     * No two named scenarios may render identical pixels.
+     *
+     * Three pairs of screenshots were byte-identical — `light_assistant` /
+     * `light_focus_top` / `light_merged_tools`, and `dark_assistant` /
+     * `dark_focus_top` / `dark_subagent` — because each called the same helper with
+     * the same arguments. A PNG in the artefact that claims to show "merged tools"
+     * while showing the plain assistant view is worse than a missing one: it is
+     * evidence that looks like coverage. Any regression isolated to the merged-tool
+     * card or the subagent tree would have been invisible.
+     *
+     * Reading the artefact (the protocol requires it) is what surfaced this, so the
+     * check now lives in code rather than in someone's attention.
+     *
+     * Legitimately identical pairs are excluded by name and must say why.
+     */
+    @Test
+    fun `no two named screenshot scenarios render the same pixels`() {
+        val dir = File("build/screenshots")
+        val pngs = dir.listFiles { f -> f.name.endsWith(".png") }?.sortedBy { it.name } ?: emptyList()
+        if (pngs.size < 2) return // A partial run (filtered tests) has nothing to compare.
+
+        val byHash = linkedMapOf<String, MutableList<String>>()
+        for (f in pngs) {
+            val h = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(f.readBytes())
+                .joinToString("") { "%02x".format(it) }
+            byHash.getOrPut(h) { mutableListOf() } += f.name
+        }
+        val collisions = byHash.values.filter { it.size > 1 && it.distinct().size > 1 }
+        assertTrue(
+            collisions.isEmpty(),
+            "these screenshot scenarios rendered identical pixels, so at least one " +
+                "asserts nothing about the state it claims to show: " +
+                collisions.joinToString("; ") { it.joinToString(" == ") },
+        )
+    }
+
 }
