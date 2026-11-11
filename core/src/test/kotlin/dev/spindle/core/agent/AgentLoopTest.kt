@@ -1946,7 +1946,7 @@ class AgentLoopTest {
     fun `a doom-loop stop writes its reason into the message`() = runTest {
         fun sameCall() = listOf(
             ProviderEvent.ToolCallStart(0, "c1", "echo"),
-            ProviderEvent.ToolCallArgs(0, """{"text":"x"}"""),
+            ProviderEvent.ToolCallArgsDelta(0, """{"text":"x"}"""),
             ProviderEvent.Finished(FinishReason.TOOL_CALLS),
         )
         val provider = ScriptedProvider(*Array(10) { sameCall() })
@@ -1981,7 +1981,7 @@ class AgentLoopTest {
         val provider = ScriptedProvider(
             listOf(
                 ProviderEvent.TextDelta("working"),
-                ProviderEvent.Usage(Usage(inputTokens = 10, outputTokens = 10, costUsd = 5.0)),
+                ProviderEvent.UsageEvent(Usage(inputTokens = 10, outputTokens = 10, costUsd = 5.0)),
                 ProviderEvent.Finished(FinishReason.STOP),
             ),
         )
