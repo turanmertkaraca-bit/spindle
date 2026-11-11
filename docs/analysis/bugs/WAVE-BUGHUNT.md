@@ -73,7 +73,7 @@ Every finding in these waves was confirmed by reading the file.
 | Wave | Scope | Status |
 |---|---|---|
 | 1 | `Compaction`, `ContextPolicy`, `Retry`, `Wire`, `RunRecovery`, `EventBus` | **DONE `df71a91`**, CI green on both jobs |
-| 2 | `AgentLoop` turn/step/tool-execution mechanics | pending |
+| 2 | `AgentLoop` turn/step/tool-execution mechanics | **DONE `240e51c`**, CI green, 322 tests |
 | 3 | Cross-cutting: `ChatViewModel` → `RunEndPolicy` handoff, tools | pending |
 
 ---
@@ -121,3 +121,47 @@ which settles it. Do not bind `spec.agent` to a local here — there is nothing 
 fix.
 
 Each wave appends: what was read, what was found, the fix, the test, the sha.
+
+
+---
+
+## Wave 2 — `AgentLoop` turn / step / tool execution (`240e51c`)
+
+Two explore agents read the loop end to end. The **tool-execution path came back
+clean** across all eight failure classes (stuck PENDING, cancellation-vs-timeout,
+two-clock mixing, deadline clamping, malformed args, approval denial, double
+execution, unknown tool) — that is a real result, not a gap: those paths are
+already pinned by `ses_timeout`, `ses_cancel_tool`, `ses_max_err`, `ses_windup`,
+`ses_window`, `ses_greedy`.
+
+### Wave 2 defects fixed
+
+| id | defect | site |
+|---|---|---|
+| W2-1 | A wind-down turn cut off at `LENGTH` left the caller **no prose**. The `toolCalls.isEmpty()` exit is evaluated before the wind-down branch and its `break` was unconditional, so a reasoning-only model that spent its output budget on reasoning and was cut at LENGTH ended the run with `parts == []` — the empty report the wind-down exists to prevent, and what a subagent's parent reads as "the child produced nothing" | `AgentLoop.ensureWindUpProse` |
+| W2-2 | A doom-loop stop explained itself only in refused tool results and a dispatched event. Anything reading the run's final **text** saw an empty answer for a run that stopped for a clear reason | `AgentLoop.ensureStopProse` |
+
+Both are pinned by tests that **failed first**. W2-1 was reproduced by CI with the
+literal message `parts were []` before the fix path was complete — recorded because
+that is the evidence the test is real.
+
+### A bug in my own Wave 1 work, found here
+
+`remainingBudgetMs` returned `0` to mean "unlimited", and `Retry.clampToDeadline`
+(added in Wave 1) reads `<= 0` as "spent". Every retry in an unbounded run would
+have failed instantly instead of waiting out a 429. `RunClock` now owns the
+three-way distinction as a pure object, and `RunClockTest` pins it.
+
+### Product decisions taken from the owner (not bug fixes)
+
+- **Goal mode has no clock at all.** Owner: *"i made goal mode so that the agent
+  never stops till i come and interrupt it.. its just a 60 minute timer instead of
+  a 30, cheaply implemented."* Correct. `maxRunMillis = 0` now means **no wall
+  clock**; `maxSteps` is null; it ends only on user stop, on the model answering
+  without a tool call, or on a real safety backstop that writes its reason.
+- **The cost ceiling is advisory.** Owner: *"change this budget thing too i dont
+  know why i added it."* It used to END the run. For a mode meant to run until
+  interrupted, discarding the work because a forgotten spend limit tripped is
+  wrong. It now warns once and continues; Stop is how you end a run.
+  `maxInputTokens` keeps its hard stop — an oversized request is rejected by the
+  provider anyway, and failing early yields a report instead of a raw 400.
