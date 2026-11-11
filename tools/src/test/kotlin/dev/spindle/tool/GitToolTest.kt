@@ -227,24 +227,26 @@ class GitToolTest {
             val shell = RecordingShell()
             val tool = GitTool(shell) { "s3cr3t" }
             val ctx = ToolTestContext(cwd)
+            // Arguments are single-quoted by `quote()` so a value can never be read
+            // as an option; the expectation includes that quoting.
             val cases = listOf(
-                """{"op":"merge","onto":"feature"}""" to "git merge --no-edit feature",
-                """{"op":"rebase","onto":"main"}""" to "git rebase main",
+                """{"op":"merge","onto":"feature"}""" to "git merge --no-edit 'feature'",
+                """{"op":"rebase","onto":"main"}""" to "git rebase 'main'",
                 """{"op":"stash"}""" to "git stash push --include-untracked",
                 """{"op":"stash","action":"pop"}""" to "git stash pop",
                 """{"op":"stash","action":"list"}""" to "git stash list",
-                """{"op":"tag","name":"v1.0.0"}""" to "git tag -a v1.0.0 -m v1.0.0",
+                """{"op":"tag","name":"v1.0.0"}""" to "git tag -a 'v1.0.0' -m 'v1.0.0'",
                 """{"op":"tag","list":true}""" to "git tag --list",
-                """{"op":"blame","path":"a.kt"}""" to "git blame --no-color a.kt",
-                """{"op":"cherry-pick","onto":"abc123"}""" to "git cherry-pick abc123",
-                """{"op":"config","name":"user.email"}""" to "git config --get user.email",
+                """{"op":"blame","path":"a.kt"}""" to "git blame --no-color 'a.kt'",
+                """{"op":"cherry-pick","onto":"abc123"}""" to "git cherry-pick 'abc123'",
+                """{"op":"config","name":"user.email"}""" to "git config --get 'user.email'",
             )
             for ((json, expected) in cases) {
                 val outcome = tool.run(gitObj(json), ctx)
                 assertFalse(outcome.isError, "$json -> ${outcome.output}")
                 assertTrue(
-                    shell.commands.last().endsWith(expected) || shell.commands.last().contains(expected),
-                    "$json should build [$expected], got [${shell.commands.last()}]",
+                    shell.commands.last().endsWith(expected),
+                    "$json should end with [$expected], got [${shell.commands.last()}]",
                 )
                 assertFalse(shell.commands.last().contains("s3cr3t"), "token in argv: ${shell.commands.last()}")
             }

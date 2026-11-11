@@ -107,12 +107,24 @@ class FileTypeRoutingTest {
     }
 
     @Test
-    fun `every route has a glyph and a mime`() {
+    fun `every route has a label, a glyph and a usable mime`() {
         for (n in listOf("a.kt", "a.pdf", "a.apk", "a.png", "a.zip", "a.html", "a.bin", "src")) {
-            val t = FileTypeRouting.route(n, isDir = n == "src")
-            assertTrue(t.label.isNotBlank(), "no label for $n")
-            assertTrue(FileTypeRouting.glyph(n).isNotBlank(), "no glyph for $n")
-            assertEquals(1, FileTypeRouting.glyph(n).length.coerceAtMost(2).coerceAtLeast(1))
+            val isDir = n == "src"
+            val type = FileTypeRouting.route(n, isDir = isDir)
+            assertTrue(type.label.isNotBlank(), "no label for $n")
+            // A row glyph is one grapheme; the code-glyph is two chars ("<>").
+            assertTrue(
+                FileTypeRouting.glyph(n).isNotEmpty(),
+                "no glyph for $n",
+            )
+            // A directory never leaves the app, so it carries no mime; everything
+            // else must hand the system a concrete type rather than a blank string.
+            if (!isDir) {
+                assertTrue(
+                    type.mime.contains("/"),
+                    "mime for $n is not a media type: '${type.mime}'",
+                )
+            }
         }
     }
 
