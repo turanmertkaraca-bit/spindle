@@ -2335,11 +2335,11 @@ private fun EmptyState(colors: LumenColors, modifier: Modifier = Modifier) {
     ) {
         Droplet(Modifier.size(11.dp), Brush.verticalGradient(listOf(colors.bloomA, colors.bloomB, colors.bloomC)), ring = false, pulse = 1f, colors = colors)
         Spacer(Modifier.height(16.dp))
-        Text("lumen", color = colors.dim, fontFamily = Mono, fontSize = 15.sp, letterSpacing = 7.sp)
+        Text("lumen", color = colors.dim, fontFamily = LumenFonts.label, fontSize = 15.sp, letterSpacing = 7.sp)
         Spacer(Modifier.height(8.dp))
         Text(
             "ask the agent to begin",
-            color = colors.faint, fontFamily = Mono, fontSize = 12.sp,
+            color = colors.faint, fontFamily = LumenFonts.label, fontSize = 12.sp,
         )
     }
 }
@@ -2370,7 +2370,7 @@ private fun ErrorNotice(message: String, colors: LumenColors, onEditKey: (() -> 
             Spacer(Modifier.width(10.dp))
             Text(
                 "update key",
-                color = colors.accent, fontFamily = Mono, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                color = colors.accent, fontFamily = LumenFonts.label, fontSize = 12.sp, fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .clip(LumenShapes.small)
                     .clickable { onEditKey() }
@@ -2612,7 +2612,7 @@ private fun UsageMeter(
     Text(
         label,
         color = if (over) colors.accent else colors.faint,
-        fontFamily = Mono, fontSize = 10.5.sp, letterSpacing = 0.5.sp,
+        fontFamily = LumenFonts.label, fontSize = 10.5.sp, letterSpacing = 0.5.sp,
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = 16.dp, end = 16.dp, top = 3.dp, bottom = 1.dp)
@@ -3300,7 +3300,7 @@ private fun UndoNotice(path: String, colors: LumenColors, onUndo: () -> Unit, on
         )
         Text(
             "undo",
-            color = colors.accent, fontFamily = Mono, fontSize = 11.5.sp, fontWeight = FontWeight.Medium,
+            color = colors.accent, fontFamily = LumenFonts.label, fontSize = LumenType.caption, fontWeight = FontWeight.Medium,
             modifier = Modifier
                 .clip(LumenShapes.small)
                 .clickable { onUndo() }
@@ -3310,7 +3310,7 @@ private fun UndoNotice(path: String, colors: LumenColors, onUndo: () -> Unit, on
         Spacer(Modifier.width(4.dp))
         Text(
             "\u00d7",
-            color = colors.dim, fontFamily = Mono, fontSize = 13.sp,
+            color = colors.dim, fontFamily = LumenFonts.label, fontSize = 13.sp,
             modifier = Modifier
                 .clip(LumenShapes.pill)
                 .clickable { onDismiss() }
