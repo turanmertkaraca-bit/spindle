@@ -216,7 +216,13 @@ class AnthropicProviderTest {
         provider().stream(req).toList()
 
         val body = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
-        assertTrue(body["system"]!!.jsonPrimitive.content.contains("extra rules"), "system text dropped")
+        // `system` is a content-block array, not a bare string, because that is the
+        // only form that can carry a `cache_control` breakpoint. Anthropic accepts
+        // both; without the array form prompt caching is impossible (see the cache
+        // tests below).
+        val systemText = body["system"]!!.jsonArray
+            .joinToString("\n") { it.jsonObject["text"]!!.jsonPrimitive.content }
+        assertTrue(systemText.contains("extra rules"), "system text dropped")
 
         val messages = body["messages"]!!.jsonArray
         assertTrue(messages.none { it.jsonObject["role"]!!.jsonPrimitive.content == "system" })
