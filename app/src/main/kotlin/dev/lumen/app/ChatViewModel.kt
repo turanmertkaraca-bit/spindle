@@ -2953,14 +2953,10 @@ class ChatViewModel(
             _state.value = _state.value.copy(error = "cannot open $path")
             return
         }
-        val mime = when (path.substringAfterLast('.', "").lowercase()) {
-            "png" -> "image/png"
-            "jpg", "jpeg" -> "image/jpeg"
-            "webp" -> "image/webp"
-            "gif" -> "image/gif"
-            "bmp" -> "image/bmp"
-            else -> "application/octet-stream"
-        }
+        // One shared mime map. The local table here knew only images, so a PDF or a
+        // zip was handed to the system as application/octet-stream — a type no
+        // viewer accepts, which made "open" fail silently for every non-image.
+        val mime = dev.lumen.app.ui.FileTypeRouting.mimeOf(path)
         val message = actions?.openExternally(target.toString(), mime) ?: return
         _state.value = _state.value.copy(error = message)
     }

@@ -103,8 +103,14 @@ fun FilesScreen(
     projectName: String = "project",
     /** Absolute project root; used only to locate the truncated-output spill dir. */
     workspacePath: String = "",
-    /** Hand an image (or other opaque file) to an external viewer. */
+    /** Hand an image, PDF, archive or unknown file to an external viewer. */
     onOpenExternally: (String) -> Unit = {},
+    /**
+     * Install a built `.apk`. Previously only reachable from a chat mention, so a
+     * build artefact was unreachable from the file browser that shows it.
+     * Never automatic — the menu item is the confirmation.
+     */
+    onInstallApk: (String) -> Unit = {},
     /** Re-list the current folder on demand. */
     onRefresh: (() -> Unit)? = null,
 ) {
@@ -304,6 +310,7 @@ fun FilesScreen(
                                         onDelete = { deleteTarget = it },
                                         onOpenCanvas = onOpenCanvas,
                                         onOpenExternally = onOpenExternally,
+                                        onInstallApk = onInstallApk,
                                     )
                                 }
                             }
@@ -513,13 +520,24 @@ private fun EntryRow(
     onDelete: (FileEntry) -> Unit,
     onOpenCanvas: (String) -> Unit = {},
     onOpenExternally: (String) -> Unit = {},
+    /** Install a built APK. Never automatic: the menu item is the confirmation. */
+    onInstallApk: (String) -> Unit = {},
 ) {
     var menu by remember { mutableStateOf(false) }
-    val tap: () -> Unit = when {
-        entry.isDir -> ({ onEnter(entry) })
-        isHtml(entry.name) -> ({ onOpenCanvas(entry.path) })
-        isImage(entry.name) -> ({ onOpenExternally(entry.path) })
-        else -> ({ onEnter(entry) })
+    // ONE router decides. Before this, a non-HTML non-image file fell through to
+    // `onEnter` — the text editor — so tapping a built `.apk` or a `.pdf` in Files
+    // showed binary mojibake instead of offering to install or open it. The same
+    // `.apk` tapped in a chat message DID offer install, which is how the
+    // inconsistency became visible.
+    val type = FileTypeRouting.route(entry.name, entry.isDir)
+    val tap: () -> Unit = when (type.route) {
+        FileRoute.DIRECTORY -> ({ onEnter(entry) })
+        FileRoute.PREVIEW_HTML -> ({ onOpenCanvas(entry.path) })
+        FileRoute.VIEW_IMAGE -> ({ onOpenExternally(entry.path) })
+        FileRoute.INSTALL_APK -> ({ onInstallApk(entry.path) })
+        FileRoute.OPEN_PDF, FileRoute.OPEN_ARCHIVE, FileRoute.OPEN_WITH ->
+            ({ onOpenExternally(entry.path) })
+        FileRoute.EDIT -> ({ onEnter(entry) })
     }
     Row(
         Modifier
@@ -601,17 +619,35 @@ private fun EntryRow(
                         menu = false
                         onEnter(entry)
                     }
-                    if (isHtml(entry.name)) {
-                        MenuItem(colors, "Preview page", "preview-${entry.path}") {
-                            menu = false
-                            onOpenCanvas(entry.path)
-                        }
-                    }
-                    if (isImage(entry.name)) {
-                        MenuItem(colors, "Open externally", "external-${entry.path}") {
-                            menu = false
-                            onOpenExternally(entry.path)
-                        }
+                    when (type.route) {
+                        FileRoute.PREVIEW_HTML ->
+                            MenuItem(colors, "Preview page", "preview-${entry.path}") {
+                                menu = false
+                                onOpenCanvas(entry.path)
+                            }
+                        FileRoute.INSTALL_APK ->
+                            MenuItem(colors, "Install", "install-${entry.path}") {
+                                menu = false
+                                onInstallApk(entry.path)
+                            }
+                        FileRoute.VIEW_IMAGE ->
+                            MenuItem(colors, "Open externally", "external-${entry.path}") {
+                                menu = false
+                                onOpenExternally(entry.path)
+                            }
+                        // PDFs, archives and unknown types get a real affordance
+                        // instead of nothing. Labelled "open with" because that is
+                        // exactly what the system chooser is.
+                        FileRoute.OPEN_PDF, FileRoute.OPEN_ARCHIVE, FileRoute.OPEN_WITH ->
+                            MenuItem(
+                                colors,
+                                "Open with · ${type.label.lowercase()}",
+                                "external-${entry.path}",
+                            ) {
+                                menu = false
+                                onOpenExternally(entry.path)
+                            }
+                        FileRoute.DIRECTORY, FileRoute.EDIT -> Unit
                     }
                 }
                 MenuItem(colors, "Rename", "rename-${entry.path}") {
@@ -722,7 +758,7 @@ private fun EditorOverlay(
             titleSize = 13.sp,
             modifier = Modifier.padding(horizontal = LumenSpacing.page - 4.dp),
             actions = {
-                if (isHtml(editor.path)) {
+                if (FileTypeRouting.route(editor.path).route == FileRoute.PREVIEW_HTML) {
                     LumenBarAction(colors, "View", "editor-view", { onOpenCanvas(editor.path) })
                 }
                 LumenBarAction(
@@ -1040,20 +1076,5 @@ private fun humanSize(bytes: Long): String = when {
     else -> String.format(java.util.Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0))
 }
 
-/** A one-glyph hint of the file kind, so rows scan without reading names. */
-private fun fileGlyph(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
-    "html", "htm" -> "\u25c9"
-    "png", "jpg", "jpeg", "webp", "gif", "bmp" -> "\u25a3"
-    "md", "txt" -> "\u2261"
-    "kt", "java", "py", "js", "ts", "sh" -> "\u2039\u203a"
-    "json", "yml", "yaml", "toml" -> "{}"
-    else -> "\u00b7"
-}
-
-private fun isHtml(name: String): Boolean =
-    name.endsWith(".html", ignoreCase = true) || name.endsWith(".htm", ignoreCase = true)
-
-private fun isImage(name: String): Boolean = when (name.substringAfterLast('.', "").lowercase()) {
-    "png", "jpg", "jpeg", "webp", "gif", "bmp" -> true
-    else -> false
-}
+/** A one-glyph hint of the file kind; the table lives in [FileTypeRouting]. */
+private fun fileGlyph(name: String): String = FileTypeRouting.glyph(name)

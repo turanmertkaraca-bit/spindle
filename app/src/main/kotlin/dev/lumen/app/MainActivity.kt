@@ -360,12 +360,22 @@ class MainActivity : ComponentActivity() {
                     modifier = modifier,
                     model = state.model,
                     onModel = { quickSettings = true },
+                    // Mention taps use the SAME router as the Files screen, so a
+                    // file behaves identically wherever it is tapped. The two used
+                    // to disagree: a chat mention of an .apk offered install while
+                    // the same file in Files opened the text editor.
                     onOpenMention = { p, l ->
-                        when (p.substringAfterLast('.', "").lowercase()) {
-                            "apk" -> viewModel.installApk(p)
-                            "html", "htm" -> openCanvas(p)
-                            "png", "jpg", "jpeg", "webp", "gif", "bmp" -> viewModel.openFileExternally(p)
-                            else -> {
+                        when (dev.lumen.app.ui.FileTypeRouting.route(p).route) {
+                            dev.lumen.app.ui.FileRoute.INSTALL_APK -> viewModel.installApk(p)
+                            dev.lumen.app.ui.FileRoute.PREVIEW_HTML -> openCanvas(p)
+                            dev.lumen.app.ui.FileRoute.VIEW_IMAGE,
+                            dev.lumen.app.ui.FileRoute.OPEN_PDF,
+                            dev.lumen.app.ui.FileRoute.OPEN_ARCHIVE,
+                            dev.lumen.app.ui.FileRoute.OPEN_WITH,
+                            -> viewModel.openFileExternally(p)
+                            dev.lumen.app.ui.FileRoute.EDIT,
+                            dev.lumen.app.ui.FileRoute.DIRECTORY,
+                            -> {
                                 viewModel.openFileInFiles(p, l)
                                 filesReturn = "chat"
                                 route = "files"
@@ -537,6 +547,7 @@ class MainActivity : ComponentActivity() {
                         projectName = state.projectName,
                         workspacePath = viewModel.workspacePath,
                         onOpenExternally = viewModel::openFileExternally,
+                        onInstallApk = viewModel::installApk,
                         onRefresh = { viewModel.openFiles(state.files?.dir) },
                     )
                 }

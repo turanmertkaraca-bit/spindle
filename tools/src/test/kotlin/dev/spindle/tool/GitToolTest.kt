@@ -213,4 +213,85 @@ class GitToolTest {
             assertTrue(outcome.output.contains("***"), outcome.output)
         }
     }
+    /**
+     * The ops a real workflow needs that `bash` cannot provide.
+     *
+     * The sandbox shell is deliberately stripped of `GITHUB_TOKEN`, so a manual
+     * `git pull --rebase` after a rejected push is a dead end. These are the
+     * credentialed/local equivalents that close that gap. Nothing here may force or
+     * destroy history: a missing `reset --hard` is intentional.
+     */
+    @Test
+    fun newOpsBuildTheExpectedCommands() = runTest {
+        withGitTempDir { cwd ->
+            val shell = RecordingShell()
+            val tool = GitTool(shell) { "s3cr3t" }
+            val ctx = ToolTestContext(cwd)
+            val cases = listOf(
+                """{"op":"merge","onto":"feature"}""" to "git merge --no-edit feature",
+                """{"op":"rebase","onto":"main"}""" to "git rebase main",
+                """{"op":"stash"}""" to "git stash push --include-untracked",
+                """{"op":"stash","action":"pop"}""" to "git stash pop",
+                """{"op":"stash","action":"list"}""" to "git stash list",
+                """{"op":"tag","name":"v1.0.0"}""" to "git tag -a v1.0.0 -m v1.0.0",
+                """{"op":"tag","list":true}""" to "git tag --list",
+                """{"op":"blame","path":"a.kt"}""" to "git blame --no-color a.kt",
+                """{"op":"cherry-pick","onto":"abc123"}""" to "git cherry-pick abc123",
+                """{"op":"config","name":"user.email"}""" to "git config --get user.email",
+            )
+            for ((json, expected) in cases) {
+                val outcome = tool.run(gitObj(json), ctx)
+                assertFalse(outcome.isError, "$json -> ${outcome.output}")
+                assertTrue(
+                    shell.commands.last().endsWith(expected) || shell.commands.last().contains(expected),
+                    "$json should build [$expected], got [${shell.commands.last()}]",
+                )
+                assertFalse(shell.commands.last().contains("s3cr3t"), "token in argv: ${shell.commands.last()}")
+            }
+        }
+    }
+
+    @Test
+    fun pullRebaseAndPushTagsAreAvailable() = runTest {
+        withGitTempDir { cwd ->
+            val shell = RecordingShell()
+            val tool = GitTool(shell) { "s3cr3t" }
+            val ctx = ToolTestContext(cwd)
+
+            tool.run(gitObj("""{"op":"pull","rebase":true}"""), ctx)
+            assertTrue(
+                shell.commands.last().contains("pull --rebase"),
+                "recovering from a rejected push needs --rebase: ${shell.commands.last()}",
+            )
+
+            tool.run(gitObj("""{"op":"push","tags":true}"""), ctx)
+            assertTrue(shell.commands.last().contains("--tags"), shell.commands.last())
+            assertFalse(shell.commands.last().contains("--force"), shell.commands.last())
+        }
+    }
+
+    @Test
+    fun theNewOpsStillValidateTheirInput() = runTest {
+        withGitTempDir { cwd ->
+            val shell = RecordingShell()
+            val tool = GitTool(shell) { "s3cr3t" }
+            val ctx = ToolTestContext(cwd)
+            // A ref starting with '-' could be read as an option.
+            for (json in listOf(
+                """{"op":"merge"}""",
+                """{"op":"merge","onto":"--upload-pack=evil"}""",
+                """{"op":"rebase"}""",
+                """{"op":"tag"}""",
+                """{"op":"blame"}""",
+                """{"op":"cherry-pick","onto":"-x"}""",
+                """{"op":"stash","action":"nonsense"}""",
+                """{"op":"config"}""",
+            )) {
+                val outcome = tool.run(gitObj(json), ctx)
+                assertTrue(outcome.isError, "$json must be refused, got: ${outcome.output}")
+            }
+            assertTrue(shell.commands.isEmpty(), "nothing may run for an invalid request")
+        }
+    }
+
 }

@@ -36,8 +36,9 @@ class GitTool(
         description = "Run git in the project directory. Network operations (clone, fetch, " +
             "pull, push) authenticate automatically with the GitHub token saved in Settings, " +
             "so private repos work; the token is never written into the command, argv or the " +
-            "remote URL. `push` is never forced. Prefer this over shelling out to git, which " +
-            "runs without credentials.",
+            "remote URL. `push` is never forced (there is no force flag, by design). Use " +
+            "`pull` with rebase:true to recover from a rejected non-fast-forward push. " +
+            "Prefer this over shelling out to git, which runs without credentials.",
         parametersJson = """
             {
               "type": "object",
@@ -45,7 +46,8 @@ class GitTool(
                 "op": {
                   "type": "string",
                   "enum": ["status", "diff", "log", "show", "branch", "remote", "add", "commit",
-                           "clone", "fetch", "pull", "push", "checkout"],
+                           "clone", "fetch", "pull", "push", "checkout",
+                           "merge", "rebase", "stash", "tag", "blame", "cherry-pick", "config"],
                   "description": "Git operation to run"
                 },
                 "message": {"type": "string", "description": "For commit: the commit message (required)"},
@@ -57,7 +59,14 @@ class GitTool(
                 "count": {"type": "integer", "description": "For log: number of commits (default 20, max 100)"},
                 "dir": {"type": "string", "description": "Subdirectory to run git in, relative to the working directory. Use this when the repo is nested (e.g. a project inside a workspace that is itself a repo)."},
                 "remote": {"type": "string", "description": "For fetch/pull/push: remote name (default origin)"},
-                "branch": {"type": "string", "description": "For push: branch name (default: current upstream)"}
+                "branch": {"type": "string", "description": "For push: branch name (default: current upstream)"},
+                "onto": {"type": "string", "description": "For merge/rebase/cherry-pick: the branch or commit to apply"},
+                "name": {"type": "string", "description": "For tag: the tag name. For stash: an optional label. For config: the key."},
+                "rebase": {"type": "boolean", "description": "For pull: rebase local commits instead of merging (use after a non-fast-forward push)"},
+                "tags": {"type": "boolean", "description": "For push: also push tags"},
+                "value": {"type": "string", "description": "For config: the value to set (omit to read the current one)"},
+                "list": {"type": "boolean", "description": "For stash: list stashes instead of creating one. For tag: list tags."},
+                "action": {"type": "string", "enum": ["list", "pop", "apply", "drop"], "description": "For stash: what to do. Omit to create a new stash."}
               },
               "required": ["op"],
               "additionalProperties": false
@@ -164,17 +173,82 @@ class GitTool(
                 "$helper clone ${quote(url)} ${quote(dir)}"
             }
             "fetch" -> "$helper fetch ${remoteArg(input)}".trimEnd()
-            "pull" -> "$helper pull ${remoteArg(input)}".trimEnd()
+            "pull" -> buildString {
+                append(helper).append(" pull")
+                // `--rebase` is the documented recovery from a rejected push, and
+                // without it the only way to recover is a bash `git pull --rebase`,
+                // which cannot authenticate. That made a diverged branch a dead end.
+                if (input.boolOrNull("rebase") == true) append(" --rebase")
+                remoteArg(input)
+            }.trimEnd()
             "push" -> {
                 val remote = input.stringOrNull("remote")?.trim()?.takeIf { it.isNotBlank() }?.let { nameArg(it) }
                 val branch = input.stringOrNull("branch")?.trim()?.takeIf { it.isNotBlank() }?.let { nameArg(it) }
                 buildString {
                     append(helper).append(" push")
+                    if (input.boolOrNull("tags") == true) append(" --tags")
                     remote?.let { append(' ').append(quote(it)) }
                     branch?.let { append(' ').append(quote(it)) }
                 }
             }
             "checkout" -> "git checkout ${quote(ref(input))}"
+            "merge" -> {
+                val onto = input.stringOrNull("onto")?.trim()
+                require(!onto.isNullOrBlank()) { "merge requires 'onto' (the branch or commit to merge)" }
+                "git merge --no-edit ${quote(nameArg(onto))}"
+            }
+            "rebase" -> {
+                val onto = input.stringOrNull("onto")?.trim()
+                require(!onto.isNullOrBlank()) { "rebase requires 'onto' (the branch or commit to rebase onto)" }
+                "git rebase ${quote(nameArg(onto))}"
+            }
+            "stash" -> {
+                // `list` is read-only; anything else stashes. Popping is
+                // `stash pop` via 'action', which the agent needs to get work back.
+                val action = input.stringOrNull("action")?.trim()?.lowercase()
+                when (action) {
+                    "list", null -> if (input.boolOrNull("list") == true || action == "list") {
+                        "git stash list"
+                    } else {
+                        val label = input.stringOrNull("name")?.trim()
+                        if (label.isNullOrBlank()) "git stash push --include-untracked"
+                        else "git stash push --include-untracked -m " + quote(label)
+                    }
+                    "pop" -> "git stash pop"
+                    "apply" -> "git stash apply"
+                    "drop" -> "git stash drop"
+                    else -> throw IllegalArgumentException(
+                        "stash 'action' must be one of list/pop/apply/drop (or omit to stash)",
+                    )
+                }
+            }
+            "tag" -> {
+                if (input.boolOrNull("list") == true) {
+                    "git tag --list"
+                } else {
+                    val name = input.stringOrNull("name")?.trim()
+                    require(!name.isNullOrBlank()) { "tag requires 'name' (or list: true)" }
+                    "git tag -a ${quote(nameArg(name))} -m " + quote(name)
+                }
+            }
+            "blame" -> {
+                val path = input.stringOrNull("path")?.trim()
+                require(!path.isNullOrBlank()) { "blame requires 'path'" }
+                "git blame --no-color ${quote(insideCwd(cwd, path))}"
+            }
+            "cherry-pick" -> {
+                val onto = input.stringOrNull("onto")?.trim()
+                require(!onto.isNullOrBlank()) { "cherry-pick requires 'onto' (the commit)" }
+                require(REF.matches(onto) && !onto.startsWith("-")) { "invalid ref '$onto'" }
+                "git cherry-pick ${quote(onto)}"
+            }
+            "config" -> {
+                val key = input.stringOrNull("name")?.trim()
+                require(!key.isNullOrBlank()) { "config requires 'name' (the key, e.g. user.email)" }
+                val value = input.stringOrNull("value")?.trim()
+                if (value.isNullOrBlank()) "git config --get " + quote(key)
+                else "git config " + quote(key) + " " + quote(value)
+            }
             else -> throw IllegalArgumentException("Unsupported op '$op'")
         }
     }
@@ -261,8 +335,17 @@ class GitTool(
         val OPS = listOf(
             "status", "diff", "log", "show", "branch", "remote", "add", "commit",
             "clone", "fetch", "pull", "push", "checkout",
+            "merge", "rebase", "stash", "tag", "blame", "cherry-pick", "config",
         )
         val NETWORK_OPS = setOf("clone", "fetch", "pull", "push")
+
+        /**
+         * Ops that can destroy uncommitted work, or rewrite published history.
+         *
+         * These are deliberately NOT offered: the owner did not ask for them, and
+         * the safe recoveries (merge, rebase, stash, cherry-pick) already cover the
+         * real workflows. A missing `reset --hard` is a feature.
+         */
 
         // Single quotes keep the outer shell from expanding $GITHUB_TOKEN; git
         // runs the helper later with the variable set in its environment.
