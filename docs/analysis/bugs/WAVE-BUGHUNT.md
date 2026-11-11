@@ -165,3 +165,48 @@ three-way distinction as a pure object, and `RunClockTest` pins it.
   wrong. It now warns once and continues; Stop is how you end a run.
   `maxInputTokens` keeps its hard stop — an oversized request is rejected by the
   provider anyway, and failing early yields a report instead of a raw 400.
+
+
+---
+
+## Wave 3 — subagents: prompt caching was never enabled (`82c13d3`)
+
+Owner: *"they are taking an unnatural amount of time and i dont know if cache hits
+are even working."* That doubt was correct, and the cause was worse than slow.
+
+**Anthropic caches only where a `cache_control` breakpoint says to, and we sent
+none.** Every turn re-processed and re-billed the whole system prompt, the tool
+schema and the entire conversation from scratch. Nothing surfaces that — no error,
+no warning — it just makes long runs and 24-step children far slower and far more
+expensive than they should be. Exactly the reported symptom.
+
+Fixed with two breakpoints (the API allows four total):
+
+- the top-level `system` block — large and stable for the whole session;
+- the FINAL content block of the newest turn — so the next step, which appends to
+  the conversation, reuses everything before it.
+
+Only the last message is marked; marking every turn would spend the breakpoint
+budget for no benefit. A block that cannot carry the marker is left untouched, so
+a request Anthropic would reject is never built.
+
+`system` had to change from a bare string to a content-block array to carry the
+marker. Anthropic accepts both, and an existing test asserted the string form —
+updated rather than deleted, because the text-still-present assertion is still
+worth having.
+
+The OpenAI-compatible side needed nothing: it already sends `prompt_cache_key`
+derived from the session hint, which is the correct mechanism there (caching is
+automatic; the key only pins routing).
+
+Two tests against the MockWebServer harness pin this, asserting the breakpoints
+exist AND that earlier turns are not marked. This class of bug is invisible
+without an assertion.
+
+### Also checked, no defect found
+
+The child spawn path: the 7-permit gate is taken around the RUN only and inside the
+caller's coroutine, so a queued child is cancelled by Stop rather than wedged; the
+`EvidenceCollector` subscribes with `UNDISPATCHED` so it cannot miss the child's
+early events; child budget is 24 steps; `ok` deliberately means "the run
+completed", not "prose was written". No change made.
