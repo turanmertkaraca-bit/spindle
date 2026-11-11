@@ -247,3 +247,49 @@ can never fail) and is now a real check.
 Four of the seven feature agents' areas (terminal, models, storage/projects,
 settings) were not reported on. The full UI rework — Settings as the reference
 standard, chat included — has not started.
+
+
+---
+
+## UI rework, pass 1 — speak Settings' vocabulary (`801f553` … `bd40586`)
+
+Owner: *"take the settings screen as reference … the settings screen is what i want
+from every other ui element you should even change the chat ui aswell."*
+
+The root cause of the drift was structural: `SettingsCard`, `RowDivider`, `NavRow`,
+`ToggleRow` and `FieldRow` were **private to `SettingsScreen.kt`**. No other screen
+could call Settings' vocabulary, so each approximated it — Home chose mono
+everywhere, Files drew one bordered card per row on a 6dp gap, GitHub grew its own
+`SectionLabel`. Alignment was impossible until those helpers were shared.
+
+| sha | what |
+|---|---|
+| `801f553` | Hoist the five helpers to `LumenControls.kt` as `internal`, bodies unchanged. Enabling change only |
+| `e1c5edd` | **Home**: 26 prose nodes mono -> `LumenFonts.label`; removed the invented 10sp/1.2-tracking third type tier |
+| `15395fd` | **Files**: 25 prose nodes converted; breadcrumb ROOT gained `maxLines`/ellipsis/`widthIn(150dp)` — a long project name used to scroll the whole trail off-screen |
+| `b01dd5b` | **GitHub/Projects/Storage/Diagnostics**: 50 prose nodes converted; killed the wide-tracked mono caption idiom (0.4/0.6/1/2sp), which Settings never uses |
+| `bd40586` | **Chat**: furniture only (EmptyState, ErrorNotice, HintNotice, UndoNotice, ChangesCard, TodoBoard, UsageMeter). Transcript CONTENT stays mono on purpose |
+
+### The rule now recorded in code
+
+`LumenFonts.label` (proportional) for anything a human reads; `LumenFonts.value`
+(mono) only for machine values — paths, ids, sizes, timestamps, model refs. Terminal
+and Canvas are exempt: a terminal is supposed to be mono, and the canvas renders
+the user's own HTML.
+
+### Verified by looking at the artefact, not by assuming
+
+Fetched the CI screenshots before and after and diffed them pixel-wise. Every
+touched screen changed: projects 10.2%, github 4.0%, home 2.6%, storage 2.3%,
+files 0.6%. A source-only change that never reached the render would have shown 0%.
+
+### Still open in the UI rework
+
+- **Files is still structurally different**: one bordered card per entry on a 6dp
+  gap, two-line rows. Settings groups siblings in ONE card with hairline dividers
+  and single-line rows with a trailing mono value. That is a real layout change on a
+  screen with a 935-line tag-asserting suite, so it gets its own commit.
+- Screens not yet structurally converted (type only so far): Projects, Storage,
+  Diagnostics, ModelPicker.
+- No judgement made on whether the result actually *looks* better — that needs eyes
+  on the PNGs, which this environment cannot do.
