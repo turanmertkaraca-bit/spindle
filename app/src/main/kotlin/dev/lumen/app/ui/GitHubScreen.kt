@@ -205,7 +205,7 @@ fun GitHubScreen(
                 enabled = !busy,
                 textStyle = LocalTextStyle.current.copy(
                     color = colors.fg,
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.bodyLarge,
                 ),
                 cursorBrush = SolidColor(colors.accent),
@@ -227,7 +227,7 @@ fun GitHubScreen(
                             Text(
                                 "ghp_\u2026",
                                 color = colors.faint,
-                                fontFamily = Mono,
+                                fontFamily = LumenFonts.label,
                                 fontSize = LumenType.bodyLarge,
                             )
                         }
@@ -248,7 +248,7 @@ fun GitHubScreen(
                 Text(
                     if (visible) "Hide" else "Show",
                     color = colors.dim,
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.body,
                 )
             }
@@ -599,7 +599,7 @@ private fun CommitDialog(
             Text(
                 "Commit changes",
                 color = colors.fg,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.heading,
                 fontWeight = FontWeight.Medium,
             )
@@ -610,7 +610,7 @@ private fun CommitDialog(
                 onValueChange = { message = it },
                 textStyle = TextStyle(
                     color = colors.fg,
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.bodyLarge,
                 ),
                 cursorBrush = SolidColor(colors.accent),
@@ -684,7 +684,7 @@ private fun PushDialog(
             Text(
                 "Push",
                 color = colors.fg,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.heading,
                 fontWeight = FontWeight.Medium,
             )
@@ -693,7 +693,7 @@ private fun PushDialog(
             Text(
                 message,
                 color = colors.dim,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.body,
                 lineHeight = LumenType.lineTight,
             )
@@ -702,7 +702,7 @@ private fun PushDialog(
             Text(
                 "Push",
                 color = colors.accent,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.body,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier
@@ -716,7 +716,7 @@ private fun PushDialog(
             Text(
                 "Cancel",
                 color = colors.dim,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.body,
                 modifier = Modifier
                     .clip(LumenShapes.small)
@@ -733,9 +733,9 @@ private fun SectionLabel(colors: LumenColors, text: String) {
     Text(
         text,
         color = colors.faint,
-        fontFamily = Mono,
+        fontFamily = LumenFonts.label,
         fontSize = LumenType.caption,
-        letterSpacing = 2.sp,
+        letterSpacing = 0.3.sp,
     )
 }
 
@@ -895,7 +895,7 @@ private fun CommitRow(
             diff != null -> Text(
                 diff,
                 color = colors.dim,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.caption,
                 lineHeight = LumenType.lineTight,
                 modifier = Modifier
@@ -955,7 +955,7 @@ private fun ActionPill(
             Text(
                 label,
                 color = if (enabled) colors.dim else colors.faint,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.body,
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
@@ -976,9 +976,9 @@ private fun StatusRow(
         Text(
             label,
             color = colors.faint,
-            fontFamily = Mono,
+            fontFamily = LumenFonts.label,
             fontSize = LumenType.caption,
-            letterSpacing = 1.sp,
+            letterSpacing = 0.3.sp,
             maxLines = 1,
             softWrap = false,
             overflow = TextOverflow.Ellipsis,
@@ -989,7 +989,7 @@ private fun StatusRow(
                 Text(
                     value,
                     color = colors.fg,
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.bodyLarge,
                     maxLines = valueMaxLines,
                     softWrap = valueMaxLines > 1,
@@ -1000,7 +1000,7 @@ private fun StatusRow(
             Text(
                 value,
                 color = colors.fg,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.bodyLarge,
                 maxLines = valueMaxLines,
                 softWrap = valueMaxLines > 1,
@@ -1029,7 +1029,7 @@ private fun StatusLine(colors: LumenColors, message: String, isError: Boolean) {
         Text(
             message,
             color = colors.fg,
-            fontFamily = Mono,
+            fontFamily = LumenFonts.label,
             fontSize = LumenType.body,
             lineHeight = LumenType.lineTight,
             maxLines = 3,

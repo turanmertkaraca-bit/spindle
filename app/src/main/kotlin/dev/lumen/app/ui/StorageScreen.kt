@@ -108,7 +108,7 @@ fun StorageScreen(
         Text(
             storage?.let { humanBytes(it.total) } ?: "\u2026",
             color = colors.fg,
-            fontFamily = Mono,
+            fontFamily = LumenFonts.label,
             fontSize = 36.sp,
             fontWeight = FontWeight.Medium,
             modifier = Modifier.testTag("storage-total"),
@@ -141,7 +141,7 @@ fun StorageScreen(
             Text(
                 if (scanning) "Scanning\u2026" else "Clear all caches",
                 color = if (scanning) colors.dim else alertOn(colors),
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.bodyLarge,
                 fontWeight = FontWeight.Medium,
             )
@@ -153,7 +153,7 @@ fun StorageScreen(
             Text(
                 if (freed > 0) "freed ${humanBytes(freed)} \u00b7 $cleared" else "nothing left to reclaim \u00b7 $cleared",
                 color = if (freed > 0) colors.water else colors.dim,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.caption,
                 modifier = Modifier
                     .padding(horizontal = 4.dp)
@@ -206,7 +206,7 @@ fun StorageScreen(
         Text(
             "Your chats, source and keys are never cleared.",
             color = colors.dim,
-            fontFamily = Mono,
+            fontFamily = LumenFonts.label,
             fontSize = LumenType.micro,
             letterSpacing = 0.3.sp,
         )
@@ -218,11 +218,11 @@ fun StorageScreen(
             containerColor = colors.surface,
             titleContentColor = colors.fg,
             textContentColor = colors.dim,
-            title = { Text("Clear all caches?", fontFamily = Mono, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
+            title = { Text("Clear all caches?", fontFamily = LumenFonts.label, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
             text = {
                 Text(
                     "Cached downloads and temporary files will be removed. Your chats, source and keys stay safe.",
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.body,
                     lineHeight = LumenType.lineTight,
                 )
@@ -243,7 +243,7 @@ fun StorageScreen(
                     Text(
                         "Clear all",
                         color = alertOn(colors),
-                        fontFamily = Mono,
+                        fontFamily = LumenFonts.label,
                         fontSize = LumenType.body,
                         fontWeight = FontWeight.Medium,
                     )
@@ -262,7 +262,7 @@ fun StorageScreen(
                     Text(
                         "Cancel",
                         color = colors.dim,
-                        fontFamily = Mono,
+                        fontFamily = LumenFonts.label,
                         fontSize = LumenType.body,
                     )
                 }
@@ -295,7 +295,7 @@ private fun CategoryRow(
             Text(
                 category.name,
                 color = colors.fg,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.bodyLarge,
             )
             Spacer(Modifier.height(2.dp))
@@ -304,7 +304,7 @@ private fun CategoryRow(
                 color = if (category.clearable) colors.water else colors.dim,
                 fontFamily = Mono,
                 fontSize = LumenType.micro,
-                letterSpacing = 0.4.sp,
+                letterSpacing = 0.3.sp,
             )
         }
         Text(
@@ -330,7 +330,7 @@ private fun CategoryRow(
                 Text(
                     "Clear",
                     color = colors.accent,
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.body,
                     fontWeight = FontWeight.Medium,
                 )
@@ -398,7 +398,7 @@ private fun StorageDrillView(
         Text(
             humanBytes(drill.totalBytes),
             color = colors.fg,
-            fontFamily = Mono,
+            fontFamily = LumenFonts.label,
             fontSize = 30.sp,
             fontWeight = FontWeight.Medium,
             modifier = Modifier.testTag("storage-drill-total"),
@@ -454,7 +454,7 @@ private fun StorageDrillView(
         Text(
             "Only this app's own files can be deleted. Deleting is permanent.",
             color = colors.dim,
-            fontFamily = Mono,
+            fontFamily = LumenFonts.label,
             fontSize = LumenType.micro,
             letterSpacing = 0.3.sp,
         )
@@ -504,7 +504,7 @@ private fun StorageDrillView(
                     Text(
                         "Delete",
                         color = alertOn(colors),
-                        fontFamily = Mono,
+                        fontFamily = LumenFonts.label,
                         fontSize = LumenType.body,
                         fontWeight = FontWeight.Medium,
                     )
@@ -550,7 +550,7 @@ private fun DrillRow(
             Text(
                 child.name.ifBlank { "(unnamed)" },
                 color = colors.fg,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.bodyLarge,
                 maxLines = 2,
             )
@@ -566,7 +566,7 @@ private fun DrillRow(
                 color = colors.dim,
                 fontFamily = Mono,
                 fontSize = LumenType.micro,
-                letterSpacing = 0.4.sp,
+                letterSpacing = 0.3.sp,
             )
         }
         Text(
@@ -591,7 +591,7 @@ private fun DrillRow(
             Text(
                 "Delete",
                 color = alertOn(colors),
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.body,
                 fontWeight = FontWeight.Medium,
             )

@@ -95,7 +95,7 @@ fun ProjectsScreen(
         Text(
             "One folder per project. The agent only sees the active folder.",
             color = colors.dim,
-            fontFamily = Mono,
+            fontFamily = LumenFonts.label,
             fontSize = LumenType.caption,
             lineHeight = LumenType.lineTight,
             modifier = Modifier.padding(horizontal = LumenSpacing.page),
@@ -105,7 +105,7 @@ fun ProjectsScreen(
             Text(
                 error,
                 color = alertOn(colors),
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.caption,
                 modifier = Modifier.padding(horizontal = LumenSpacing.page),
             )
@@ -181,11 +181,11 @@ fun ProjectsScreen(
             containerColor = colors.surface,
             titleContentColor = colors.fg,
             textContentColor = colors.dim,
-            title = { Text("Delete project?", fontFamily = Mono, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
+            title = { Text("Delete project?", fontFamily = LumenFonts.label, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
             text = {
                 Text(
                     "\"${project.name}\" and every file inside it will be removed. This cannot be undone.",
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.body,
                     lineHeight = LumenType.lineTight,
                 )
@@ -194,7 +194,7 @@ fun ProjectsScreen(
                 Text(
                     "Delete",
                     color = alertOn(colors),
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.body,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier
@@ -211,7 +211,7 @@ fun ProjectsScreen(
                 Text(
                     "Cancel",
                     color = colors.dim,
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.body,
                     modifier = Modifier
                         .clip(LumenShapes.small)
@@ -258,7 +258,7 @@ private fun ProjectRowCard(
                 Text(
                     project.name,
                     color = colors.fg,
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.bodyLarge,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
@@ -268,9 +268,9 @@ private fun ProjectRowCard(
                 Text(
                     projectSubtitle(project, duplicateName),
                     color = if (project.active) colors.water else colors.dim,
-                    fontFamily = Mono,
-                    fontSize = LumenType.micro,
-                    letterSpacing = 0.4.sp,
+                    fontFamily = LumenFonts.label,
+                    fontSize = LumenType.caption,
+                    letterSpacing = 0.3.sp,
                     modifier = if (project.active) Modifier.testTag("project-active") else Modifier,
                 )
             }
@@ -285,7 +285,7 @@ private fun ProjectRowCard(
                         .testTag("project-delete-${project.id}"),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("\u00d7", color = alertOn(colors), fontFamily = Mono, fontSize = 18.sp)
+                    Text("\u00d7", color = alertOn(colors), fontFamily = LumenFonts.label, fontSize = 18.sp)
                 }
             }
         }
@@ -296,7 +296,7 @@ private fun ProjectRowCard(
             Text(
                 text = "resume \u00b7 " + last.title,
                 color = colors.dim,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.micro,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -349,14 +349,14 @@ private fun ProjectNameDialog(
         containerColor = colors.surface,
         titleContentColor = colors.fg,
         textContentColor = colors.dim,
-        title = { Text(title, fontFamily = Mono, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
+        title = { Text(title, fontFamily = LumenFonts.label, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
         text = {
             Column {
                 BasicTextField(
                     value = value,
                     onValueChange = { value = it.take(ProjectStore.MAX_NAME) },
                     singleLine = true,
-                    textStyle = TextStyle(color = colors.fg, fontFamily = Mono, fontSize = LumenType.bodyLarge),
+                    textStyle = TextStyle(color = colors.fg, fontFamily = LumenFonts.label, fontSize = LumenType.bodyLarge),
                     cursorBrush = SolidColor(colors.water),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -370,7 +370,7 @@ private fun ProjectNameDialog(
                 Text(
                     "The name becomes a folder; it never touches another project.",
                     color = colors.dim,
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.micro,
                 )
             }
@@ -379,7 +379,7 @@ private fun ProjectNameDialog(
             Text(
                 confirm,
                 color = if (valid) colors.accent else colors.faint,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.body,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier
@@ -393,7 +393,7 @@ private fun ProjectNameDialog(
             Text(
                 "Cancel",
                 color = colors.dim,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.body,
                 modifier = Modifier
                     .clip(LumenShapes.small)

@@ -127,7 +127,7 @@ fun DiagnosticsScreen(
                 Text(
                     it,
                     color = colors.water,
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.caption,
                 )
             }
@@ -136,7 +136,7 @@ fun DiagnosticsScreen(
                 Text(
                     it,
                     color = alertOn(colors),
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.caption,
                     lineHeight = LumenType.lineTight,
                     modifier = Modifier.testTag("linux-failure"),
@@ -229,13 +229,13 @@ private fun EnvRow(colors: LumenColors, label: String, value: String, ok: Boolea
         Text(
             label,
             color = colors.fg,
-            fontFamily = Mono,
+            fontFamily = LumenFonts.label,
             fontSize = LumenType.bodyLarge,
         )
         Text(
             value,
             color = if (ok) colors.water else colors.dim,
-            fontFamily = Mono,
+            fontFamily = LumenFonts.label,
             fontSize = LumenType.body,
         )
     }
