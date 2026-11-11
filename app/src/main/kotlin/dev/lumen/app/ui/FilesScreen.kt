@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -212,7 +213,7 @@ fun FilesScreen(
                             Text(
                                 if (shown.isEmpty()) "empty" else "${shown.size} ${if (shown.size == 1) "item" else "items"} \u00b7 $folders ${if (folders == 1) "folder" else "folders"}",
                                 color = colors.dim,
-                                fontFamily = Mono,
+                                fontFamily = LumenFonts.label,
                                 fontSize = LumenType.micro,
                                 letterSpacing = 0.4.sp,
                                 modifier = Modifier.weight(1f).testTag("files-count"),
@@ -261,7 +262,7 @@ fun FilesScreen(
                                         Text(
                                             listingError,
                                             color = alertOn(colors),
-                                            fontFamily = Mono,
+                                            fontFamily = LumenFonts.label,
                                             fontSize = LumenType.caption,
                                             modifier = Modifier
                                                 .padding(horizontal = 2.dp, vertical = 4.dp)
@@ -274,7 +275,7 @@ fun FilesScreen(
                                         Text(
                                             "\u2026 showing the first ${listing.entries.size} entries \u2014 project has more",
                                             color = colors.dim,
-                                            fontFamily = Mono,
+                                            fontFamily = LumenFonts.label,
                                             fontSize = LumenType.caption,
                                             modifier = Modifier
                                                 .padding(horizontal = 2.dp, vertical = 4.dp)
@@ -287,7 +288,7 @@ fun FilesScreen(
                                         Text(
                                             "\u2026 $spillCount saved output ${if (spillCount == 1) "file" else "files"} \u00b7 .spindle/truncated",
                                             color = colors.dim,
-                                            fontFamily = Mono,
+                                            fontFamily = LumenFonts.label,
                                             fontSize = LumenType.caption,
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -420,8 +421,14 @@ private fun Breadcrumb(
             color = if (segments.isEmpty()) colors.fg else colors.water,
             fontFamily = Mono,
             fontSize = LumenType.body,
+            // A long project name used to scroll the entire trail off-screen with
+            // no indication that anything was cut: this row is horizontally
+            // scrollable and nothing bounded the root label.
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier
-                .heightIn(min = 40.dp)
+                .widthIn(max = 150.dp)
+                .heightIn(min = LumenSize.touchMin)
                 .clip(LumenShapes.glyph)
                 .clickable { onOpenDir("") }
                 .padding(horizontal = 5.dp, vertical = 4.dp)
@@ -441,7 +448,7 @@ private fun Breadcrumb(
             Text(
                 seg,
                 color = colors.water,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.body,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -469,14 +476,14 @@ private fun SearchField(colors: LumenColors, query: String, onQuery: (String) ->
             .heightIn(min = 42.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("\u2315", color = colors.faint, fontFamily = Mono, fontSize = 13.sp)
+        Text("\u2315", color = colors.faint, fontFamily = LumenFonts.label, fontSize = 13.sp)
         Spacer(Modifier.width(8.dp))
         Box(Modifier.weight(1f)) {
             if (query.isEmpty()) {
                 Text(
                     "filter this folder",
                     color = colors.faint,
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.body,
                 )
             }
@@ -505,7 +512,7 @@ private fun SearchField(colors: LumenColors, query: String, onQuery: (String) ->
                     .testTag("files-search-clear"),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("\u00d7", color = colors.dim, fontFamily = Mono, fontSize = 15.sp)
+                Text("\u00d7", color = colors.dim, fontFamily = LumenFonts.label, fontSize = 15.sp)
             }
         }
     }
@@ -581,7 +588,7 @@ private fun EntryRow(
             Text(
                 if (entry.isDir) "folder" else humanSize(entry.size),
                 color = colors.dim,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.micro,
                 letterSpacing = 0.3.sp,
             )
@@ -600,7 +607,7 @@ private fun EntryRow(
                 Text(
                     "\u22ef",
                     color = colors.dim,
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = 16.sp,
                 )
             }
@@ -676,7 +683,7 @@ private fun MenuItem(
             Text(
                 label,
                 color = if (destructive) alertOn(colors) else colors.fg,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.body,
             )
         },
@@ -808,7 +815,7 @@ private fun EditorOverlay(
             Text(
                 "edited L$first\u2013L$last",
                 color = colors.water,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.micro,
                 letterSpacing = 0.4.sp,
                 modifier = Modifier
@@ -825,7 +832,7 @@ private fun EditorOverlay(
             Text(
                 editor.error.orEmpty(),
                 color = alertOn(colors),
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.body,
                 modifier = Modifier.padding(horizontal = LumenSpacing.page, vertical = 10.dp),
             )
@@ -835,7 +842,7 @@ private fun EditorOverlay(
             Text(
                 "binary file \u00b7 read only",
                 color = colors.dim,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.micro,
                 letterSpacing = 0.4.sp,
                 modifier = Modifier
@@ -847,7 +854,7 @@ private fun EditorOverlay(
             Text(
                 "File is too long to edit safely \u2014 saving is off",
                 color = colors.dim,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.micro,
                 letterSpacing = 0.4.sp,
                 modifier = Modifier
@@ -937,14 +944,14 @@ private fun NameDialog(
         containerColor = colors.surface,
         titleContentColor = colors.fg,
         textContentColor = colors.dim,
-        title = { Text(title, fontFamily = Mono, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
+        title = { Text(title, fontFamily = LumenFonts.label, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
         text = {
             androidx.compose.foundation.layout.Column {
             if (detail != null) {
                 Text(
                     detail,
                     color = colors.dim,
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.caption,
                     lineHeight = LumenType.lineTight,
                 )
@@ -954,7 +961,7 @@ private fun NameDialog(
                 value = value,
                 onValueChange = { value = it },
                 singleLine = true,
-                textStyle = TextStyle(color = colors.fg, fontFamily = Mono, fontSize = LumenType.bodyLarge),
+                textStyle = TextStyle(color = colors.fg, fontFamily = LumenFonts.label, fontSize = LumenType.bodyLarge),
                 cursorBrush = SolidColor(colors.water),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -970,7 +977,7 @@ private fun NameDialog(
             Text(
                 confirm,
                 color = if (valid) colors.accent else colors.faint,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.body,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier
@@ -984,7 +991,7 @@ private fun NameDialog(
             Text(
                 "Cancel",
                 color = colors.dim,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.body,
                 modifier = Modifier
                     .clip(LumenShapes.small)
@@ -1013,13 +1020,13 @@ private fun ConfirmDialog(
         containerColor = colors.surface,
         titleContentColor = colors.fg,
         textContentColor = colors.dim,
-        title = { Text(title, fontFamily = Mono, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
-        text = { Text(message, fontFamily = Mono, fontSize = LumenType.body, lineHeight = LumenType.lineTight) },
+        title = { Text(title, fontFamily = LumenFonts.label, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
+        text = { Text(message, fontFamily = LumenFonts.label, fontSize = LumenType.body, lineHeight = LumenType.lineTight) },
         confirmButton = {
             Text(
                 confirm,
                 color = if (destructive) alertOn(colors) else colors.accent,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.body,
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier
@@ -1033,7 +1040,7 @@ private fun ConfirmDialog(
             Text(
                 "Cancel",
                 color = colors.dim,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = LumenType.body,
                 modifier = Modifier
                     .clip(LumenShapes.small)
