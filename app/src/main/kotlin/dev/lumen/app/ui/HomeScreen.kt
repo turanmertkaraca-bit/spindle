@@ -98,7 +98,7 @@ internal fun LumenBackButton(colors: LumenColors, tag: String, onClick: () -> Un
         Text(
             "\u2039",
             color = colors.dim,
-            fontFamily = Mono,
+            fontFamily = LumenFonts.label,
             fontSize = 24.sp,
             fontWeight = FontWeight.Light,
         )
@@ -137,7 +137,7 @@ internal fun LumenBarAction(
                 filled -> colors.bg
                 else -> colors.dim
             },
-            fontFamily = Mono,
+            fontFamily = LumenFonts.label,
             fontSize = LumenType.caption,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
@@ -180,7 +180,7 @@ internal fun LumenMenuButton(
                         Text(
                             item.label,
                             color = colors.fg,
-                            fontFamily = Mono,
+                            fontFamily = LumenFonts.label,
                             fontSize = LumenType.body,
                         )
                     },
@@ -221,7 +221,7 @@ internal fun LumenTopBar(
         Text(
             title,
             color = colors.fg,
-            fontFamily = Mono,
+            fontFamily = LumenFonts.label,
             fontSize = titleSize,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
@@ -434,7 +434,7 @@ fun HomeScreen(
                             Text(
                                 "New chat",
                                 color = colors.bg,
-                                fontFamily = Mono,
+                                fontFamily = LumenFonts.label,
                                 fontSize = LumenType.bodyLarge,
                                 fontWeight = FontWeight.Medium,
                             )
@@ -458,7 +458,7 @@ fun HomeScreen(
                         Text(
                             "ask before tools",
                             color = colors.dim,
-                            fontFamily = Mono,
+                            fontFamily = LumenFonts.label,
                             fontSize = LumenType.caption,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -505,12 +505,16 @@ fun HomeScreen(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            // Settings has no 10sp/1.2-tracking tier: a section label
+                            // is `LumenSectionHeader` (15sp, Medium, 0.3 tracking).
+                            // This bare Text invented a third tier, which is why Home
+                            // read as a different product from Settings.
                             Text(
                                 "tags",
                                 color = colors.dim,
-                                fontFamily = Mono,
-                                fontSize = LumenType.micro,
-                                letterSpacing = 1.2.sp,
+                                fontFamily = LumenFonts.label,
+                                fontSize = LumenType.caption,
+                                letterSpacing = 0.3.sp,
                             )
                             filterTags.forEach { tag ->
                                 val selected = tag in tagFilter
@@ -526,7 +530,7 @@ fun HomeScreen(
                                 Text(
                                     "clear",
                                     color = colors.accent,
-                                    fontFamily = Mono,
+                                    fontFamily = LumenFonts.label,
                                     fontSize = LumenType.micro,
                                     modifier = Modifier
                                         .clip(LumenShapes.small)
@@ -547,15 +551,15 @@ fun HomeScreen(
                         Text(
                             "${sessions.size} ${if (sessions.size == 1) "chat" else "chats"}",
                             color = colors.dim,
-                            fontFamily = Mono,
-                            fontSize = LumenType.micro,
-                            letterSpacing = 0.6.sp,
+                            fontFamily = LumenFonts.label,
+                            fontSize = LumenType.caption,
+                            letterSpacing = 0.3.sp,
                             modifier = Modifier.weight(1f),
                         )
                         Text(
                             if (showArchived) "Hide archived" else "Show archived",
                             color = if (showArchived) colors.dim else colors.dim.copy(alpha = 0.85f),
-                            fontFamily = Mono,
+                            fontFamily = LumenFonts.label,
                             fontSize = LumenType.micro,
                             modifier = Modifier
                                 .clip(LumenShapes.small)
@@ -674,11 +678,11 @@ fun HomeScreen(
             containerColor = colors.surface,
             titleContentColor = colors.fg,
             textContentColor = colors.dim,
-            title = { Text("Delete chat?", fontFamily = Mono, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
+            title = { Text("Delete chat?", fontFamily = LumenFonts.label, fontSize = LumenType.heading, fontWeight = FontWeight.Medium) },
             text = {
                 Text(
                     "\"${sessions.firstOrNull { it.id == id }?.title ?: "this chat"}\" and all of its messages will be removed. This cannot be undone.",
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.body,
                     lineHeight = LumenType.lineTight,
                 )
@@ -687,7 +691,7 @@ fun HomeScreen(
                 Text(
                     "Delete",
                     color = alertOn(colors),
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.body,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier
@@ -704,7 +708,7 @@ fun HomeScreen(
                 Text(
                     "Cancel",
                     color = colors.dim,
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = LumenType.body,
                     modifier = Modifier
                         .clip(LumenShapes.small)
@@ -735,7 +739,7 @@ private fun SearchField(
             Text(
                 "\u2315",
                 color = colors.dim,
-                fontFamily = Mono,
+                fontFamily = LumenFonts.label,
                 fontSize = 14.sp,
                 modifier = Modifier.padding(end = 8.dp),
             )
@@ -744,7 +748,7 @@ private fun SearchField(
                     Text(
                         "Search chats",
                         color = colors.dim,
-                        fontFamily = Mono,
+                        fontFamily = LumenFonts.label,
                         fontSize = LumenType.body,
                     )
                 }
@@ -789,15 +793,15 @@ private fun SearchHitRow(
         Text(
             hit.role.lowercase(),
             color = colors.dim,
-            fontFamily = Mono,
-            fontSize = LumenType.micro,
-            letterSpacing = 1.2.sp,
+            fontFamily = LumenFonts.label,
+            fontSize = LumenType.caption,
+            letterSpacing = 0.3.sp,
         )
         Spacer(Modifier.height(4.dp))
         Text(
             hit.snippet,
             color = colors.fg,
-            fontFamily = Mono,
+            fontFamily = LumenFonts.label,
             fontSize = LumenType.body,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -819,7 +823,7 @@ private fun LiveBadge(colors: LumenColors, sessionId: String) {
         Text(
             "LIVE",
             color = live,
-            fontFamily = Mono,
+            fontFamily = LumenFonts.label,
             fontSize = LumenType.micro,
             fontWeight = FontWeight.Medium,
         )
@@ -873,7 +877,7 @@ private fun SessionCard(
                     Text(
                         if (session.pinned) "\u2605 ${session.title}" else session.title,
                         color = colors.fg,
-                        fontFamily = Mono,
+                        fontFamily = LumenFonts.label,
                         fontSize = LumenType.bodyLarge,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -889,7 +893,7 @@ private fun SessionCard(
                     Text(
                         session.preview,
                         color = colors.dim,
-                        fontFamily = Mono,
+                        fontFamily = LumenFonts.label,
                         fontSize = LumenType.body,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -936,7 +940,7 @@ private fun SessionCard(
                 Text(
                     "\u22ef",
                     color = colors.dim,
-                    fontFamily = Mono,
+                    fontFamily = LumenFonts.label,
                     fontSize = 16.sp,
                 )
             }
@@ -1097,7 +1101,7 @@ private fun TagEditor(
                     Text(
                         "Add a tag",
                         color = colors.dim,
-                        fontFamily = Mono,
+                        fontFamily = LumenFonts.label,
                         fontSize = LumenType.body,
                     )
                 }
@@ -1137,7 +1141,7 @@ private fun RowAction(
     Text(
         label,
         color = if (destructive) alertOn(colors) else colors.dim,
-        fontFamily = Mono,
+        fontFamily = LumenFonts.label,
         fontSize = LumenType.caption,
         fontWeight = FontWeight.Medium,
         modifier = Modifier
@@ -1162,7 +1166,7 @@ private fun TagChip(
     Text(
         text,
         color = if (selected) colors.fg else colors.dim,
-        fontFamily = Mono,
+        fontFamily = LumenFonts.label,
         fontSize = LumenType.micro,
         maxLines = 1,
         modifier = Modifier
@@ -1286,7 +1290,7 @@ private fun CockpitPill(
         Text(
             label,
             color = colors.dim,
-            fontFamily = Mono,
+            fontFamily = LumenFonts.label,
             fontSize = LumenType.caption,
             fontWeight = FontWeight.Medium,
         )
