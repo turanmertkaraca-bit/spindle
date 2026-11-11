@@ -323,7 +323,37 @@ class ScreenshotTest {
         )
     }
 
-    @Test fun light_early_rope() = chat(LumenColors.Light, "light_early.png", 1)
+    /**
+     * The earliest assistant turn, before any tool has run — the "rope" state.
+     *
+     * This used `forceOpenIndex = 1`, which lands on a THINKING row that folds into
+     * the tool run below it, so it rendered identically to `light_focus_top`. It now
+     * renders the genuinely early state instead: one question, one answer, nothing
+     * else on screen.
+     */
+    @Test
+    fun light_early_rope() = shoot("light_early.png") {
+        LumenChatScreen(
+            steps = listOf(
+                UiStep("u1", StepKind.YOU, "YOU", "a1b2c3", "what does this repo do", "what does this repo do?"),
+                UiStep(
+                    "a1", StepKind.ASSISTANT, "ASSISTANT", "d1e2f3",
+                    "an android coding agent",
+                    "It is a native Android coding agent: the engine is pure Kotlin and the\n" +
+                        "Compose UI is a thin consumer of its event stream.",
+                ),
+            ),
+            input = "",
+            busy = false,
+            error = null,
+            colors = LumenColors.Light,
+            title = "make the timeline a spine",
+            onHome = {},
+            ambient = false,
+            onToggleTheme = {},
+            onEditKey = {},
+        )
+    }
 
     @Test fun dark_thinking() = shoot("dark_thinking.png") {
         LumenChatScreen(
