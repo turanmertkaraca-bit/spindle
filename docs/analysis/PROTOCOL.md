@@ -4,9 +4,9 @@ The owner wants **unlimited subagent use, max 7 concurrent**, to keep the parent
 context small. This file is the operating procedure. It exists because parallel
 writers to the same file silently destroy each other's work.
 
-> **Note:** the 7-concurrent cap is **not implemented in the app** yet
-> (`docs/analysis/arch/SUBAGENTS.md`). This file is about *your* discipline as
-> the orchestrating agent; create at most 7 at a time regardless.
+> **Note:** the 7-concurrent cap **is implemented** in the app as of `c391e20`
+> (`SubagentSpawner`'s companion-scoped `sharedGate`). This file is about *your*
+> discipline as the orchestrating agent; create at most 7 at a time regardless.
 
 ---
 

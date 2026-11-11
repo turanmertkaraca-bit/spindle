@@ -72,8 +72,52 @@ Every finding in these waves was confirmed by reading the file.
 
 | Wave | Scope | Status |
 |---|---|---|
-| 1 | `Compaction`, `ContextPolicy`, `Retry`, `Wire`, `RunRecovery`, `EventBus` | see below |
+| 1 | `Compaction`, `ContextPolicy`, `Retry`, `Wire`, `RunRecovery`, `EventBus` | **DONE `df71a91`**, CI green on both jobs |
 | 2 | `AgentLoop` turn/step/tool-execution mechanics | pending |
 | 3 | Cross-cutting: `ChatViewModel` → `RunEndPolicy` handoff, tools | pending |
+
+---
+
+## Wave 1 result — `df71a91`
+
+CI run 339, **both jobs success**, **528 tests passed / 0 failed**. Every fix below
+is pinned by a test that fails without it.
+
+### Defects fixed
+
+| id | defect | site |
+|---|---|---|
+| D1 | The 15k retained tail can exceed a small model's whole input budget, so `compact` found nothing foldable and `trim` could not touch the tail → request stayed over the window until the overflow retries wrote the turn as an error | `ContextPolicy.Overflow.keepTokens`, used by `AgentLoop` |
+| D2 | `contextWindow == 0` (real: `OpenAiProvider` builds it for undescribed models) was divided by `coerceAtLeast(1)`, so every history looked infinite and the loop compacted on **every step** | `Overflow.UNKNOWN_WINDOW`, `Overflow.effectiveWindow` |
+| D3 | A fold that changed nothing was retried forever; the loop could not tell "nothing new to fold" from "cannot shrink" | `Overflow.nextAction` / `StallDecision` |
+| D4 | `trim` clipped the compaction summary — the only surviving copy of the folded head | `Compaction.clip` |
+| D5 | No mutex around compaction; `compactNow` can reach it outside the run lock | `Compaction.lockFor` |
+| R1 | Retries bounded by attempt count but not by the run's wall clock; a 429 storm near the end of the window could sleep ~60 min more | `Retry.clampToDeadline`, `withResilientRetry(deadlineInMs)` |
+| R2 | `Retry-After` HTTP-date (legal, common from gateways) failed `toDoubleOrNull()` → null → ~500 ms backoff against an endpoint that asked us to wait | `ProviderErrors.parseRetryAfter`, shared by both adapters |
+
+### Two of my own fixes were wrong, and the tests caught them
+
+Worth recording because it is the whole point of writing the test first:
+
+- `effectiveWindow(2000, 100_000)` reserved the entire window and returned a
+  **1-token** budget. The reserve is now capped at half the window.
+- `clampToDeadline` treated a **spent** budget (`remaining <= 0`) as "unlimited",
+  which is precisely the bug it existed to fix. `null` means unlimited; `<= 0`
+  means stop.
+
+### The slicing false alarm — do not "fix" this
+
+Compiling `:core` in per-package slices to work around this host produced:
+
+```
+SubagentSpawner.kt:108: error: smart cast to 'String' is impossible, because
+'agent' is a public API property declared in different module
+```
+
+**That is an artifact of slicing, not a defect.** Slicing compiles `:core`'s
+packages as separate modules, so `SubagentSpec.agent` arrives from the classpath
+and loses the smart cast. CI (a single compilation of the whole module) is green,
+which settles it. Do not bind `spec.agent` to a local here — there is nothing to
+fix.
 
 Each wave appends: what was read, what was found, the fix, the test, the sha.

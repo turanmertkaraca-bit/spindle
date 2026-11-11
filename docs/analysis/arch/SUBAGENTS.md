@@ -1,7 +1,18 @@
-# ARCH-01 · There is NO subagent concurrency cap (owner wants 7)
+# ARCH-01 · Subagent concurrency cap (owner wanted 7) — SHIPPED
 
-**Status:** `[ ]` open · **Owner-requested** · Confirmed by reading the spawn
-path.
+> **Status: `[x]` FIXED `c391e20`.** This file described the *pre-fix* state and
+> was left saying "open" long after the fix shipped, which sent the next reader
+> looking for a missing semaphore that is already there. Do not act on the
+> "Evidence" section below; it is history. The implementation is
+> `SubagentSpawner.kt:56-70+`: a `Semaphore` behind a **companion-scoped**
+> `sharedGate` (process-wide, so a second `AgentLoop` cannot double the cap),
+> `maxConcurrent` defaulting to 7, acquired around the RUN only so a queued child
+> never leaves a `RUNNING` row the UI spins on forever, and inside the caller's
+> coroutine so Stop cancels queued children instead of hanging.
+>
+> What follows is the original report, kept because its design notes (acquire
+> around the run, cancellable wait, recursion, visible queueing) are the reasons
+> the implementation looks the way it does.
 
 ## The problem in one line
 

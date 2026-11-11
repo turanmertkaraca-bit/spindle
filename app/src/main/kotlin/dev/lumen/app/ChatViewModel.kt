@@ -3922,6 +3922,14 @@ class ChatViewModel(
                     sid, text, keys.model, _state.value.agentMode,
                     budget = ContextBudget(
                         maxCostUsd = _state.value.maxCostUsd.takeIf { it > 0 },
+                        // The REQUESTED tail. The loop clamps it to half the
+                        // model's usable window (Overflow.keepTokens) before use,
+                        // because this constant is larger than a 16k model's whole
+                        // input budget — passing it unclamped meant compaction had
+                        // nothing foldable and the run died over the window. Do not
+                        // "fix" this by computing a window here: the loop already
+                        // owns the substitution for an unknown (0) window, and a
+                        // second copy of that rule would drift.
                         compactKeepTokens = ContextBudget.DEFAULT_COMPACT_KEEP_TOKENS,
                     ).apply { compactAtFraction = _state.value.autoCompactPercent / 100.0 },
                     rules = if (keys.terseReplies) TERSE_RULES else null,
