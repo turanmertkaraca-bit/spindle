@@ -7,11 +7,12 @@ point. Everything you need is in this repo; nothing here is guesswork.
   codename "spindle")
 - **Working dir:** `spindle/` (the repo root — you are already in it)
 - **Branch:** `main` — in sync with origin, clean tree
-- **Version:** `0.2.18` (`versionCode 23`)
-- **Published release:** https://github.com/turanmertkaraca-bit/spindle/releases/tag/v0.2.18
-- **Last CI-green sha:** `a103f27` (both jobs green); release workflow green at
-  `b831860`
-- **Installed on the owner's device:** presumed 0.2.18 — **verify it**, see §0
+- **Version:** `0.2.20` (`versionCode 25`)
+- **Published release:** https://github.com/turanmertkaraca-bit/spindle/releases/tag/v0.2.20
+- **Last CI-green sha:** `4daa70f` (both jobs green; release workflow green too)
+- **Installed on the owner's device:** the owner was installing **0.2.20** at the end
+  of the last session — **verify it** (§0). 0.2.20 is the first release containing
+  the goal-mode change, the prompt-caching fix and the UI type alignment.
 
 ---
 
@@ -91,6 +92,12 @@ Shipped and CI-verified:
 
 Open work is listed at the bottom of `OWNER-BRIEF.md` §"Still open" and in
 `STATUS.md` tiers.
+
+**The detailed "what shipped / what is next / what was deliberately not done"
+record for the last session is `bugs/WAVE-BUGHUNT.md`, last section. Read it after
+`STATUS.md`.** It names each defect with its sha, and lists the verified gaps with
+file:line — including the 20 GB storage-controller work and the chat-open latency
+report (PERF-02), which are the two biggest open items.
 
 ---
 

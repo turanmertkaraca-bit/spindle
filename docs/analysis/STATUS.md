@@ -137,6 +137,17 @@ children and never leaks a permit. A queued child emits a Progress event.
 
 ---
 
+### [ ] PERF-02 · Opening a chat feels slow (owner-reported)
+**Detail:** `ui/CHAT-SCREEN.md` §PERF-02
+Owner: *"loading the chat is taking a bit of time … more than before it feels bad."*
+Prime suspect is the FTS repair in `AndroidSessionStore.ensureFts()`, which on store
+init counts `messages` + `message_fts` and, when they differ, reads **every message
+row in the database** (`allMessages()`) to rebuild the index — a cost that grows with
+history, which matches the report. Two lesser suspects: `openSession`'s serial
+5-read path, and `enrich` reading up to 24 child transcripts on every open.
+**Measure first** (timings around `openSession`, read them in Diagnostics); do not
+optimise from the note alone.
+
 ## Tier 3 — UI quality
 
 ### [x] FILES-01 · Storage manager: inspect and delete precisely — FIXED `7084dd2`

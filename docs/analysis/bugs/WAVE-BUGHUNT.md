@@ -293,3 +293,68 @@ files 0.6%. A source-only change that never reached the render would have shown 
   Diagnostics, ModelPicker.
 - No judgement made on whether the result actually *looks* better — that needs eyes
   on the PNGs, which this environment cannot do.
+
+
+---
+
+## Where this session stopped (`4daa70f`, released as `v0.2.20`)
+
+### Shipped and CI-verified this session
+
+| wave | result |
+|---|---|
+| 1 | Seven context/retry defects (retained tail vs window, zero context window, non-converging folds, clipped summary, compaction mutex, retry vs wall clock, `Retry-After` HTTP-date) |
+| 2 | Two loop defects (empty answer on a `LENGTH` wind-down; doom-loop stop with no prose) + the owner's two decisions: **goal mode has no clock at all**, **the cost ceiling is advisory only** |
+| 3 | Anthropic prompt caching was **never enabled** — no `cache_control` breakpoints, so every turn re-billed the whole prompt. Fixed with two breakpoints |
+| feature | `FileTypeRouting` (one map replacing four disagreeing tables; APK install now reachable from Files), and the git ops a workflow needs (`merge`/`rebase`/`stash`/`tag`/`blame`/`cherry-pick`/`config` + `pull --rebase` + `push --tags`) |
+| bugs | New chats were never filed under a project; model search matched the id not the visible label; a hard "vision" block was added and **reverted** because no shipped model declares `supportsVision` |
+| UI pass 1 | Hoisted Settings' five row/card helpers to `LumenControls` (they were `private`, which is *why* every screen drifted), then aligned Home / Files / GitHub / Projects / Storage / Diagnostics / Chat-furniture to Settings' type roles |
+| screenshots | Three pairs of screenshot scenarios rendered byte-identical PNGs (the "merged tools" shot showed the plain chat, the "subagent" shot had no subagent). Fixed, plus a guard test that fails on any duplicate |
+
+### Explicitly NOT done — the queue for next session
+
+1. **PERF-02 chat-open latency** (owner-reported, `STATUS.md` Tier 2). Measure first.
+2. **Storage controller for 20 GB installs.** Verified gaps, all in code:
+   - `MAX_SCAN_NODES = 200_000` (`ChatViewModel.kt:4228`) makes `sizeOf` return **0**
+     past the cap, and `StorageCategory` has no `truncated` flag → **category totals
+     under-report silently**. Worst of the set.
+   - `SCAN_BUDGET_MS = 20_000` is shared across all trees, caches measured first.
+   - `StorageScan.DEFAULT_LIMIT = 40` — entries past 40 are unreachable at any depth.
+   - `StorageScan.DEFAULT_BUDGET_MS = 4_000` per level.
+   - No free/total device space anywhere (`usableSpace`/`freeSpace` unused).
+   - No "largest files anywhere" view, no multi-select delete, no delete progress or
+     cancel, no undo/trash.
+   - Deletion *safety* is correct today (inside-app-roots, symlink-refused,
+     root-refused, confirmed) — do not regress it.
+3. **Files structural alignment** — one `SettingsCard` per group with `RowDivider`,
+   single-line rows with a trailing mono value. Deferred because `FilesScreenTest`
+   is 935 lines of tag assertions.
+4. **TERM-01** — no agent-command visibility exists at all (`TerminalState` has no
+   command/exit fields; nothing bridges `BashTool` to it).
+5. **Screens with type-only treatment** — Projects, Storage, Diagnostics,
+   ModelPicker got typography, not structure.
+6. **Chat top bar** — the owner is happy with it; left alone deliberately.
+
+### Two open decisions the owner should make
+
+- **Vision**: `supportsVision` is parsed, merged and persisted but never enforced,
+  because **no catalogue entry declares it**. Enforcing it (as a hard block) breaks
+  every image send. Either populate the catalogue truthfully, or leave it advisory.
+- **Chat transcript typography**: transcript *content* is deliberately still mono
+  (tool args, paths, markdown are code being read). If the owner wants prose answers
+  in the label font, that is a design call, not a bug fix.
+
+### Environment facts re-confirmed this session
+
+- Local Gradle **cannot run** (three distinct failures: malloc, `pthread_create
+  EAGAIN`, then `UnsatisfiedLinkError` on `libzip.so`). CI is the build server.
+- **The built-in `grep` tool returns false negatives.** It failed to find
+  `fun installApk`, `wrapUpReason`, `textChunks`, `MAX_SCAN_NODES`, `messages` and
+  even `package dev.lumen.app.ui` — all present. Use shell `grep -rn`.
+- Subagent reports were **wrong four times** in ways that looked authoritative
+  (`GitTool` "registered nowhere" — it is, at `ChatViewModel.kt:3899`;
+  `terseReplies` "never read" — `:3931`; `notifyOnComplete` "never read" — `:3960`;
+  `textChunks` "undefined" — `MarkdownText.kt:91`). **Verify every claim by reading
+  the code** before acting on it.
+- `out.txt` (contents `hi`) is untracked in the repo root and NOT gitignored. It was
+  kept out of every commit. Delete it.
