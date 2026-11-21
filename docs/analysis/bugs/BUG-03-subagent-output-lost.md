@@ -81,8 +81,10 @@ and then hit a provider error returned one sentence and nothing else.
 3. **A thrown child is salvaged**: its newest assistant text is attached to the
    failure result.
 
-Also `maxChildSteps` 12 → 24 (`DEFAULT_MAX_CHILD_STEPS`). 12 was too few for
-focused exploration; children were ending mid-investigation as a matter of course.
+Also `maxChildSteps` 12 → 24 (`DEFAULT_MAX_CHILD_STEPS`) at the time. **Both are now
+gone (0.2.21):** 24 was still an arbitrary cut that ended healthy investigations, so
+the child step budget was removed entirely — see `STATUS.md` BUDGET-01. A child is
+bounded by `MAX_TOTAL_TOOL_CALLS` and the doom-loop guard instead.
 
 ---
 
@@ -93,8 +95,8 @@ focused exploration; children were ending mid-investigation as a matter of cours
 - Any loop exit path must leave the run with a written assistant message.
 - Never present a short narration as a report. Length is a crude but effective
   signal; the label matters more than the heuristic.
-- `maxChildSteps` bounds *tool* work, so the child's report arrives on a
-  wind-down turn, not on the step that tripped the budget.
+- A child has **no** step budget (0.2.21+). If one is ever reintroduced, its report
+  must arrive on a wind-down turn rather than on the step that tripped the cap.
 
 ## Tests
 

@@ -57,16 +57,6 @@ class SubagentSpawner(
     private val loop: AgentLoop,
     private val store: SessionStore,
     private val bus: EventBus,
-    /**
-     * Tool-work steps a child may take.
-     *
-     * 12 was too few in practice: a child asked to map a subsystem spends its
-     * budget on reads/greps and then ends mid-investigation with no written
-     * report, which reads to the parent as "the subagent failed". 24 is enough
-     * for a focused exploration, and the wind-down turn (see `AgentLoop`) means
-     * the run still ends with prose when it does trip.
-     */
-    private val maxChildSteps: Int = DEFAULT_MAX_CHILD_STEPS,
     /** Ceiling on concurrently RUNNING child runs. 0 or less disables the gate. */
     private val maxConcurrent: Int = DEFAULT_MAX_CONCURRENT,
 ) {
@@ -108,17 +98,25 @@ class SubagentSpawner(
             else -> AgentConfig.general().copy(name = spec.agent)
         }.copy(
             allowSubagents = false, // no recursive fan-out
-            maxSteps = maxChildSteps,
-            // Never let a child outlive the run that is waiting for it.
+            // No step budget for a child.
             //
-            // The child previously got `AgentConfig.general()` defaults, so it
-            // always had a 30-minute wall clock regardless of the parent's budget or
-            // mode. A goal run (60 min, renewing) that spawned children could have
-            // them die at 30 minutes while the parent was still allowed to work —
-            // and the parent then received a report from a run it had not asked to
-            // stop. Inherit the parent's window; a child never gets a LONGER one.
-            maxRunMillis = listOfNotNull(parentAgent.maxRunMillis, AgentConfig.general().maxRunMillis)
-                .minOrNull(),
+            // A child used to get 24 tool-work steps, which in practice cut a
+            // focused investigation off mid-way and handed the parent a partial
+            // report — the owner's "the subagents are inconvenient" report. The
+            // bound was never a safety mechanism: `MAX_TOTAL_TOOL_CALLS` and the
+            // doom-loop guard (both in `AgentLoop`) still stop a pathological run,
+            // so an unbounded child cannot spin forever. Left explicit so it is not
+            // quietly reintroduced.
+            maxSteps = null,
+            // Never let a child outlive the run that is waiting for it: inherit the
+            // parent's window EXACTLY. A child previously got `general()`'s default
+            // 30-minute clock regardless of the parent's budget, so a goal run could
+            // have children die at 30 minutes while the parent was still allowed to
+            // work — and the parent then received a report from a run it had not
+            // asked to stop. With no default clock this is simply "unbounded when
+            // the parent is", and a parent that sets a real limit still bounds its
+            // children by the same one.
+            maxRunMillis = parentAgent.maxRunMillis,
         )
 
         // Collect the child's evidence AS IT RUNS.
@@ -431,9 +429,6 @@ class SubagentSpawner(
     }
 
     companion object {
-        /** Default tool-work steps for a child run; see [maxChildSteps]. */
-        const val DEFAULT_MAX_CHILD_STEPS = 24
-
         /**
          * Owner's requested ceiling. Seven concurrent children is enough to fan
          * a review across a repo while staying inside provider rate limits and

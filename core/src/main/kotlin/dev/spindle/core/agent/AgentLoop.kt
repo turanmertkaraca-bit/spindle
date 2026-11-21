@@ -1609,16 +1609,14 @@ class AgentLoop(
         const val MAX_CONTINUATIONS = 3
 
         /**
-         * Hard wall-clock backstop for a single run, checked before every step so an
-         * over-budget run never starts another provider request. Exists because
-         * `agent.maxSteps` defaults to null; generous enough not to trip normal runs.
-         */
-        const val MAX_RUN_WALL_CLOCK_MS = 30L * 60L * 1_000L
-
-        /**
          * Hard cap on tool executions per run, counted once per `executeTool` call.
          * A backstop for a null `agent.maxSteps` so a pathological loop cannot run
          * unbounded; when exceeded, the turn's remaining tool parts are failed.
+         *
+         * This — not a wall clock — is what bounds a run. A timer stops work that is
+         * still making progress; a call count only trips on a run that is actually
+         * going nowhere. There is deliberately no `MAX_RUN_WALL_CLOCK_MS` any more;
+         * a clock is opt-in via `AgentConfig.maxRunMillis`.
          */
         const val MAX_TOTAL_TOOL_CALLS = 250
 

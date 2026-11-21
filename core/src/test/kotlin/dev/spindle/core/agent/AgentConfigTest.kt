@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AgentConfigTest {
@@ -15,7 +16,12 @@ class AgentConfigTest {
         assertNotNull(cfg.systemPrompt)
         assertTrue(cfg.systemPrompt.contains("goal".lowercase()), "system prompt must mention the goal")
         assertTrue(cfg.maxRetries > AgentConfig.BUILD.maxRetries, "goal gets a higher retry budget")
-        assertNotNull(cfg.maxRunMillis, "goal needs a wall-clock backstop")
+        // Goal mode states "no clock" explicitly (`0`); so does every other agent
+        // now, via the `null` default. Either way, it must not be a 30-minute timer.
+        assertNull(
+            RunClock.windowMs(cfg),
+            "goal must run until interrupted; a wall clock is the bug, not the backstop",
+        )
     }
 
     @Test

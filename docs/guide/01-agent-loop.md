@@ -47,13 +47,20 @@ matters when you change anything here:
    is caught too. Gated on `maxRepeatedCalls != null`: setting it to `null`
    disables the guard entirely, so only do that when `maxRunMillis` or
    `maxSteps` is set.
-3. **Step budget** — `agent.maxSteps`, only when non-null.
-4. **Run caps** (added in `14aa84c`) — these are the backstop for the default
-   `maxSteps == null`:
-   - `maxRunMillis` (default `MAX_RUN_WALL_CLOCK_MS` = 30 min). Checked at the
-     **top** of the loop, before the next provider request, so an over-budget run
-     never starts one more call.
-   - `MAX_TOTAL_TOOL_CALLS` = 250, counted once per `executeTool`.
+3. **Step budget** — `agent.maxSteps`, only when non-null. **No shipped agent sets
+   it**, and subagents no longer get one either (`SubagentSpawner` used to give
+   every child 24).
+4. **Run caps** — the backstop for the default `maxSteps == null`:
+   - `maxRunMillis` — a wall clock, **opt-in only**. `null` (the default) and `0`
+     both mean *no limit*; only `> 0` imposes one. Until 0.2.21 the default was
+     `MAX_RUN_WALL_CLOCK_MS` = 30 min for every agent, which is what the owner
+     reported as "the 30 minute clock on build mode". When a window *is* set it is
+     checked at the **top** of the loop, before the next provider request, so an
+     over-budget run never starts one more call. See `RunClock.kt`.
+   - `MAX_TOTAL_TOOL_CALLS` = 250, counted once per `executeTool`. **This is what
+     actually bounds a run now**: it responds to a run going nowhere rather than to
+     elapsed time.
+   - The doom-loop guard (2) above.
 
 **Invariant: never `break` leaving a tool part `PENDING`.** Every exit path that
 aborts mid-turn first walks the turn's tool parts and rewrites them to
@@ -85,10 +92,14 @@ and attempt-2 text are not concatenated in the UI.
 
 ## Subagents
 
-`SubagentSpawner`/`runSubagent` create a child `AgentLoop`. Child steps are
-capped separately (`SubagentSpawner.maxChildSteps`, default 12). `allowSubagents
-= false` removes the `task` tool entirely, which is the safe setting for a
-subagent that must not fan out further.
+`SubagentSpawner`/`runSubagent` create a child `AgentLoop`. **A child has no step
+budget and no wall clock of its own** (0.2.21+): `maxSteps` is null and
+`maxRunMillis` is inherited from the parent *exactly*, so a bounded parent still
+bounds its children. A child is stopped by `MAX_TOTAL_TOOL_CALLS`, the doom-loop
+guard, or the parent's cancellation — never by a fixed step count. Concurrency is
+capped at 7 by a process-wide gate. `allowSubagents = false` removes the `task`
+tool entirely, which is the safe setting for a subagent that must not fan out
+further.
 
 ## Testing this area
 

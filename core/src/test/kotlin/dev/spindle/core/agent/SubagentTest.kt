@@ -758,4 +758,90 @@ class SubagentTest {
             "the failed attempt's text must not survive the retry: $output",
         )
     }
+
+    // ---- the child step budget is gone ----
+
+    /**
+     * A child must not be stopped at a fixed number of tool steps.
+     *
+     * `SubagentSpawner` used to hand every child `maxSteps = 24`. A focused
+     * investigation spends that on reads and greps and then ends mid-way, which is
+     * the owner's "the subagent budget is an inconvenience" report: the parent gets
+     * a partial report about work that was going fine. 30 tool-calling turns is
+     * past the old cap, so this fails if the cap is ever reintroduced.
+     *
+     * The child is still bounded by mechanisms that react to what it is DOING — the
+     * doom-loop guard and `MAX_TOTAL_TOOL_CALLS` — which is why the arguments are
+     * varied rather than identical: a genuinely stuck child must still stop.
+     */
+    @Test
+    fun `a child is not cut off at a fixed step count`() = runTest {
+        /** A tool the child can call repeatedly without side effects. */
+        class NoopTool : Tool {
+            override val spec = ToolSpec(
+                name = "noop",
+                description = "does nothing",
+                parametersJson = """
+                    {"type":"object","properties":{"n":{"type":"string"}},"required":["n"]}
+                """.trimIndent(),
+            )
+            override suspend fun run(input: JsonObject, ctx: ToolContext): ToolOutcome =
+                ToolOutcome("ok")
+        }
+
+        fun childToolTurn(n: Int) = listOf(
+            ProviderEvent.ToolCallStart(0, "c$n", "noop"),
+            ProviderEvent.ToolCallArgsDelta(0, "{\"n\":\"$n\"}"),
+            ProviderEvent.ToolCallEnd(0),
+            ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+        )
+
+        val turnsPastTheOldCap = 30
+        val provider = ScriptedProvider(
+            // parent: delegate
+            listOf(
+                ProviderEvent.ToolCallStart(0, "call_task", "task"),
+                ProviderEvent.ToolCallArgsDelta(0, "{\"description\":\"x\",\"prompt\":\"dig\"}"),
+                ProviderEvent.ToolCallEnd(0),
+                ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+            ),
+            // child: 30 tool-calling turns, well past the old cap of 24
+            *Array(turnsPastTheOldCap) { childToolTurn(it) },
+            // child: the real answer, only reachable if the run survived
+            listOf(
+                ProviderEvent.TextDelta("FINDING: finished the whole investigation."),
+                ProviderEvent.Finished(FinishReason.STOP),
+            ),
+            // parent: closing turn
+            listOf(ProviderEvent.TextDelta("parent done"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = InMemorySessionStore()
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(TaskTool(), NoopTool())),
+            store = store,
+            bus = EventBus(),
+        )
+        val parentId = SessionId("ses_parent")
+        newSession(store, parentId.value, model = "fake-1", provider = "fake")
+
+        loop.prompt(parentId, "delegate", "fake/fake-1")
+
+        val child = store.sessions(includeChildren = true).single { it.parentId == parentId }
+        val childRequests = provider.requests.count { it.sessionHint == child.id.value }
+        assertTrue(
+            childRequests > turnsPastTheOldCap,
+            "the child was stopped after $childRequests turns; it must not have a step cap",
+        )
+
+        val output = store.messages(parentId)
+            .flatMap { it.parts }
+            .filterIsInstance<Part.Tool>()
+            .single { it.call.name == "task" }
+            .result?.output ?: ""
+        assertTrue(
+            output.contains("finished the whole investigation"),
+            "the child's final findings were lost: $output",
+        )
+    }
 }

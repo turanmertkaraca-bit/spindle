@@ -24,17 +24,28 @@ data class AgentConfig(
      */
     val maxRepeatedCalls: Int? = 3,
     /**
-     * Wall-clock backstop for a single run, in milliseconds. Null (the default)
-     * uses [AgentLoop.MAX_RUN_WALL_CLOCK_MS]. This exists because [maxSteps]
-     * defaults to null, so a run that keeps making progress but never stops
-     * would otherwise have no ceiling at all; a real long build can raise it.
+     * Wall-clock backstop for a single run, in milliseconds.
+     *
+     * **There is no wall clock unless you ask for one.** `null` means the run has
+     * no time limit; a positive value imposes one. `0` also means "no limit" and
+     * exists only so goal mode can say so explicitly.
+     *
+     * This used to default to a 30-minute clock (`AgentLoop.MAX_RUN_WALL_CLOCK_MS`,
+     * now removed) for every agent, which the owner reported as what ended a build
+     * mid-way: *"you should remove the 30 minute clock on build mode"*. A timer is
+     * the wrong stop condition for an agent — it stops work that is still making
+     * progress, and the report it produces describes an interruption rather than a
+     * result. Runs are still bounded by mechanisms that respond to what the run is
+     * actually doing: the doom-loop guard, `MAX_TOTAL_TOOL_CALLS`, provider
+     * failures, and the user's own Stop.
      */
     val maxRunMillis: Long? = null,
     /**
-     * When the wall-clock window is spent, start another instead of stopping —
-     * but only while the session still has PENDING/IN_PROGRESS todos. This is
-     * what makes a *goal* run keep going until the goal is met; a `build` run
-     * leaves it false so a normal turn has one bounded window.
+     * When a wall-clock window is spent, start another instead of stopping — but
+     * only while the session still has PENDING/IN_PROGRESS todos. Nothing needs
+     * this by default any more (there is no clock to renew); it remains for an
+     * agent that deliberately sets `maxRunMillis > 0` and would rather extend than
+     * stop while work is outstanding.
      */
     val renewsBudget: Boolean = false,
     /**
@@ -169,12 +180,18 @@ data class AgentConfig(
          *  wall clock but only while todos happened to be open, and it still
          *  stopped on its own).
          *
-         *  Goal mode now has **no wall clock at all**: `maxRunMillis = 0` disables
-         *  the deadline, and the run ends only when
+         *  Goal mode now has **no wall clock at all**: `maxRunMillis = 0` states that
+         *  explicitly (and is now indistinguishable from the default, `null`), and
+         *  the run ends only when
          *    - the user stops it (cancellation),
          *    - the model answers without calling a tool (goal met), or
          *    - a genuine safety backstop trips (doom loop, total-tool-call ceiling,
          *      provider failure), each of which writes its reason into the message.
+         *
+         *  Since 0.2.21 this is true of **every** agent — the 30-minute default clock
+         *  on build mode is gone — so goal mode's distinguishing feature is now its
+         *  prompt (the user's stated goal is the stop criterion) rather than a
+         *  different clock.
          *
          *  `maxSteps` stays null for the same reason: a step budget is a timer by
          *  another name. Retries stay at 7 so a flaky provider is waited out rather

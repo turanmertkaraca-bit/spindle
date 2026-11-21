@@ -306,14 +306,14 @@ fun SettingsScreen(
                 )
             }
             RowDivider(colors)
-            // The run's wall-clock limit was never shown anywhere, so when a run
-            // stopped with "time budget reached" the only reasonable question was
-            // "what time budget?". State it, and say what actually fixes it.
+            // The run's wall-clock limit used to be stated here. It is gone: no
+            // agent has a time limit any more, so a caption describing one would
+            // be a lie. Say what actually bounds a run instead.
             Text(
-                "a normal run stops after 30 min of wall clock. Goal mode has no " +
-                    "limit at all: it keeps working until you press Stop or the model " +
-                    "finishes. Long builds are better split into steps than left to " +
-                    "run for hours.",
+                "runs have no time limit. A run ends when the model finishes, when " +
+                    "you press Stop, or when a safety backstop trips (a repeated " +
+                    "identical tool call, or 250 tool calls in one run). Split long " +
+                    "work into steps rather than leaving one run going for days.",
                 color = colors.dim.copy(alpha = 0.7f),
                 fontFamily = LumenFonts.value,
                 fontSize = LumenType.caption,

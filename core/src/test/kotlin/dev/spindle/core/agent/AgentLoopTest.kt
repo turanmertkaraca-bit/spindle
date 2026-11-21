@@ -1836,6 +1836,66 @@ class AgentLoopTest {
     }
 
     /**
+     * Build mode must not be ended by a wall clock.
+     *
+     * The owner: *"you should remove the 30 minute clock on build mode"*. Every agent
+     * used to default to `MAX_RUN_WALL_CLOCK_MS` (30 min), so a long build was cut
+     * off mid-work and reported as an interruption. Here the injected clock jumps an
+     * hour per read — several times over the old limit — and the run must still
+     * reach its own natural stop.
+     *
+     * A clock is still opt-in (`maxRunMillis > 0`); the neighbouring tests pin that
+     * path, so this cannot be satisfied by the mechanism having been deleted.
+     */
+    @Test
+    fun `a default build run is not ended by a wall clock`() = runTest {
+        fun call(n: Int) = listOf(
+            ProviderEvent.ToolCallStart(0, "c$n", "echo"),
+            ProviderEvent.ToolCallArgsDelta(0, "{\"text\":\"step $n\"}"),
+            ProviderEvent.ToolCallEnd(0),
+            ProviderEvent.Finished(FinishReason.TOOL_CALLS),
+        )
+        val turns = 6
+        val provider = ScriptedProvider(
+            *Array(turns) { call(it) },
+            // The model's own answer. Reaching this means the clock did not stop it.
+            listOf(ProviderEvent.TextDelta("BUILD COMPLETE"), ProviderEvent.Finished(FinishReason.STOP)),
+        )
+        val store = store()
+        var now = 0L
+        // An hour per read: the very first check is already past the old 30 minutes.
+        val loop = AgentLoop(
+            providers = SimpleProviderRegistry(listOf(provider)),
+            tools = ToolRegistry(listOf(EchoTool())),
+            store = store,
+            bus = EventBus(),
+            clock = { now += 60 * 60 * 1_000L; now },
+        )
+        val sid = SessionId("ses_no_clock")
+        newSession(store, sid.value)
+
+        // The default agent — no `maxRunMillis` passed anywhere.
+        val last = loop.prompt(sid, "do a long build", "fake/fake-1")
+
+        assertEquals(
+            "BUILD COMPLETE",
+            last.parts.filterIsInstance<Part.Text>().joinToString("") { it.text },
+            "the build was cut off by a clock it did not ask for",
+        )
+        assertEquals(
+            turns + 1,
+            provider.requests.size,
+            "every turn of a progressing run must be allowed to happen",
+        )
+        val tools = store.messages(sid).flatMap { it.parts }.filterIsInstance<Part.Tool>()
+        assertEquals(turns, tools.size)
+        assertTrue(
+            tools.none { it.state == ToolState.ERROR },
+            "no tool may be refused for a budget that does not exist: ${tools.map { it.result?.output }}",
+        )
+    }
+
+    /**
      * Once the window is spent, a turn's remaining calls are refused with a
      * truthful reason instead of being executed.
      */

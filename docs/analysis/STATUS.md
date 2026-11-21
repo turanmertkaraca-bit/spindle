@@ -91,8 +91,8 @@ must move, and it must come to rest.
 **Detail:** `docs/analysis/bugs/BUG-03-subagent-output-lost.md`
 
 Three defects, all shipped in `v0.2.14`:
-1. The child's last turn is normally a **tool call** (that is how `maxChildSteps`
-   ends), so `finalMessage.parts.filterIsInstance<Part.Text>()` was empty and the
+1. The child's last turn is normally a **tool call** (that is how the old step cap
+   ended the run; a child has none now), so `finalMessage.parts.filterIsInstance<Part.Text>()` was empty and the
    parent received the literal string "(subagent produced no text)" after 250k
    tokens of real work.
 2. Newest-text fallback still failed live: a child narrates between reads and ends
@@ -100,8 +100,11 @@ Three defects, all shipped in `v0.2.14`:
    the report. Now the **most substantial** text (≥200 chars) wins, labelled when
    incomplete.
 3. A throwing child discarded everything it had written; its findings are salvaged.
-Child step budget 12 → 24, and the wind-down turn guarantees a child that does hit
-the cap still ends with prose.
+The wind-down turn guarantees a child that does hit a cap still ends with prose.
+
+> **Superseded in part (0.2.21):** the child step budget is gone entirely — 24 was
+> still an arbitrary cut that ended healthy investigations (owner: *"remove the
+> subagent budget thing.. its just an inconvenience"*). See BUDGET-01.
 
 ### [x] GOAL-01 · Goal mode "keeps stopping" — FIXED `0481ef7`
 The goal prompt promises "work until the goal is met"; the code gave it one
@@ -109,6 +112,33 @@ The goal prompt promises "work until the goal is met"; the code gave it one
 outstanding todos, with the wall clock measured per **window**.
 Also: any budget exhaustion now takes one wind-down turn with `tools = []` so the
 run always ends with a written report.
+
+### [x] BUDGET-01 · No step budget on subagents; no wall clock on build mode
+**Detail:** `docs/guide/01-agent-loop.md` § "The outer loop"
+
+Owner: *"remove the subagent budget thing.. its just an inconvenience"* and *"you
+should remove the 30 minute clock on build mode"*. Both were the same defect shape:
+an arbitrary limit that stops work which is still making progress, and produces a
+report describing an interruption instead of a result.
+
+- `SubagentSpawner` no longer sets `maxSteps` (was 24 via `DEFAULT_MAX_CHILD_STEPS`,
+  which is deleted). A child's `maxRunMillis` is now inherited from its parent
+  **exactly** rather than being clamped against `general()`'s old 30-minute default,
+  which used to kill children of a goal run at the parent's old boundary.
+- `AgentConfig.maxRunMillis` no longer defaults to a 30-minute clock for every
+  agent. `null` and `0` both mean *no limit*; only `> 0` imposes one. `AgentLoop.
+  MAX_RUN_WALL_CLOCK_MS` and the Settings caption advertising it are deleted.
+- What still bounds a run: the doom-loop guard, `MAX_TOTAL_TOOL_CALLS` (250), and
+  the user's Stop. These react to a run going *nowhere*, which is the property a
+  stop condition should have.
+- `RunClockTest` now pins "the default is no clock" and "every shipped primary agent
+  is unbounded"; `SubagentTest` drives a child through 30 tool turns (past the old
+  cap) and asserts it reaches its own answer; `AgentLoopTest` runs a default build
+  with an hour-per-read clock and asserts every turn happens.
+
+**Not done (deliberately, needs the owner):** the richer "manage subagents" feature
+and opencode-style goal mode are scoped in `OWNER-BRIEF.md` §"Still open" — ask
+before building.
 
 ### [ ] FEAT-01 · GitHub surface is far too thin
 ### [ ] FEAT-02 · The agent's `git` tool is not good enough

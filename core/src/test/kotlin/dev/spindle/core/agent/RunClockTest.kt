@@ -7,30 +7,33 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Wall-clock rules, including the distinction the owner asked for.
+ * Wall-clock rules.
  *
- * The three cases `null` / `0` / `> 0` mean different things and were previously
- * handled inline as `agent.maxRunMillis ?: MAX` with a `>` comparison. That
- * conflated "unbounded" with "spent": `remainingBudgetMs` returned 0 to mean
- * unlimited, and `Retry.clampToDeadline` reads `<= 0` as spent, so every retry in
- * an unbounded run failed instantly instead of waiting out a 429.
+ * **No agent has a time limit by default** — the owner asked for the 30-minute
+ * build clock to be removed because it ended work that was still progressing. This
+ * test pins both halves of that: the default is unbounded, and an agent that
+ * explicitly asks for a window still gets one (so the mechanism itself is not
+ * dead code that rots).
  */
 class RunClockTest {
 
     private fun agent(maxRunMillis: Long?) = AgentConfig(name = "t", maxRunMillis = maxRunMillis)
 
     @Test
-    fun `null uses the ordinary backstop`() {
-        assertEquals(AgentLoop.MAX_RUN_WALL_CLOCK_MS, RunClock.windowMs(agent(null)))
-        assertFalse(RunClock.isSpent(agent(null), AgentLoop.MAX_RUN_WALL_CLOCK_MS))
-        assertTrue(RunClock.isSpent(agent(null), AgentLoop.MAX_RUN_WALL_CLOCK_MS + 1))
+    fun `the default is NO clock, and is never spent`() {
+        // The regression this whole test exists for: `null` used to mean "30
+        // minutes", so every build run carried a timer it never asked for.
+        assertNull(RunClock.windowMs(agent(null)), "the default must impose no limit")
+        assertFalse(RunClock.isSpent(agent(null), 0L))
+        assertFalse(RunClock.isSpent(agent(null), 30L * 60L * 1_000L))
+        assertFalse(RunClock.isSpent(agent(null), 365L * 24 * 60 * 60 * 1_000L))
+        assertNull(RunClock.remainingMs(agent(null), 5_000L))
+        assertNull(RunClock.describe(agent(null)), "there is no limit to report")
     }
 
     @Test
     fun `zero means NO clock, and is never spent`() {
         assertNull(RunClock.windowMs(agent(0L)))
-        // This is the whole point of goal mode: however long it has run, time
-        // alone must not end it.
         assertFalse(RunClock.isSpent(agent(0L), 0L))
         assertFalse(RunClock.isSpent(agent(0L), 1_000L))
         assertFalse(RunClock.isSpent(agent(0L), 365L * 24 * 60 * 60 * 1_000))
@@ -62,11 +65,12 @@ class RunClockTest {
     }
 
     @Test
-    fun `a normal build run still has a bounded window`() {
-        assertEquals(
-            AgentLoop.MAX_RUN_WALL_CLOCK_MS,
-            RunClock.windowMs(AgentConfig.BUILD),
-            "only goal mode is unbounded; the ordinary backstop must survive",
-        )
+    fun `every shipped primary agent is unbounded`() {
+        // Build included: this is the owner's report. A new agent added to PRIMARY
+        // must not silently inherit a clock either, which the default covers.
+        for ((name, cfg) in AgentConfig.PRIMARY) {
+            assertNull(RunClock.windowMs(cfg), "$name must not have a wall clock by default")
+        }
+        assertNull(RunClock.windowMs(AgentConfig()), "a bare AgentConfig must impose no limit")
     }
 }
