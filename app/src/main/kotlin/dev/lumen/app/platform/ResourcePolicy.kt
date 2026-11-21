@@ -3,6 +3,7 @@ package dev.lumen.app.platform
 import android.content.Context
 import android.os.BatteryManager
 import android.util.Log
+import dev.spindle.core.agent.ThrottlePolicy
 import java.util.concurrent.Semaphore
 import kotlin.math.max
 import kotlin.math.min
@@ -32,17 +33,64 @@ object ResourcePolicy {
     private const val TAG = "ResourcePolicy"
 
     /**
-     * How many guest processes may run at once. Cores minus a slice: the UI,
-     * the provider stream and the notification service all need a core too. A
-     * one- or two-core device gets 1, so the guest never owns the whole device.
+     * How many guest processes may run at once.
+     *
+     * **Calibrated, not hardcoded.** This used to be `cores - 2` inline, which
+     * ignored memory entirely; [ThrottlePolicy] now derives it from the measured
+     * device (cores *and* free RAM), so a phone with many cores and no memory does
+     * not get handed eight compilers.
+     *
+     * Falls back to the core-only formula when no [Context] is available (tests,
+     * and any caller that cannot supply one), so behaviour there is unchanged.
      */
-    fun defaultConcurrency(): Int {
-        val cores = Runtime.getRuntime().availableProcessors()
-        return when {
-            cores <= 2 -> 1
-            cores <= 4 -> max(1, cores - 2)
-            else -> max(2, cores - 2)
+    fun defaultConcurrency(): Int = defaultConcurrency(measuredBudget)
+
+    /** The same decision for an explicit measurement; pure enough to test. */
+    fun defaultConcurrency(budget: ThrottlePolicy.DeviceBudget?): Int =
+        if (budget != null) {
+            ThrottlePolicy.maxGuestProcesses(budget).coerceAtLeast(1)
+        } else {
+            // Core-only fallback. Kept identical to the old formula so a caller
+            // without a device reading sees no behaviour change.
+            val cores = Runtime.getRuntime().availableProcessors()
+            when {
+                cores <= 2 -> 1
+                cores <= 4 -> max(1, cores - 2)
+                else -> max(2, cores - 2)
+            }
         }
+
+    /**
+     * The last measured device budget, or null before the first measurement.
+     *
+     * Set by [adoptBudget] whenever a caller supplies a [Context]. Held here rather
+     * than recomputed so the gate size and the terminal reservation always agree —
+     * two separate readings could disagree and reserve the wrong number of slots.
+     */
+    @Volatile
+    private var measuredBudget: ThrottlePolicy.DeviceBudget? = null
+
+    /** Record a measurement so [defaultConcurrency] and the reservation use it. */
+    fun adoptBudget(budget: ThrottlePolicy.DeviceBudget) {
+        measuredBudget = budget
+    }
+
+    /**
+     * Slots that non-interactive [acquire] calls may not take, so the interactive
+     * terminal can always open.
+     *
+     * **The terminal-lock fix.** Commands and the terminal used one flat pool, so
+     * a few concurrent `bash` calls could consume every permit; `openPty` blocked
+     * for its timeout and the screen reported "terminal unavailable". Because the
+     * next run immediately re-took the slots, restarting the app did not help —
+     * which is exactly how the owner described it.
+     *
+     * Zero when the pool has a single slot: reserving the only permit would starve
+     * commands entirely.
+     */
+    fun reservedForTerminal(): Int {
+        val budget = measuredBudget ?: return 0
+        return ThrottlePolicy.reservedForTerminal(budget)
     }
 
     /**
@@ -51,6 +99,9 @@ object ResourcePolicy {
      * is a hint: if the platform ignores it, the run simply behaves as before.
      */
     const val DEFAULT_NICE: Int = 10
+
+    /** How long an admitted waiter sleeps before re-checking the reserved slot. */
+    private const val RESERVE_POLL_MS = 10L
 
     /** Pause a run when the battery drops below this and is not charging. */
     const val LOW_BATTERY_PERCENT: Int = 15
@@ -207,22 +258,77 @@ object ResourcePolicy {
             }
         }
         val s = gateOrCreate()
+        // A caller that asked for the device state is a real command: it must
+        // leave the terminal's reserved slot alone. A context-less caller (tests,
+        // and any path with no device reading) sees the whole pool, so its
+        // behaviour is exactly what it was before the reservation existed.
+        val reserve = if (context != null) reservedForTerminal() else 0
         val granted = try {
             if (onMainThread) {
                 // Non-blocking only: never park the UI thread waiting for a slot.
-                val immediate = s.tryAcquire()
+                val immediate = tryAcquireLeaving(s, reserve, 0L)
                 if (!immediate) {
                     Log.w(TAG, "no slot free and the caller is the main thread; refusing to block")
                 }
                 immediate
             } else {
-                s.tryAcquire(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+                tryAcquireLeaving(s, reserve, timeoutMs)
             }
         } catch (t: InterruptedException) {
             Thread.currentThread().interrupt()
             false
         }
         if (!granted) return null
+        outstanding.computeIfAbsent(s) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
+        return s
+    }
+
+    /**
+     * Take a permit, never consuming the last [reserve] of them.
+     *
+     * The reservation is expressed as "the gate must have MORE than [reserve]
+     * permits free before a command may take one", which keeps a single semaphore
+     * — and therefore the exact release accounting in [release] — intact. A second
+     * semaphore would have meant two release paths and two ways to leak a permit.
+     *
+     * Polling rather than a blocking `tryAcquire` is deliberate: `Semaphore` has no
+     * "acquire unless only a few are left" primitive, and the alternative (acquire
+     * then hand the permit back) is racy in exactly the case the reservation exists
+     * to prevent. The poll interval is small relative to the admission timeout
+     * (which is already tens of seconds), so the cost is negligible.
+     */
+    private fun tryAcquireLeaving(s: Semaphore, reserve: Int, timeoutMs: Long): Boolean {
+        // [s] is the gate `acquire` already resolved, and the one `outstanding`
+        // will be keyed by on success. Re-deriving it here would be a real bug:
+        // if the calibrated size changed between the two calls, this would take a
+        // permit from the NEW gate while `release` later returned it to the OLD
+        // one — a permanently lost permit, i.e. exactly the "the terminal is
+        // locked and restarting doesn't fix it" class of defect.
+        if (reserve <= 0) {
+            return s.tryAcquire(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }
+        val deadline = System.nanoTime() + timeoutMs.coerceAtLeast(0) * 1_000_000L
+        while (true) {
+            // `availablePermits()` is only a hint, so the acquire below is still the
+            // authority: if it succeeds we hold a real permit either way.
+            if (s.availablePermits() > reserve && s.tryAcquire()) return true
+            if (System.nanoTime() >= deadline) return false
+            Thread.sleep(RESERVE_POLL_MS)
+        }
+    }
+
+    /**
+     * Test seam: take a permit through the **reserving** path without a [Context].
+     *
+     * The production callers all pass a context, but the Robolectric-free JVM suite
+     * cannot construct one for the battery/thermal gate. This exposes the exact
+     * same `tryAcquireLeaving` decision the real command path makes, so the
+     * reserved-slot behaviour is genuinely under test rather than reimplemented in
+     * the test.
+     */
+    internal fun acquireReservingForTest(timeoutMs: Long): Semaphore? {
+        val s = gateOrCreate()
+        if (!tryAcquireLeaving(s, reservedForTerminal(), timeoutMs)) return null
         outstanding.computeIfAbsent(s) { java.util.concurrent.atomic.AtomicInteger(0) }.incrementAndGet()
         return s
     }
@@ -263,6 +369,7 @@ object ResourcePolicy {
         gateSize = 0
         outstanding.clear()
         thermalPaused = false
+        measuredBudget = null
     }
 
     /** How many guest processes are running right now (for diagnostics). */

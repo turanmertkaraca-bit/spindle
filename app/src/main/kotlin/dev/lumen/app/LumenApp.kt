@@ -1,6 +1,7 @@
 package dev.lumen.app
 
 import android.app.Application
+import android.content.ComponentCallbacks2
 import android.content.Context
 import dev.lumen.app.data.AndroidDatabase
 import dev.lumen.app.data.AndroidSessionStore
@@ -8,7 +9,11 @@ import dev.lumen.app.data.AndroidSnapshotStore
 import dev.lumen.app.data.KeyStore
 import dev.lumen.app.data.ModelCatalogue
 import dev.lumen.app.platform.AndroidSystemMotion
+import dev.lumen.app.platform.DeviceBudgetProbe
+import dev.lumen.app.platform.OrphanReaper
+import dev.lumen.app.platform.ResourcePolicy
 import dev.spindle.core.agent.RunRecovery
+import dev.spindle.core.agent.SubagentSpawner
 import dev.spindle.core.event.EventBus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +48,18 @@ class LumenApp : Application() {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        // Calibrate concurrency to THIS device before any run can spawn work.
+        // Both caps used to be constants (7 subagents, cores-2 guest processes),
+        // so a small phone over-admitted and the low-memory killer took the app
+        // down, while a large one under-admitted. See [ThrottlePolicy].
+        calibrateThrottle()
+        // Reap guest processes a previous app process left behind. `setsid`
+        // deliberately detaches guest trees from our process group, so a
+        // low-memory kill can leave a shell/proot tree holding the workspace; a
+        // new process then starts a second one and the terminal looks locked.
+        // This is the half of "restarting doesn't fix it" that the admission
+        // reservation cannot address.
+        runCatching { OrphanReaper.reap(filesDir) }
         // Reconcile orphaned RUNNING sessions/parts once per process, before any
         // UI exists, so a process killed mid-run never leaves a session wedged as
         // busy (the previous UI-only call could be skipped entirely).
@@ -51,6 +68,37 @@ class LumenApp : Application() {
         }
         applicationScope.launch { container.catalogue.refreshAll() }
         applicationScope.launch { retentionJanitor() }
+    }
+
+    /**
+     * Re-measure the device and install the resulting caps.
+     *
+     * Cheap (one cached binder read) and idempotent, so it is safe to call on
+     * every trim-memory callback: as the device fills up the subagent ceiling
+     * shrinks, which is the whole point of calibrating rather than guessing.
+     */
+    fun calibrateThrottle() {
+        runCatching {
+            val budget = DeviceBudgetProbe.read(this)
+            ResourcePolicy.adoptBudget(budget)
+            SubagentSpawner.calibrate(ThrottlePolicy.maxSubagents(budget))
+        }
+    }
+
+    /**
+     * Android's own memory-pressure callback.
+     *
+     * This fires *before* the low-memory killer picks a victim, which makes it the
+     * one chance to shed admitted work. The budget cache is invalidated so the
+     * next spawn re-measures, and the subagent ceiling is recomputed immediately
+     * so a run that is about to fan out sees the smaller number.
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            DeviceBudgetProbe.invalidate()
+            calibrateThrottle()
+        }
     }
 
     /**

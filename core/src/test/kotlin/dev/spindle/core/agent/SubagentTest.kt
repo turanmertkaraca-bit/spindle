@@ -377,10 +377,34 @@ class SubagentTest {
         assertEquals(3, gate.highWaterMark.get(), "the cap was never actually reached")
     }
 
+    /**
+     * The cap is calibrated, and the fallback is only a fallback.
+     *
+     * It was a hardcoded 7, which was too low on a large phone (the owner asked
+     * for more than ten subagents) and too high on a small one (seven children is
+     * how the low-memory killer gets involved). [ThrottlePolicy] now derives it
+     * from the device; this pins that `calibrate` really installs the result and
+     * that a nonsense value cannot wedge every `task` call.
+     */
     @Test
-    fun `the default cap is the owner's seven`() {
-        assertEquals(7, SubagentSpawner.DEFAULT_MAX_CONCURRENT)
-        assertEquals(7, SubagentSpawner.sharedGate.capacity)
+    fun `the shared gate can be calibrated to the device`() {
+        // Restore whatever the process started with, so this test cannot leak a
+        // gate size into another one (the gate is process-wide on purpose).
+        val original = SubagentSpawner.sharedGate.capacity
+        try {
+            SubagentSpawner.calibrate(14)
+            assertEquals(14, SubagentSpawner.sharedGate.capacity, "the calibrated cap must be installed")
+
+            // A gate of zero would make every `task` call queue forever.
+            SubagentSpawner.calibrate(0)
+            assertTrue(SubagentSpawner.sharedGate.capacity >= 1, "a non-positive cap must be refused")
+
+            // The default is still the documented fallback for a host that never
+            // calibrates (a JVM test, the CLI, the server).
+            assertEquals(7, SubagentSpawner.DEFAULT_MAX_CONCURRENT)
+        } finally {
+            SubagentSpawner.calibrate(original)
+        }
     }
 
     /**

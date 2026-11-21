@@ -430,16 +430,44 @@ class SubagentSpawner(
 
     companion object {
         /**
-         * Owner's requested ceiling. Seven concurrent children is enough to fan
-         * a review across a repo while staying inside provider rate limits and
-         * the device's memory budget; see `docs/analysis/arch/SUBAGENTS.md`.
+         * The cap used when the host has not calibrated one.
+         *
+         * This was `7`, chosen by feel. The owner asked to run **more than ten**
+         * subagents at once, and seven was both too low for a large phone and too
+         * high for a small one. The real number is now measured per device by
+         * [ThrottlePolicy] (heap and free system RAM, which is what Android's
+         * low-memory killer acts on) and installed with [calibrate].
+         *
+         * Kept as a fallback only: `:core` has no Android context, so a caller
+         * that never calibrates (a JVM test, the CLI, the server) still gets a
+         * sane gate rather than none.
          */
         const val DEFAULT_MAX_CONCURRENT = 7
 
         /**
          * Shared, NOT per-instance: a per-instance semaphore gives N×(cap) as
          * soon as two spawners exist, and would not bound recursion.
+         *
+         * Replaced wholesale by [calibrate] rather than resized, so an in-flight
+         * holder releases into the gate it acquired from and cannot strand or
+         * duplicate a permit.
          */
-        internal val sharedGate = Gate(DEFAULT_MAX_CONCURRENT)
+        @Volatile
+        internal var sharedGate: Gate = Gate(DEFAULT_MAX_CONCURRENT)
+            private set
+
+        /**
+         * Install the device's calibrated subagent ceiling.
+         *
+         * Called by the app once per process (and again when memory pressure
+         * changes). Ignored when [max] equals the current capacity, so repeated
+         * calls are free. A value below 1 is refused: a gate of zero would make
+         * every `task` call queue forever.
+         */
+        fun calibrate(max: Int) {
+            val target = max.coerceAtLeast(1)
+            if (sharedGate.capacity == target) return
+            sharedGate = Gate(target)
+        }
     }
 }

@@ -76,6 +76,11 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
         // many guest processes exist at once. A slot is held for this command's
         // lifetime only, so many short commands interleave instead of queueing
         // behind one long one.
+        //
+        // The cap is calibrated from the device (see [ThrottlePolicy]) rather than
+        // hardcoded, and one slot is reserved so the interactive terminal can
+        // always open even while the agent is running commands.
+        ResourcePolicy.adoptBudget(DeviceBudgetProbe.read(appContext))
         val slot = ResourcePolicy.acquire(timeoutMs = 120_000L, context = appContext)
             ?: return@withContext ShellResult(
                 exitCode = -1,
@@ -164,9 +169,16 @@ class AndroidShellExecutor(context: Context) : ShellExecutor {
      * cannot be started; the panel then shows "terminal unavailable".
      */
     override suspend fun openPty(command: String, cwd: Path): PtySession? = withContext(Dispatchers.IO) {
-        // Admission control: an interactive terminal is guest work too, so it
-        // takes a slot from the same gate as non-interactive commands. Held for
-        // the session's lifetime, released when the pty is closed.
+        // Admission control: an interactive terminal is guest work too, so it takes
+        // a slot from the same gate as non-interactive commands. Held for the
+        // session's lifetime, released when the pty is closed.
+        //
+        // Commands cannot consume the last slot (`ResourcePolicy` reserves one), so
+        // this succeeds even when the agent is busy — the "terminal unavailable"
+        // report, which survived an app restart because the next run re-took every
+        // permit immediately. The context-less overload is not used here: the
+        // reservation only applies when the device state is supplied.
+        ResourcePolicy.adoptBudget(DeviceBudgetProbe.read(appContext))
         val slot = ResourcePolicy.acquire(timeoutMs = 15_000L, context = appContext)
         if (slot == null) return@withContext null
         // The slot belongs to the returned session once it exists; until then

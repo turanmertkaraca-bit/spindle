@@ -1,5 +1,15 @@
 # ARCH-01 · Subagent concurrency cap (owner wanted 7) — SHIPPED
 
+> **Status: `[x]` FIXED `c391e20`, then made device-calibrated.** The fixed cap of
+> 7 is now only a *fallback*: `ThrottlePolicy` derives the real number from the
+> measured device (app heap headroom and free system RAM — the signal Android's
+> low-memory killer acts on), bounded to **4…24**, and the app installs it with
+> `SubagentSpawner.calibrate` at launch and again on `onTrimMemory`. The owner
+> asked to run **more than ten** at once, which a 4 GB+ phone now gets and a 2 GB
+> phone correctly does not. See `SubagentSpawner` companion + `ThrottlePolicy`.
+>
+> **Original note follows.**
+>
 > **Status: `[x]` FIXED `c391e20`.** This file described the *pre-fix* state and
 > was left saying "open" long after the fix shipped, which sent the next reader
 > looking for a missing semaphore that is already there. Do not act on the

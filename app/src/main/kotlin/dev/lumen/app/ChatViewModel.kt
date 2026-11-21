@@ -16,6 +16,7 @@ import dev.lumen.app.data.StorageScan
 import dev.lumen.app.platform.AndroidEnvironment
 import dev.lumen.app.platform.AndroidShellExecutor
 import dev.lumen.app.platform.AndroidTerminal
+import dev.lumen.app.platform.DeviceBudgetProbe
 import dev.lumen.app.platform.DebianEnvironment
 import dev.lumen.app.platform.GitActivity
 import dev.lumen.app.platform.GitResult
@@ -913,6 +914,15 @@ class ChatViewModel(
         // otherwise invisible until the user opens that exact chat. Telling them
         // on launch is what turns "it just stopped" into "it stopped because the
         // app was closed".
+        // Calibration first, so every stage below sees the device's real caps and a
+        // user debugging "it got killed" can read the numbers before anything else
+        // happens. [ThrottlePolicy] explains where each limit came from.
+        onProgress("measuring the device…")
+        if (context != null) {
+            runCatching {
+                diag(DeviceBudgetProbe.describe(context))
+            }.onFailure { diag("throttle measure failed: ${it.message}") }
+        }
         val interrupted = stageValue { RunRecovery.reconcile(store, runningSessions ?: emptySet()) } ?: 0
         if (interrupted > 0) {
             diag("recovered $interrupted interrupted run(s)")

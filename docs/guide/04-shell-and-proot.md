@@ -29,9 +29,18 @@ passing probe.
 
 `ResourcePolicy` is the single gate. Two knobs, both in one object:
 
-1. **Concurrency** — a `Semaphore` sized by `defaultConcurrency()` (cores − 2,
-   floor 1, capped at 2+). Held around *one guest process's lifetime*, not a
-   whole run, so many short calls interleave with the UI.
+1. **Concurrency** — a `Semaphore` sized by `defaultConcurrency()`. Held around
+   *one guest process's lifetime*, not a whole run, so many short calls
+   interleave with the UI.
+   - The size is **calibrated** from the device via `ThrottlePolicy.maxGuestProcesses`
+     (cores − 2, memory-capped, clamped 1…8), not the old inline `cores − 2`.
+     The core-only formula survives as the fallback when no `Context` is supplied
+     (tests, non-Android callers), so their behaviour is unchanged.
+   - **One slot is reserved for the interactive terminal.** A real command
+     (`acquire(context = …)`) may not consume the last permit, so `openPty` always
+     has one even while the agent is running commands. Without this, commands took
+     every permit, `openPty` timed out and the screen said "terminal unavailable" —
+     and restarting did not help, because the next run immediately re-took them.
 2. **Pause** — `pauseReason(context)` returns non-null when the battery is low
    and discharging, or the device is hot. `acquire(timeoutMs, context)` refuses a
    slot when paused, so the policy is enforced, not merely advisory.
@@ -48,6 +57,19 @@ Hardening that exists because it was a real bug:
   band is `[T-H, T)`, so the boundary is unambiguous. Without this the device
   flapped paused/running on every poll.
 
+
+### Orphaned guest processes (`OrphanReaper`)
+
+`setsid` detaches the guest tree from the app's process group on purpose, so a
+normal group TERM during a run does not also kill the app. The cost: if Android
+kills the *app* (low memory, Force stop), the guest tree can survive under
+`filesDir`. A new app process then starts a second shell against the same
+workspace and the terminal looks locked — **which is why an app restart did not
+fix it**. `LumenApp.onCreate` calls `OrphanReaper.reap(filesDir)`, which signals
+only pids whose `exe` resolves inside our own `filesDir`, whose parent is dead,
+never pid 1 and never ourselves. `OrphanReaper.parsePpid` parses
+`/proc/<pid>/stat` from the **last** `)` because the comm field may contain
+spaces and parentheses.
 ## Resource limits (new in `4ff37c0`)
 
 cgroups need root, so the only privilege-free memory lever is the shell's own

@@ -26,6 +26,13 @@ class ResourcePolicyReleaseTest {
         ResourcePolicy.resetForTest()
     }
 
+    @org.junit.After
+    fun tearDown() {
+        // The adopted budget is process-wide (like the gate), so a test that
+        // installs one must not change the calibration another test observes.
+        ResourcePolicy.resetForTest()
+    }
+
     /** Acquire every slot the gate has, returning them so the caller can release. */
     private fun fillGate(): List<Semaphore> {
         val cap = ResourcePolicy.defaultConcurrency()
@@ -103,6 +110,75 @@ class ResourcePolicyReleaseTest {
             "releasing a semaphore never acquired from this gate must not change the count",
         )
         assertEquals(1, foreign.availablePermits(), "the foreign semaphore must not be released")
+    }
+
+    /**
+     * The terminal can always open, even when the agent has taken every slot it is
+     * allowed to take.
+     *
+     * This is the regression for "the terminal gets locked and restarting doesn't
+     * fix it": `openPty` and agent commands draw from one gate, so without a
+     * reservation concurrent commands starved the terminal permanently — a restart
+     * just re-took the slots.
+     *
+     * The reservation is enforced on the *context-carrying* path (a real command),
+     * so that is what this drives: `context = null` deliberately sees the whole
+     * pool, which is also why the pre-existing accounting tests still pass.
+     */
+    @Test
+    fun commandsCannotConsumeTheTerminalsReservedSlot() {
+        val budget = dev.spindle.core.agent.ThrottlePolicy.DeviceBudget(
+            cores = 8,
+            maxHeapMb = 512,
+            usedHeapMb = 128,
+            availMemMb = 4_096,
+        )
+        ResourcePolicy.adoptBudget(budget)
+        val total = ResourcePolicy.defaultConcurrency()
+        val reserve = ResourcePolicy.reservedForTerminal()
+        assertTrue(reserve > 0, "an 8-core device with free RAM must reserve a terminal slot")
+        assertTrue(total > reserve, "commands must still get slots here (total=$total reserve=$reserve)")
+
+        // Take the whole command-visible capacity through the reserving path.
+        val held = ArrayList<Semaphore>()
+        try {
+            repeat(total - reserve) {
+                val slot = ResourcePolicy.acquireReservingForTest(timeoutMs = 1_000L)
+                assertNotNull(slot, "command slot ${it + 1} of ${total - reserve} should be granted")
+                held.add(slot)
+            }
+            // One more command must NOT take the terminal's last permit.
+            assertNull(
+                ResourcePolicy.acquireReservingForTest(timeoutMs = 50L),
+                "a command consumed the slot reserved for the terminal",
+            )
+            // ...and the reserved permit is genuinely still free.
+            assertTrue(
+                ResourcePolicy.availableSlots() >= reserve,
+                "the terminal's $reserve permit(s) were consumed: ${ResourcePolicy.availableSlots()} left",
+            )
+        } finally {
+            held.forEach { ResourcePolicy.release(it) }
+        }
+    }
+
+    @Test
+    fun aSingleSlotDeviceReservesNothingSoCommandsAreNotDeadlocked() {
+        // One core, little free RAM: one guest process total. Reserving it would
+        // starve every command, so the terminal shares instead.
+        val budget = dev.spindle.core.agent.ThrottlePolicy.DeviceBudget(
+            cores = 1,
+            maxHeapMb = 192,
+            usedHeapMb = 160,
+            availMemMb = 900,
+        )
+        ResourcePolicy.adoptBudget(budget)
+        assertEquals(1, ResourcePolicy.defaultConcurrency())
+        assertEquals(0, ResourcePolicy.reservedForTerminal())
+
+        val slot = ResourcePolicy.acquire(timeoutMs = 0L)
+        assertNotNull(slot, "a single-slot device must still admit a command")
+        ResourcePolicy.release(slot)
     }
 
     @Test

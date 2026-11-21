@@ -140,6 +140,51 @@ report describing an interruption instead of a result.
 and opencode-style goal mode are scoped in `OWNER-BRIEF.md` §"Still open" — ask
 before building.
 
+### [x] THROTTLE-01 · Calibrated concurrency; more than 10 subagents; the terminal can always open
+**Detail:** `core/src/main/kotlin/dev/spindle/core/agent/ThrottlePolicy.kt`,
+`app/src/main/kotlin/dev/lumen/app/platform/OrphanReaper.kt`
+
+Owner: *"make it so theres a throttle calibration where it measures how much it
+should use from the phones processing before the phone decides to kill it … i want
+the app to be able to use more than 10 sub agents at a time without crashing …
+this limit should apply to the terminal aswell sometimes the terminal gets locked
+aswell restarting doesnt fix it somehow."*
+
+Both caps were constants, so each was wrong in one direction: `7` subagents
+(too few on a big phone, too many on a small one) and `cores - 2` guest processes
+(cores only, memory ignored).
+
+- **`ThrottlePolicy`** (pure Kotlin, `:core`) derives both from a measured
+  `DeviceBudget`. Subagents are bounded by **memory**, not cores, because that is
+  what Android's low-memory killer acts on: `min(heap headroom / 8 MB,
+  free system RAM / 64 MB, cores x 4)` clamped to **4…24**. Guest processes stay
+  core-bound (cores - 2, memory-capped) clamped to **1…8**. `lowMemory` pins both
+  to the floor.
+- **`DeviceBudgetProbe`** measures once per 2 s (`ActivityManager.MemoryInfo` +
+  `Runtime`), with a 250 ms TTL while `lowMemory` is set, so the app backs off
+  immediately under pressure and recovers immediately after. `LumenApp` recalibrates
+  on `onTrimMemory(RUNNING_LOW)` and installs the result via
+  `SubagentSpawner.calibrate`.
+- **Terminal lock, cause 1 — slot starvation.** Commands and the terminal shared one
+  flat pool, so the agent could take every permit; `openPty` then timed out and the
+  screen said "terminal unavailable". Restarting did not help because the next run
+  re-took the slots. `ResourcePolicy` now reserves one slot that only a
+  context-carrying (real command) `acquire` may not consume, held with the existing
+  single semaphore so release accounting is unchanged.
+- **Terminal lock, cause 2 — orphaned guest trees.** `setsid` deliberately detaches
+  guest processes, so a low-memory kill can leave a shell/proot tree alive holding
+  the workspace; a new process then starts a second one. That is why restarting did
+  not fix it. `OrphanReaper` reaps only pids whose executable lives under our own
+  `filesDir`, whose parent is gone, never pid 1 and never ourselves.
+- Diagnostics prints the calibration line at boot: `throttle: 16 subagents · 6 guest
+  processes (1 held for the terminal) · cores 8, heap 128/256 MB, free RAM 2048 MB`.
+
+Tests: `ThrottlePolicyTest` (18 JVM cases, incl. "a big phone gets more than ten",
+"low memory pins the minimum", "the terminal always has a slot", and an exhaustive
+grid asserting the cap is never zero); `OrphanReaperTest` (13 cases incl. the
+`(Web Content)` ppid-parsing regression and "a live parent is left alone");
+`ResourcePolicyReleaseTest` gains the reserved-slot cases.
+
 ### [ ] FEAT-01 · GitHub surface is far too thin
 ### [ ] FEAT-02 · The agent's `git` tool is not good enough
 **Partial:** `8181f73` added the `dir` parameter so nested repos are not mistaken
