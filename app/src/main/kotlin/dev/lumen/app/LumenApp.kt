@@ -14,6 +14,7 @@ import dev.lumen.app.platform.OrphanReaper
 import dev.lumen.app.platform.ResourcePolicy
 import dev.spindle.core.agent.RunRecovery
 import dev.spindle.core.agent.SubagentSpawner
+import dev.spindle.core.agent.ThrottlePolicy
 import dev.spindle.core.event.EventBus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

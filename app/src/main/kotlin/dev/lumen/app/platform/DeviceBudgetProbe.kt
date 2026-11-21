@@ -93,11 +93,11 @@ internal object DeviceBudgetProbe {
     }
 
     /** `getMemoryInfo` can throw on an unusual or heavily-restricted device. */
-    private fun memoryInfo(context: Context): ActivityManager.MemoryInfo? = runCatching {
+    private fun memoryInfo(context: Context): ActivityManager.MemoryInfo? {
         val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
             ?: return null
-        ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
-    }.getOrNull()
+        return runCatching { ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) } }.getOrNull()
+    }
 
     /**
      * The calibrated subagent ceiling for this device.

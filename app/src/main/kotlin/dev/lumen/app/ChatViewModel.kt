@@ -918,9 +918,9 @@ class ChatViewModel(
         // user debugging "it got killed" can read the numbers before anything else
         // happens. [ThrottlePolicy] explains where each limit came from.
         onProgress("measuring the device…")
-        if (context != null) {
+        context?.let { ctx ->
             runCatching {
-                diag(DeviceBudgetProbe.describe(context))
+                diag(DeviceBudgetProbe.describe(ctx))
             }.onFailure { diag("throttle measure failed: ${it.message}") }
         }
         val interrupted = stageValue { RunRecovery.reconcile(store, runningSessions ?: emptySet()) } ?: 0
